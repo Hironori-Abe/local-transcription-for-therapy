@@ -1,0 +1,40 @@
+{
+  "productName": "Local Transcription for Therapy (AMD)",
+  "identifier": "net.gakkousya.lott-amd",
+  "build": {
+    "beforeBuildCommand": "npm.cmd --prefix frontend run build -- --configuration production"
+  },
+  "bundle": {
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "../python_sidecar/transcribe_cli.py",
+      "../python_sidecar/diarize_cli.py",
+      "../python_sidecar/proofread_llm_cli.py",
+      "../python_sidecar/overall_proofread_cli.py",
+      "../python_sidecar/detect_env_cli.py",
+      "../python_sidecar/download_whisper_model_cli.py",
+      "../python_sidecar/download_gemma_gguf_cli.py",
+      "../python_sidecar/download_diarization_model_cli.py",
+      "../python_sidecar/encrypt_office_cli.py",
+      "../python_sidecar/prompt_templates",
+      "resources/proofread/punctuation_rules",
+      "../python_sidecar/setup_venv_cli.py",
+      "../python_sidecar/requirements-amd.txt",
+      "resources/python312",
+      "resources/ffmpeg",
+      "resources/lemonade"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/lemonade-hooks.nsh",
+        "languages": [
+          "Japanese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+node_modules/
+dist/
+frontend/node_modules/
+frontend/dist/
+src-tauri/target/
+__pycache__/
+*.pyc
+.venv/
+.venv*/
+venv/
+demo_data/
+python_sidecar/models/
+scripts/a
+reports/
+.angular/
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+.idea/
+*.env
+.env.*
+*.keystore
+.claude/
+.codex_write_test.txt
+tmp_test.wav
+# llama-server CUDA バイナリ（setup-dev.bat でダウンロード、gitに含めない）
+src-tauri/resources/llama-server/*.exe
+src-tauri/resources/llama-server/*.dll
+# Python 3.12 Embeddable（setup-build-tools.bat でダウンロード、git に含めない）
+src-tauri/resources/python312/
+# LGPL FFmpeg バイナリ（scripts/setup_ffmpeg_lgpl.py でダウンロード、git に含めない）
+src-tauri/resources/ffmpeg/ffmpeg
+src-tauri/resources/ffmpeg/ffmpeg.exe
+src-tauri/resources/ffmpeg/ffprobe
+src-tauri/resources/ffmpeg/ffprobe.exe
+src-tauri/resources/ffmpeg/ffplay
+src-tauri/resources/ffmpeg/ffplay.exe
+src-tauri/resources/ffmpeg/*.dll
+src-tauri/resources/ffmpeg/*.so*
+src-tauri/resources/ffmpeg/LICENSE.txt
+src-tauri/resources/ffmpeg/FFMPEG_BUILD_INFO.txt
+# 第三者ライセンス全文の自動収集物（scripts/collect_licenses.py で生成・ビルド時に再生成）
+/licenses/*
+!/licenses/README.md
+# 手動補完ライセンス（CUDA EULA / pywin32 / sentencepiece / selectors）は git 管理する
+!/licenses/manual/
+
+# Rust ビルド成果物（誤コミット防止）
+*.rlib

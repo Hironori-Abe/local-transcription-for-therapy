@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Local Transcription for Therapy",
+  "version": "0.9.0",
+  "identifier": "net.gakkousya.lott",
+  "build": {
+    "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev.bat",
+    "beforeBuildCommand": "npm.cmd --prefix frontend run build",
+    "devUrl": "http://localhost:4200",
+    "frontendDist": "../frontend/dist/offline-transcriber/browser"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Local Transcription for Therapy",
+        "width": 1024,
+        "height": 820,
+        "maximized": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "../.venv312",
+      "../python_sidecar/transcribe_cli.py",
+      "../python_sidecar/diarize_cli.py",
+      "../python_sidecar/proofread_llm_cli.py",
+      "../python_sidecar/detect_env_cli.py",
+      "../python_sidecar/download_whisper_model_cli.py",
+      "../python_sidecar/download_gemma_gguf_cli.py",
+      "../python_sidecar/download_diarization_model_cli.py",
+      "../python_sidecar/encrypt_office_cli.py",
+      "../python_sidecar/prompt_templates",
+      "resources/proofread/punctuation_rules",
+      "../python_sidecar/models/pyannote-speaker-diarization-community-1",
+      "resources/ffmpeg",
+      "resources/lemonade",
+      "resources/llama-server"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/lemonade-hooks.nsh",
+        "languages": [
+          "Japanese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

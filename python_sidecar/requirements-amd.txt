@@ -1,0 +1,43 @@
+# AMD ROCm 版 Python 依存ファイル
+#
+# torch / torchaudio: setup-dev.sh が ROCm ホイールで別途インストールする。
+#   bash scripts/setup-dev.sh --amd
+#
+# ctranslate2: setup-dev.sh の install_rocm_ctranslate2 が GitHub Releases の
+#   ROCm ホイール (v$CTRANSLATE2_ROCM_VERSION) で別途インストールする。
+#
+# llama-cpp-python: HIPBLAS または Vulkan フラグ付きで別途ビルド・インストールする。
+#   CMAKE_ARGS="-DGGML_HIPBLAS=on" pip install llama-cpp-python --no-cache-dir
+#   または
+#   CMAKE_ARGS="-DGGML_VULKAN=on" pip install llama-cpp-python --no-cache-dir
+#
+# faster-whisper は setup-dev.sh / setup_venv_cli.py が --no-deps で先に入れる。
+# PyAV (av) を依存解決で入れないため、faster-whisper の実行依存は下に明示する。
+#
+# 上記を除いた残りのパッケージを setup-dev.sh / setup_venv_cli.py 経由でインストールする。
+
+faster-whisper==1.2.1
+requests>=2.32,<3
+huggingface-hub<1.0
+tokenizers>=0.13,<1
+onnxruntime>=1.14,<2
+tqdm>=4.64,<5
+
+# Do not add PyAV (av) or imageio-ffmpeg here.
+# Audio decoding/conversion is handled by the bundled/PATH LGPL ffmpeg CLI.
+
+# Runtime core (pin to avoid resolver drift)
+sympy>=1.13.3,<2
+protobuf>=5,<6
+
+# Proofread / Japanese NLP
+neologdn>=0.5.4
+sudachipy>=0.6.10
+sudachidict_core>=20251022
+transformers>=4.44,<5
+
+# Diarization (community-1)
+numpy>=2.2.2,<3
+contourpy>=1.2.1
+pyannote.audio==4.0.0
+soundfile

@@ -1,0 +1,52 @@
+{
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.pnpm-store/**": true,
+    "**/.yarn/**": true,
+    "**/.next/**": true,
+    "**/.nuxt/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/coverage/**": true,
+    "**/.cache/**": true,
+    "**/.turbo/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/logs/**": true,
+    "**/tmp/**": true,
+    "**/temp/**": true,
+    "**/models/**": true,
+    "**/outputs/**": true
+  },
+  "search.exclude": {
+    "**/.git/**": true,
+    "**/node_modules/**": true,
+    "**/.pnpm-store/**": true,
+    "**/.yarn/**": true,
+    "**/.next/**": true,
+    "**/.nuxt/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/coverage/**": true,
+    "**/.cache/**": true,
+    "**/.turbo/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "**/logs/**": true,
+    "**/tmp/**": true,
+    "**/temp/**": true,
+    "**/models/**": true,
+    "**/outputs/**": true
+  },
+  "files.exclude": {
+    "**/.cache/**": true,
+    "**/.turbo/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/coverage/**": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Local Transcription for Therapy",
+        "width": 1024,
+        "height": 820,
+        "maximized": false,
+        "resizable": true,
+        "focus": false
+      }
+    ]
+  }
+}

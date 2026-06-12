@@ -1,0 +1,38 @@
+# faster-whisper is installed with --no-deps by setup scripts so PyAV (av) is not pulled in.
+faster-whisper==1.2.1
+ctranslate2>=4.4,<5
+requests>=2.32,<3
+huggingface-hub<1.0
+tokenizers>=0.13,<1
+onnxruntime>=1.14,<2
+tqdm>=4.64,<5
+
+# Do not add PyAV (av) or imageio-ffmpeg here.
+# Audio decoding/conversion is handled by the bundled/PATH LGPL ffmpeg CLI.
+
+# Runtime core (pin to avoid resolver drift)
+torch==2.10.0
+torchaudio==2.10.0
+sympy>=1.13.3,<2
+protobuf>=5,<6
+
+# Export encryption
+msoffcrypto-tool>=3.3
+pyzipper>=0.3.6
+
+# Proofread / Japanese NLP
+neologdn>=0.5.4
+sudachipy>=0.6.10
+sudachidict_core>=20251022
+transformers>=4.44,<5
+
+# Diarization (community-1)
+numpy>=2.2.2,<3
+contourpy>=1.2.1
+pyannote.audio==4.0.0
+
+# LLM proofreading
+# NOTE: llama-cpp-python must be installed separately with CUDA flags:
+#   set CMAKE_ARGS=-DGGML_CUDA=on
+#   pip install llama-cpp-python --no-cache-dir
+# Do NOT add it as a plain pip requirement here.

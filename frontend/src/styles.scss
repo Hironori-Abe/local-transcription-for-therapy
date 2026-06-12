@@ -1,0 +1,41 @@
+@use '@angular/material' as mat;
+
+html {
+  color-scheme: light;
+  @include mat.theme(
+    (
+      color: mat.$azure-palette,
+      typography: Roboto,
+      density: 0
+    )
+  );
+}
+
+body {
+  margin: 0;
+  font-family: Roboto, 'Noto Sans JP', sans-serif;
+  background: #f5f7fa;
+}
+
+mat-icon.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-size: 24px;
+  line-height: 1;
+  font-weight: normal;
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+}
+
+.settings-info-tooltip {
+  white-space: pre-line;
+  max-width: 320px !important;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+
+

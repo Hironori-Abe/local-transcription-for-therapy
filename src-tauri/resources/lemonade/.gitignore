@@ -1,0 +1,10 @@
+# Lemonade embeddable binaries (downloaded at build/setup time; not committed)
+# Windows
+*.exe
+*.dll
+*.pdb
+*.zip
+# Linux
+lemond
+lemonade
+!.gitignore

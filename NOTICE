@@ -1,0 +1,79 @@
+Local Transcription for Therapy (LoTT)
+Copyright 2026 合同会社学幸社 (Gakkousya LLC)
+Author: 阿部宏徳 (Hironori Abe)
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+------------------------------------------------------------------------
+Third-party software and models
+------------------------------------------------------------------------
+
+This product includes, depends on, and/or distributes third-party
+software and machine-learning models. A full inventory of components,
+their licenses, and required attributions is maintained in:
+
+    THIRD_PARTY_LICENSES.md
+
+The following attributions are highlighted here as required by their
+respective licenses. This list is informational and does not modify the
+Apache License under which this product is released.
+
+* Speaker diarization model
+    pyannote "speaker-diarization-community-1"
+    by Hervé Bredin and the pyannote contributors.
+    Licensed under CC-BY-4.0 (attribution required; no modification made
+    to the model by this product).
+    https://huggingface.co/pyannote/speaker-diarization-community-1
+
+* Speech recognition
+    OpenAI Whisper (MIT) via faster-whisper and CTranslate2
+    (MIT, SYSTRAN).
+
+* Speaker-diarization toolkit and embeddings
+    pyannote.audio (MIT) and SpeechBrain (Apache-2.0).
+
+* LLM proofreading runtime
+    llama.cpp (MIT) and Lemonade SDK (Apache-2.0).
+
+* LLM proofreading model
+    Gemma 4 E4B by Google DeepMind, licensed under Apache-2.0
+    (Gemma 4 is not covered by the legacy Gemma Terms of Use or
+    Prohibited Use Policy). GGUF quantization distributed by Unsloth
+    (unsloth/gemma-4-E4B-it-qat-GGUF, QAT) under Apache-2.0.
+
+* Audio decoding
+    FFmpeg is used as a local command-line executable for audio decoding
+    and format conversion. Windows builds bundle a BtbN FFmpeg "lgpl"
+    build and treat it as LGPLv3 because the build includes
+    --enable-version3. The bundled build is checked to exclude
+    --enable-gpl, --enable-nonfree, libx264, libx265, libxvid, and
+    libfdk-aac.
+    Build project: https://github.com/BtbN/FFmpeg-Builds
+    FFmpeg source: https://github.com/FFmpeg/FFmpeg
+    Build metadata and hashes are provided in resources/ffmpeg/
+    FFMPEG_BUILD_INFO.txt. LoTT distribution Python environments do not
+    include PyAV ("av") or imageio-ffmpeg; faster-whisper is installed
+    without dependency-resolving PyAV into the distribution environment.
+
+* GPU runtime (CUDA builds)
+    NVIDIA CUDA redistributable libraries (CUDA Runtime "cudart" and
+    cuBLAS "cublas" / "cublasLt") are distributed under the NVIDIA CUDA
+    Toolkit EULA (listed as redistributable in Attachment A). The cuBLAS
+    library includes third-party code requiring the following attribution,
+    among others:
+      Copyright (c) 2007-2009, Regents of the University of California.
+      All rights reserved. (code by/derived from Vasily Volkov)
+    Additional cuBLAS third-party notices (Davide Barbieri, University of
+    Tennessee, Jonathan Hogg / STFC, and others) are provided in the CUDA
+    Toolkit EULA, Attachment B. See THIRD_PARTY_LICENSES.md (F-3).
+
+* UI
+    Angular and Angular Material (MIT), Tauri (MIT / Apache-2.0),
+    Google Material Symbols font (Apache-2.0).
+
+* Python runtime
+    Python (PSF License Agreement).
+
+For the complete list and full license texts, see THIRD_PARTY_LICENSES.md
+and the accompanying collected license files in the distribution.

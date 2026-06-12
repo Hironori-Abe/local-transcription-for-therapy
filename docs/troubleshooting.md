@@ -1,0 +1,41 @@
+# トラブルシューティング
+
+## cargo が見つからない
+
+- `cargo metadata ... program not found`
+- Rustup をインストールし、ターミナル再起動後に `cargo --version` を確認してください。
+
+## CUDA/cuDNN 関連でクラッシュ
+
+- `exit=-1073740791` など
+- CUDA 12.x / cuDNN 9.x の `bin` が PATH で見えるか確認してください:
+
+```powershell
+where.exe cublas64_12.dll
+where.exe cudnn64_9.dll
+```
+
+## 話者分離モデルが見つからない
+
+- `python_sidecar/models/pyannote-speaker-diarization-community-1` にモデル一式を配置してください（dev）。
+- または `DIARIZATION_MODEL_PATH` を設定してください。
+- リリースビルドでは `%LOCALAPPDATA%\{identifier}\models\` 配下を参照します。
+
+## AMD ROCm: "no ROCm-capable device is detected"（Linux）
+
+- GPU セレクターで device 1 以上を選択しているのに「ROCm デバイスが見つからない」エラーが出る場合、`ROCR_VISIBLE_DEVICES` と `HIP_VISIBLE_DEVICES` の二重フィルターが原因の可能性があります。
+- ROCR が先にデバイスリストを絞り込んだ後、HIP が絞り込み済みのリストにアクセスするためインデックスがずれます。
+- 修正済み（`src-tauri/src/lib.rs` で `ROCR_VISIBLE_DEVICES` を削除、`HIP_VISIBLE_DEVICES` のみ設定）。
+
+## AMD ROCm: 話者分離が非常に遅い（旧世代 iGPU / Linux）
+
+- Radeon 780M / 旧890M（gfx1103）では MIOpen の対応カーネルが未収録のため、GPU 話者分離に失敗します。
+- `diarize_cli.py` が自動で CPU フォールバックするため処理は完了しますが、10 分音声で約 15〜20 分かかります（正常動作）。
+- Ryzen AI 9 HX 370 内蔵の Radeon 890M（gfx1150）は PyTorch 2.11.0+rocm7.2 以降で GPU 話者分離・文字起こしともに動作します。
+
+## AMD ROCm: 文字起こし中にクラッシュする（gfx1102 / RX 7600M XT）
+
+- RX 7600M XT（gfx1102）では ctranslate2-rocm による文字起こし中に `CUDA failed with error an illegal memory access` でクラッシュすることがありました。
+- 原因はデフォルトのメモリアロケータ（MallocAsync）が AMD GPU と非互換であること（OpenNMT/CTranslate2 issue #2012）。
+- 修正済み: `transcribe_cli.py` が gfx1102 検出時に `CT2_CUDA_ALLOCATOR=cub_caching` と `HSA_OVERRIDE_GFX_VERSION=11.0.0` を自動設定します（3分・10分ファイルで完走確認済み）。
+- 話者分離（pyannote + MIOpen）も gfx1102 で GPU 動作します。

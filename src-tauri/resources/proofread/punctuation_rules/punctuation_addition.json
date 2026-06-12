@@ -1,0 +1,35 @@
+{
+  "forceCommaAfter": [],
+  "removeCommaAfter": [],
+  "useTokenModel": false,
+  "tokenModelPath": "python_sidecar/models/punctuation/bert_japanese_punctuation",
+  "tokenBaseModel": "tohoku-nlp/bert-base-japanese-char-v3",
+  "tokenCommaThreshold": 0.18,
+  "tokenPeriodThreshold": 0.45,
+  "tokenDecisionMargin": 0.12,
+  "preserveExistingPunctuation": true,
+  "tokenMaxPunctPerChar": 0.06,
+  "tokenMinChars": 10,
+  "tokenWindowChars": 256,
+  "addSentenceFinalPeriod": false,
+  "useSpeakerGroupPunctuation": true,
+  "speakerGroupMaxGapSec": 1.0,
+  "speakerMidCommaMinChars": 1,
+  "speakerMidShortCommaMaxChars": 5,
+  "speakerConnectiveEndings": [
+    "けれども", "けれど", "けども", "けど", "が", "して", "くて", "って", "て",
+    "で", "し", "から", "ので", "のに", "とか", "たり", "たら", "ば", "なら",
+    "ながら", "つつ", "と", "に", "を", "は", "も", "や", "へ"
+  ],
+  "speakerLastPeriodMinChars": 1,
+  "speakerJoinUseQuestionMark": true,
+  "speakerQuestionEndings": [
+    "どうでしたか",
+    "どう思いますか",
+    "どうしたらよいでしょうか",
+    "どうしたら良いでしょうか"
+  ],
+  "speakerShortUtterancesNoComma": [
+
+  ]
+}

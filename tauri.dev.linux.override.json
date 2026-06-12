@@ -1,0 +1,20 @@
+{
+  "build": {
+    "beforeDevCommand": "echo Frontend is managed by scripts/run-dev.sh",
+    "beforeBuildCommand": "npm --prefix frontend run build",
+    "devUrl": "http://localhost:4200",
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Local Transcription for Therapy",
+        "width": 1024,
+        "height": 820,
+        "maximized": false,
+        "resizable": true,
+        "focus": false
+      }
+    ]
+  }
+}

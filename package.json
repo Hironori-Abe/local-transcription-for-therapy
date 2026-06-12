@@ -1,0 +1,17 @@
+{
+  "name": "offline-transcriber",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "setup": "npm install && npm --prefix frontend install && py python_sidecar/setup_venv_cli.py python_sidecar/requirements-runtime.txt",
+    "frontend:dev": "npm --prefix frontend run start",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:build:editor": "cmd /c npm --prefix frontend run build -- --configuration editorProduction",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

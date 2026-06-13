@@ -79,8 +79,6 @@ def main() -> int:
                 repo_id=_REPO_ID,
                 local_dir=str(model_dir),
                 token=token,
-                local_dir_use_symlinks=False,
-                resume_download=True,
             )
         except Exception as e:
             error = str(e)

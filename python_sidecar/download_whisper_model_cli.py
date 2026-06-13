@@ -201,7 +201,7 @@ def main() -> int:
         error: str | None = None
         local_path: Path | None = None
         try:
-            local_path = Path(snapshot_download(repo_id, resume_download=True))
+            local_path = Path(snapshot_download(repo_id))
         except Exception as e:
             error = str(e)
         finally:

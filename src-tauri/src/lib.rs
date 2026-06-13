@@ -776,6 +776,14 @@ fn find_lemonade_bundled_bin(app: &AppHandle) -> Option<String> {
         search_dirs.push(ed.join("_up_").join("lemonade"));
     }
 
+    // dev ビルドではリソースが target/debug 配下にコピーされず resource_dir() / executable_dir()
+    // からも解決できないため、ソースツリーの src-tauri/resources/lemonade を直接参照する。
+    // これにより AMD dev でも同梱 lemond が見つかり、Lemonade(rocm/vulkan) 経路で AI 校正が動く。
+    // find_bundled_llama_server_bin と同じ方式。cfg(debug_assertions) ガードのため
+    // リリース挙動・配布物・ライセンス前提は不変で、NVIDIA リリースにも影響しない。
+    #[cfg(debug_assertions)]
+    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("lemonade"));
+
     let exe = std::env::consts::EXE_SUFFIX;
     for dir in &search_dirs {
         // lemond(.exe) = lemonade daemon (embeddable版のサーバー本体)
@@ -806,6 +814,10 @@ fn find_lemonade_cli_bin(app: &AppHandle) -> Option<String> {
         search_dirs.push(ed.join("_up_").join("resources").join("lemonade"));
         search_dirs.push(ed.join("_up_").join("lemonade"));
     }
+
+    // dev ビルド用ソースツリー fallback（find_lemonade_bundled_bin と同じ理由・同じガード）。
+    #[cfg(debug_assertions)]
+    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("lemonade"));
 
     let exe = std::env::consts::EXE_SUFFIX;
     for dir in &search_dirs {
@@ -1124,6 +1136,10 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
         serde_json::json!({})
     };
     config["port"] = serde_json::json!(port);
+    // 40セグメントバッチに対応するため n_ctx を拡張する（既定 4096 では不足）。
+    // Lemonade 10.7.0 で LEMONADE_CTX_SIZE 環境変数は廃止されたため、config.json の
+    // ctx_size キーが唯一の設定手段（旧版でも config.json の ctx_size を読むため後方互換）。
+    config["ctx_size"] = serde_json::json!(16384);
     // システム llama-server (Debian b8681) は ROCm/gfx1150 でクラッシュするため
     // prefer_system=false にしてバンドル版 ROCm バイナリを優先する
     if !config["llamacpp"].is_object() {
@@ -1447,8 +1463,8 @@ fn try_start_lemonade_bin(bin_path: &str, cache_dir: Option<&str>, _hip_device_i
     if let Some(vk_idx) = detect_nvidia_vulkan_index() {
         cmd.env("GGML_VK_DEVICE", vk_idx.to_string());
     }
-    // 40セグメントバッチに対応できるよう n_ctx を拡張する（既定値 4096 では不足）。
-    cmd.env("LEMONADE_CTX_SIZE", "16384");
+    // n_ctx は config.json の ctx_size で設定する（ensure_lemonade_app_port_config が書き込む）。
+    // Lemonade 10.7.0 で LEMONADE_CTX_SIZE 環境変数は廃止されたため env では渡さない。
     // AMD ROCm 環境: HIP_VISIBLE_DEVICES でデバイスを選択する。
     // ROCR_VISIBLE_DEVICES は設定しない（二重フィルター問題を避けるため）。
     #[cfg(target_os = "linux")]
@@ -3577,7 +3593,18 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn check_transcription_runtime_support(
+async fn check_transcription_runtime_support(
+    app: AppHandle,
+) -> Result<TranscriptionRuntimeStatusResponse, String> {
+    // torch インポート + CUDA 初期化を伴う Python サブプロセスは数秒かかるため、
+    // メインスレッド（UI スレッド）で実行すると UI が固まる。spawn_blocking で
+    // ワーカースレッドへ逃がし、UI を止めずに再確認できるようにする。
+    tauri::async_runtime::spawn_blocking(move || check_transcription_runtime_support_blocking(app))
+        .await
+        .map_err(|e| format!("GPU ランタイム確認タスクの実行に失敗しました: {e}"))?
+}
+
+fn check_transcription_runtime_support_blocking(
     app: AppHandle,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
     if should_emulate_no_cuda() {
@@ -3890,7 +3917,21 @@ fn get_dev_emulation_status() -> DevEmulationStatusResponse {
 }
 
 #[tauri::command]
-fn check_gpu_availability(app: AppHandle) -> serde_json::Value {
+async fn check_gpu_availability(app: AppHandle) -> serde_json::Value {
+    // nvidia-smi / rocm-smi の起動は数百ms〜秒オーダーになりうるため、メインスレッドを
+    // 塞がないよう spawn_blocking でワーカースレッドへ逃がす。
+    tauri::async_runtime::spawn_blocking(move || check_gpu_availability_blocking(app))
+        .await
+        .unwrap_or_else(|_| {
+            serde_json::json!({
+                "cudaAvailable": false,
+                "rocmAvailable": false,
+                "buildVariant": "cuda",
+            })
+        })
+}
+
+fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
     let mut nvidia_cmd = Command::new("nvidia-smi");
     apply_windows_no_window(&mut nvidia_cmd);
     let cuda_available = nvidia_cmd

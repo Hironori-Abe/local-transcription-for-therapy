@@ -23,7 +23,7 @@ ROCM_VERSION="${LOTT_ROCM_VERSION:-7.2}"
 PYTORCH_ROCM_INDEX_URL="${LOTT_PYTORCH_ROCM_INDEX_URL:-https://download.pytorch.org/whl/rocm7.2}"
 CTRANSLATE2_ROCM_VERSION="${CTRANSLATE2_ROCM_VERSION:-4.7.1}"
 LEMONADE_DEB_PATH="${LEMONADE_DEB_PATH:-}"
-LEMONADE_EMBEDDABLE_VERSION="${LEMONADE_EMBEDDABLE_VERSION:-10.6.0}"
+LEMONADE_EMBEDDABLE_VERSION="${LEMONADE_EMBEDDABLE_VERSION:-10.7.0}"
 RYZEN_AI_NPU_DEB_DIR="${RYZEN_AI_NPU_DEB_DIR:-}"
 
 usage() {
@@ -313,6 +313,7 @@ install_system_packages() {
     python3-pip
     python3-venv
     librsvg2-dev
+    unzip
     wget
   )
 
@@ -813,6 +814,10 @@ install_python_dependencies() {
   local req_tmp
   req_tmp="$(mktemp)"
   if [[ "$TORCH_BACKEND" == "rocm" ]]; then
+    # ctranslate2 ROCm ホイールを先に導入する。faster_whisper は import 時に ctranslate2 を
+    # 読み込むため、後続の import 検証より前に入れておかないと検証が必ず失敗する。先に入れる
+    # ことで、続く pip 依存解決でも ctranslate2 競合警告が消える（av 未導入の警告は配布方針上の想定内）。
+    install_rocm_ctranslate2
     # torch / ctranslate2 は ROCm ホイールで別途インストールするため除外する。
     # faster-whisper は PyAV を入れないため --no-deps で先にインストール済み。
     grep -Ev '^(faster-whisper|torch|torchaudio|torchvision|torchcodec|ctranslate2)([<=>!~[:space:]]|$)' "$req_file" > "$req_tmp"
@@ -840,8 +845,18 @@ install_python_dependencies() {
     rm -f "$req_tmp"
   fi
 
-  "$PYTHON_BIN" -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" \
-    || die "Python module import check failed."
+  if [[ "$TORCH_BACKEND" == "rocm" ]]; then
+    # ROCm の ctranslate2 は GitHub Releases から取得する experimental 経路のため、取得失敗時も
+    # セットアップ全体は止めず警告に留める（後続の check_cuda / doctor_summary で再通知される）。
+    if "$PYTHON_BIN" -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')"; then
+      ok "faster-whisper / ctranslate2 (ROCm) import OK."
+    else
+      warn "faster_whisper / ctranslate2 (ROCm) import に失敗しました。ROCm ctranslate2 ホイールが未導入の可能性があります。faster-whisper の GPU ASR は利用できません。"
+    fi
+  else
+    "$PYTHON_BIN" -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" \
+      || die "Python module import check failed."
+  fi
 }
 
 install_rocm_ctranslate2() {
@@ -1533,7 +1548,6 @@ check_node
 ensure_python_venv
 install_npm_dependencies
 install_python_dependencies
-install_rocm_ctranslate2
 write_linux_env_file
 install_llama_cpp
 download_gemma_model

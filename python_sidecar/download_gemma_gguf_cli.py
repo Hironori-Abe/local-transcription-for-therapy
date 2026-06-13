@@ -147,8 +147,6 @@ def _download_one(
                 repo_id=repo_id,
                 filename=filename,
                 local_dir=str(target_dir),
-                local_dir_use_symlinks=False,
-                resume_download=True,
             )
             print(json.dumps({
                 "type": "progress",

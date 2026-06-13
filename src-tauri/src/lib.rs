@@ -1887,6 +1887,37 @@ static PROOFREAD_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static LLM_PROOFREAD_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static DIARIZATION_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+// 二重起動ガード用フラグ。
+// GPU/モデルを多重ロードしないよう、コマンド単位で同種タスクの同時実行を排他する。
+// AI校正（句読点付与）と全体校正は同じ gemma を VRAM にロードし、キャンセル PID スロットも
+// 共有しているため、1つの LLM_PROOFREAD_ACTIVE で相互排他する。
+static TRANSCRIPTION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DIARIZATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LLM_PROOFREAD_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 二重起動ガードの RAII ハンドル。
+/// `try_acquire` 成功時のみ生成され、Drop 時にフラグを解放する。
+/// これにより早期 return・パニック・タスクキャンセルのいずれでもフラグが残らない。
+struct TaskRunGuard {
+    flag: &'static AtomicBool,
+}
+
+impl TaskRunGuard {
+    /// フラグを false -> true へ CAS で確保する。既に実行中なら `None`。
+    fn try_acquire(flag: &'static AtomicBool) -> Option<TaskRunGuard> {
+        match flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => Some(TaskRunGuard { flag }),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Drop for TaskRunGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 fn apply_windows_no_window(_cmd: &mut Command) {
     #[cfg(target_os = "windows")]
     {
@@ -4086,6 +4117,19 @@ async fn proofread_transcription_llm(
     app: AppHandle,
     request: LlmProofreadRequest,
 ) -> Result<ProofreadTranscriptionResponse, String> {
+    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Ok(ProofreadTranscriptionResponse {
+                success: false,
+                result: None,
+                error_message: Some(
+                    "AI校正（句読点付与/全体校正）が既に実行中です。完了するかキャンセルしてから再実行してください。"
+                        .to_string(),
+                ),
+            })
+        }
+    };
     tauri::async_runtime::spawn_blocking(move || proofread_transcription_llm_blocking(app, request))
         .await
         .map_err(|e| format!("LLM校正タスクの実行に失敗しました: {e}"))?
@@ -4096,6 +4140,19 @@ async fn run_overall_proofread(
     app: AppHandle,
     request: LlmProofreadRequest,
 ) -> Result<OverallProofreadResponse, String> {
+    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Ok(OverallProofreadResponse {
+                success: false,
+                result: None,
+                error_message: Some(
+                    "AI校正（句読点付与/全体校正）が既に実行中です。完了するかキャンセルしてから再実行してください。"
+                        .to_string(),
+                ),
+            })
+        }
+    };
     tauri::async_runtime::spawn_blocking(move || run_overall_proofread_blocking(app, request))
         .await
         .map_err(|e| format!("全体校正タスクの実行に失敗しました: {e}"))?
@@ -5862,6 +5919,19 @@ async fn run_transcription(
     app: AppHandle,
     request: RunTranscriptionRequest,
 ) -> Result<RunTranscriptionResponse, String> {
+    let _run_guard = match TaskRunGuard::try_acquire(&TRANSCRIPTION_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Ok(RunTranscriptionResponse {
+                success: false,
+                result: None,
+                error_message: Some(
+                    "文字起こしは既に実行中です。完了するかキャンセルしてから再実行してください。"
+                        .to_string(),
+                ),
+            })
+        }
+    };
     tauri::async_runtime::spawn_blocking(move || run_transcription_blocking(app, request))
         .await
         .map_err(|e| format!("文字起こしタスクの実行に失敗しました: {e}"))?
@@ -5872,6 +5942,19 @@ async fn run_diarization(
     app: AppHandle,
     request: RunDiarizationRequest,
 ) -> Result<RunDiarizationResponse, String> {
+    let _run_guard = match TaskRunGuard::try_acquire(&DIARIZATION_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Ok(RunDiarizationResponse {
+                success: false,
+                result: None,
+                error_message: Some(
+                    "話者分離は既に実行中です。完了するかキャンセルしてから再実行してください。"
+                        .to_string(),
+                ),
+            })
+        }
+    };
     tauri::async_runtime::spawn_blocking(move || run_diarization_blocking(app, request))
         .await
         .map_err(|e| format!("話者分離タスクの実行に失敗しました: {e}"))?

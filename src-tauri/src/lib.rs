@@ -133,6 +133,24 @@ fn resolve_lemonade_port(cache_dir: &Path) -> u16 {
         .unwrap_or(13306)
 }
 
+/// 外部 LLM アプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
+/// 既定は無効（フェイルクローズ）。`%LOCALAPPDATA%\{identifier}\external-llm-policy.txt`
+/// の内容が `enabled` のときだけ有効化する。このマーカーはインストール時の明示オプトインで
+/// のみ書き込まれ、アプリ内に再有効化トグルは設けない（完全ロック）。
+fn external_llm_enabled(app: &AppHandle) -> bool {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|d| d.join("external-llm-policy.txt"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim() == "enabled")
+        .unwrap_or(false)
+}
+
+/// openai_compatible バックエンド利用時、連携が無効ならエラーメッセージを返す。
+const EXTERNAL_LLM_DISABLED_MESSAGE: &str =
+    "この構成では外部LLMアプリ（LM Studio / Ollama）連携が無効化されています。";
+
 fn validate_local_openai_base_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim().trim_end_matches('/').to_string();
     if trimmed.is_empty() {
@@ -729,7 +747,13 @@ fn detect_local_openai_server_name(
 }
 
 #[tauri::command]
-fn list_local_openai_models(request: LocalOpenAiModelsRequest) -> Result<LocalOpenAiModelsResponse, String> {
+fn list_local_openai_models(
+    app: AppHandle,
+    request: LocalOpenAiModelsRequest,
+) -> Result<LocalOpenAiModelsResponse, String> {
+    if !external_llm_enabled(&app) {
+        return Err(EXTERNAL_LLM_DISABLED_MESSAGE.to_string());
+    }
     let target = parse_local_openai_http_target(&request.base_url)?;
     let path = local_openai_endpoint_path(&target.path_prefix, "models");
     let (headers, json) = local_openai_http_get_json(&target, &path, Duration::from_secs(10))?;
@@ -3991,6 +4015,7 @@ fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
         "cudaAvailable": cuda_available,
         "rocmAvailable": rocm_available,
         "buildVariant": build_variant,
+        "externalLlmEnabled": external_llm_enabled(&app),
     })
 }
 
@@ -4546,6 +4571,14 @@ fn proofread_transcription_llm_blocking_with_kind(
             success: false,
             result: None,
             error_message: Some(format!("未対応の LLM バックエンドです: {backend}")),
+        });
+    }
+
+    if is_openai_compatible && !external_llm_enabled(&app) {
+        return Ok(ProofreadTranscriptionResponse {
+            success: false,
+            result: None,
+            error_message: Some(EXTERNAL_LLM_DISABLED_MESSAGE.to_string()),
         });
     }
 
@@ -7761,6 +7794,14 @@ fn run_overall_proofread_blocking(
             success: false,
             result: None,
             error_message: Some(format!("未対応の LLM バックエンドです: {backend}")),
+        });
+    }
+
+    if is_openai_compatible && !external_llm_enabled(&app) {
+        return Ok(OverallProofreadResponse {
+            success: false,
+            result: None,
+            error_message: Some(EXTERNAL_LLM_DISABLED_MESSAGE.to_string()),
         });
     }
 

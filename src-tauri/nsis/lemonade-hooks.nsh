@@ -33,6 +33,36 @@ winget を使ってインストールします。$\n$\n\
     DetailPrint "Lemonade バイナリはアプリに同梱されています。追加インストールは不要です。"
 
   lemonade_install_skip:
+
+  ; ── 外部LLMアプリ (LM Studio / Ollama) 連携のオプトイン ──────────────────────
+  ; 既定は無効。明示的に「はい」を選んだときだけ external-llm-policy.txt に enabled を
+  ; 書き込む。アプリ (Rust external_llm_enabled) はこのマーカーを見て連携可否を決める。
+  ; 後から変更するには再インストールが必要 (アプリ内に再有効化トグルは無い)。
+  ; バックグラウンド更新 (/UPDATE) では再プロンプトせず既存の選択を保持する。
+  ; ※ Lemonade (内蔵AI バックエンド) はこの選択に関わらず常に利用可能。
+  StrCmp $UpdateMode "1" ext_llm_done 0
+
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+    "外部のLLMアプリ (LM Studio / Ollama) との連携を有効にしますか?$\n$\n\
+通常は不要です (内蔵AI で文章校正できます)。$\n\
+有効にすると、これらのアプリの設定によっては会話データが外部に送信される$\n\
+可能性があり、その挙動は本アプリの管理外です。$\n$\n\
+後から変更するには再インストールが必要です。" \
+    /SD IDNO IDYES ext_llm_enable
+
+  ; IDNO もしくはサイレント既定 → 無効 (残骸マーカーも削除)
+  Delete "$LOCALAPPDATA\${BUNDLEID}\external-llm-policy.txt"
+  DetailPrint "外部LLMアプリ連携は無効です (既定)。"
+  Goto ext_llm_done
+
+  ext_llm_enable:
+    CreateDirectory "$LOCALAPPDATA\${BUNDLEID}"
+    FileOpen $1 "$LOCALAPPDATA\${BUNDLEID}\external-llm-policy.txt" w
+    FileWrite $1 "enabled"
+    FileClose $1
+    DetailPrint "外部LLMアプリ連携を有効化しました。"
+
+  ext_llm_done:
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

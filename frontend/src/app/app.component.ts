@@ -528,6 +528,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly isRocmGpu = computed(() => this.rocmAvailable() === true && this.cudaAvailable() === false);
   /** アプリ identifier から判定したビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版。 */
   readonly buildVariant = signal<'cuda' | 'rocm'>('cuda');
+  /**
+   * 外部 LLM アプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
+   * 既定は無効（フェイルクローズ）。インストール時の明示オプトインでのみ有効化され、
+   * Rust の external-llm-policy.txt マーカーから check_gpu_availability 経由で取得する。
+   */
+  readonly externalLlmEnabled = signal<boolean>(false);
   /** GPU セットアップバナーで CUDA インストール案内を表示するか。 */
   readonly showCudaInstallLinks = computed(() =>
     this.isNoCudaEmulation() || this.buildVariant() === 'cuda'
@@ -989,11 +995,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: 'cuda', label: 'GPU（CUDA / ROCm）' },
     { value: 'cpu', label: 'CPU' }
   ];
-  readonly llmBackendModeOptions: ReadonlyArray<{ value: LlmBackendMode; label: string }> = [
-    { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B）' },
-    { value: 'lmstudio', label: 'LM Studio' },
-    { value: 'ollama', label: 'Ollama' },
-  ];
+  // 外部 LLM アプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
+  // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
+  readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendMode; label: string }>>(() => {
+    const options: Array<{ value: LlmBackendMode; label: string }> = [
+      { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B）' },
+    ];
+    if (this.externalLlmEnabled()) {
+      options.push({ value: 'lmstudio', label: 'LM Studio' });
+      options.push({ value: 'ollama', label: 'Ollama' });
+    }
+    return options;
+  });
   readonly locationAreaOptions: ReadonlyArray<{ value: LocationAreaCode; label: string }> = [
     { value: 'hokkaidoTohoku', label: '北海道・東北' },
     { value: 'kanto', label: '関東' },
@@ -1889,9 +1902,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (llm && typeof llm.modelPath === 'string' && llm.modelPath) {
       this.llmModelPath.set(llm.modelPath);
     }
-    if (llm?.backendMode && (['local_gguf', 'lmstudio', 'ollama'] as string[]).includes(llm.backendMode)) {
-      this.llmBackendMode.set(llm.backendMode as LlmBackendMode);
-    }
+    this.applyBackendModeFromSettings();
     // llmGpuMode: 旧値（cuda_only/cuda_parallel/amd_gpu）はすべて 'gpu' に移行
     if (llm?.llmGpuMode === 'cpu') {
       this.llmGpuMode.set('cpu');
@@ -4484,12 +4495,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async checkGpuAvailability(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const result = await invoke<{ cudaAvailable: boolean; rocmAvailable: boolean; buildVariant?: string }>('check_gpu_availability');
+      const result = await invoke<{ cudaAvailable: boolean; rocmAvailable: boolean; buildVariant?: string; externalLlmEnabled?: boolean }>('check_gpu_availability');
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
         this.cudaAvailable.set(result.cudaAvailable);
         this.rocmAvailable.set(result.rocmAvailable);
         if (result.buildVariant === 'rocm') this.buildVariant.set('rocm');
+        // 明示的に true のときだけ有効化（欠落・false はフェイルクローズで無効のまま）
+        this.externalLlmEnabled.set(result.externalLlmEnabled === true);
+        // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
+        this.applyBackendModeFromSettings();
       });
     } catch {
       // GPU確認失敗時は既存の設定値を維持する
@@ -4677,6 +4692,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistLlmSettings();
     this.applyProofreadSystemPromptForSelectedModel();
     this.applyOverallProofreadSystemPromptForSelectedModel();
+  }
+
+  /**
+   * 保存済み backendMode を現在のポリシーに沿って適用する。
+   * 外部 LLM 連携が無効のとき、lmstudio / ollama は内蔵モデルにフォールバックする。
+   * externalLlmEnabled は起動時の check_gpu_availability で非同期に確定するため、
+   * 設定適用時（applyAppSettings）とフラグ確定後（checkGpuAvailability）の両方から呼ぶ。
+   */
+  private applyBackendModeFromSettings(): void {
+    const saved = this.appSettings.llm?.backendMode;
+    if (!saved || !(['local_gguf', 'lmstudio', 'ollama'] as string[]).includes(saved)) {
+      return;
+    }
+    const savedMode = saved as LlmBackendMode;
+    const usesExternal = savedMode === 'lmstudio' || savedMode === 'ollama';
+    this.llmBackendMode.set(usesExternal && !this.externalLlmEnabled() ? 'local_gguf' : savedMode);
   }
 
   onLlmBackendModeChange(value: LlmBackendMode): void {

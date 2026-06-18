@@ -627,7 +627,7 @@
                   <mat-label>AI校正バックエンド</mat-label>
                   <mat-select [disabled]="llmProofreadRunning()" [value]="llmBackendMode()"
                     (valueChange)="onLlmBackendModeChange($event)">
-                    <mat-option *ngFor="let option of llmBackendModeOptions" [value]="option.value">
+                    <mat-option *ngFor="let option of llmBackendModeOptions()" [value]="option.value">
                       {{ option.label }}
                     </mat-option>
                   </mat-select>

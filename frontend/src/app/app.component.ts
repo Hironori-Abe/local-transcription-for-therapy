@@ -383,6 +383,8 @@ interface AppSettingsV1 {
     llmPromptType?: LlmPromptType;
     /** AI校正の並列スロット数。0/未設定=自動（VRAMで決定）、1/2/4/8/12/16/20/24=手動上書き。 */
     llmParallel?: number;
+    /** 内蔵校正AIモデルの階層。'e4b'=標準（既定）/ '12b'=高精度（CUDA版のみ・後からDL）。 */
+    proofreadModelTier?: 'e4b' | '12b';
   };
 }
 
@@ -988,6 +990,34 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return `${dlMb} MB`;
   });
+  // 内蔵校正AIモデルの階層選択（CUDA版のみ）。'e4b'=標準（既定）、'12b'=高精度（後からDL）。
+  readonly proofreadModelTier = signal<'e4b' | '12b'>('e4b');
+  readonly gemma12bInstalled = signal<boolean | null>(null);
+  readonly gemma12bDownloading = signal<boolean>(false);
+  readonly gemma12bDownloadMessage = signal<string>('');
+  readonly gemma12bDownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['gemma_12b']);
+  readonly gemma12bDownloadPercent = computed(() => {
+    const p = this.gemma12bDownloadProgress();
+    if (!p?.downloadedBytes || !p?.totalBytes) return 0;
+    return Math.min(100, (p.downloadedBytes / p.totalBytes) * 100);
+  });
+  readonly gemma12bDownloadBytesLabel = computed(() => {
+    const p = this.gemma12bDownloadProgress();
+    if (!p?.downloadedBytes) return '';
+    const dlMb = Math.round(p.downloadedBytes / 1_048_576);
+    if (p.totalBytes) {
+      return `${dlMb} / ${Math.round(p.totalBytes / 1_048_576)} MB`;
+    }
+    return `${dlMb} MB`;
+  });
+  /** 校正AIモデル階層セレクタの表示条件: CUDA版・Editor版以外・内蔵バックエンド時のみ。 */
+  readonly proofreadModelTierVisible = computed<boolean>(() =>
+    !this.editorOnlyBuild && this.buildVariant() === 'cuda' && this.llmBackendMode() === 'local_gguf'
+  );
+  readonly proofreadModelTierOptions: ReadonlyArray<{ value: 'e4b' | '12b'; label: string }> = [
+    { value: 'e4b', label: '標準（Gemma 4 E4B・高速・既定）' },
+    { value: '12b', label: '高精度（Gemma 4 12B QAT+MTP・要ダウンロード）' },
+  ];
   readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => [
     { value: 'turbo', label: 'turbo（高速・既定）' },
     { value: 'large-v3', label: 'large-v3（高精度）' },
@@ -2065,6 +2095,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     if (llm && Number.isInteger(llm.llmParallel) && (llm.llmParallel as number) >= 0) {
       this.selectedLlmParallel.set(this.normalizeLlmParallel(llm.llmParallel as number));
+    }
+    // 校正AIモデル階層は localStorage を初期 UI 値にする（最終的な真実はバックエンドのマーカー。
+    // initProofreadModelTier() が起動時に同期する）。AMD/Editor 版は 12B 非対応のため 'e4b' に丸める。
+    if ((llm?.proofreadModelTier === '12b') && !this.editorOnlyBuild) {
+      this.proofreadModelTier.set('12b');
+    } else {
+      this.proofreadModelTier.set('e4b');
     }
     if (this.llmBackendMode() === 'local_gguf') {
       this.llmPromptType.set('gemma4');
@@ -4603,6 +4640,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // ため、同期的な変更検知を一度だけ強制する。
     this.appRef.tick();
     void this.initDefaultLlmModelPath();
+    void this.initProofreadModelTier();
     void this.maybeAutoStartLemonade();
   }
 
@@ -4690,6 +4728,65 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.snackBar.open(`large-v3 ダウンロード失敗: ${e}`, undefined, { duration: 5000 });
     } finally {
       this.largeV3Downloading.set(false);
+    }
+  }
+
+  /** 起動時に、バックエンドのマーカー（真実）と 12B 導入状態をフロントへ同期する。CUDA版のみ。 */
+  private async initProofreadModelTier(): Promise<void> {
+    if (!this.isTauriRuntime() || this.editorOnlyBuild) return;
+    try {
+      const tier = await invoke<string>('get_proofread_model_tier');
+      this.ngZone.run(() => {
+        this.proofreadModelTier.set(tier === '12b' ? '12b' : 'e4b');
+      });
+    } catch {
+      // 取得失敗時は localStorage 由来の現在値を維持
+    }
+    try {
+      const installed = await invoke<boolean>('check_gemma_12b_installed');
+      this.ngZone.run(() => this.gemma12bInstalled.set(installed));
+    } catch {
+      // 判定失敗時は null のまま（未確定）
+    }
+  }
+
+  async onProofreadModelTierChange(value: 'e4b' | '12b'): Promise<void> {
+    const tier: 'e4b' | '12b' = value === '12b' ? '12b' : 'e4b';
+    this.proofreadModelTier.set(tier);
+    this.persistLlmSettings();
+    // バックエンドのマーカー（サーバ起動時に参照される真実）へ反映する。
+    try {
+      await invoke('set_proofread_model_tier', { tier });
+    } catch (e) {
+      this.snackBar.open(`モデル設定の保存に失敗しました: ${e}`, undefined, { duration: 5000 });
+      return;
+    }
+    // 12B 選択時で未導入なら、large-v3 と同じく後からダウンロードする。
+    if (tier === '12b' && this.gemma12bInstalled() === false && !this.gemma12bDownloading()) {
+      await this.downloadGemma12b();
+    }
+    // 起動済みの校正エンジンは旧モデルを保持しているため停止し、次回校正時に新モデルで再起動させる。
+    if (this.lemonadeStatus() === 'running' || this.lemonadeStatus() === 'starting') {
+      await this.stopLemonade();
+      this.lemonadeStatus.set('stopped');
+      this.lemonadeLoadedDevice.set('stopped');
+    }
+  }
+
+  private async downloadGemma12b(): Promise<void> {
+    await this.ensureSetupProgressListener();
+    this.gemma12bDownloading.set(true);
+    this.gemma12bDownloadMessage.set('Gemma 4 12B（QAT+MTP）をダウンロード中... （約7GB・数分〜十数分かかります）');
+    try {
+      await invoke<boolean>('download_gemma_12b');
+      this.gemma12bInstalled.set(true);
+      this.gemma12bDownloadMessage.set('');
+      this.snackBar.open('Gemma 4 12B のダウンロードが完了しました', undefined, { duration: 3000 });
+    } catch (e) {
+      this.gemma12bDownloadMessage.set(`ダウンロード失敗: ${e}`);
+      this.snackBar.open(`Gemma 4 12B ダウンロード失敗: ${e}`, undefined, { duration: 5000 });
+    } finally {
+      this.gemma12bDownloading.set(false);
     }
   }
 
@@ -5061,6 +5158,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         llmHipDeviceIndex: this.selectedLlmHipDeviceIndex(),
         llmPromptType: this.llmPromptType(),
         llmParallel: this.selectedLlmParallel(),
+        proofreadModelTier: this.proofreadModelTier(),
       },
     };
     this.persistAppSettings();

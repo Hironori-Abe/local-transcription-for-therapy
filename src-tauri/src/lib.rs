@@ -1012,11 +1012,9 @@ fn try_start_llama_server_cuda(
     let ctx_s = ctx_size.to_string();
     let np_s = n_parallel.to_string();
     let port_s = port.to_string();
-    // MTP ドラフト使用時は FlashAttention を無効化する。CUDA では FA + draft-mtp の併用が
-    // ドラフト初期化時の warmup decode で fattn カーネル abort になる既知バグがある
-    // （llama.cpp #24376 / #24457。Unsloth の MTP README も -fa off を指示）。
-    // 上流で修正されたら（#24376 クローズ後のビルドへ更新時に）"on" 固定へ戻す。
-    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    // FlashAttention は MTP ドラフト併用時も含めて on にする。
+    // 12B QAT + MTP + --flash-attn on の実機通過を確認済みのため、現行ビルドでは on を採用する。
+    let flash_attn = "on";
     cmd.arg("-m")
         .arg(model_path)
         .arg("--port")
@@ -1032,9 +1030,8 @@ fn try_start_llama_server_cuda(
         .arg("--host")
         .arg("127.0.0.1"); // ローカルループバックのみ
     if let Some(mtp_path) = mtp_model_path {
-        // draft 側 KV キャッシュは既定 (f16) のまま。FA off では量子化 V キャッシュが
-        // "quantized V cache requires Flash Attention" で起動エラーになるため指定しない
-        // （MTP ヘッドは約60MBで KV も小さく、量子化の節約効果はほぼない）。
+        // draft 側 KV キャッシュは既定 (f16) のまま指定しない
+        // （MTP ヘッドは小さく KV も小さいため、量子化の節約効果はほぼない）。
         cmd.arg("--spec-type")
             .arg("draft-mtp")
             .arg("--spec-draft-model")
@@ -1182,50 +1179,164 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
 /// QAT 版（UD-Q4_K_XL）は user_models.json へのカスタム登録で提供する。
 const LEMONADE_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
 const LEMONADE_DEFAULT_MODEL_CHECKPOINT: &str = "unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL";
+// 既定（標準）モデル: Gemma 4 E4B QAT。従来どおりのデフォルト経路。
 const GEMMA_LLM_MODEL_DIR: &str = "gemma-4-e4b-it";
 const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-E4B-it.gguf";
 const GEMMA_MTP_BF16_GGUF_FILENAME: &str = "gemma-4-E4B-it-BF16-MTP.gguf";
 
-fn gemma_llm_relative_dir() -> PathBuf {
+// 上位（高精度）モデル: Gemma 4 12B QAT + MTP。NVIDIA/CUDA 同梱 llama-server 経路でのみ提供し、
+// large-v3 と同じく後からダウンロードする（AMD/Lemonade 経路には MTP が未配線のため対象外）。
+const GEMMA_12B_LLM_MODEL_DIR: &str = "gemma-4-12b-it";
+const GEMMA_12B_MAIN_GGUF_FILENAME: &str = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf";
+const GEMMA_12B_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-12B-it.gguf";
+
+/// 校正AIモデルの選択肢。既定は E4b（標準）。B12（高精度）は CUDA 版のみ。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GemmaTier {
+    E4b,
+    B12,
+}
+
+impl GemmaTier {
+    fn from_marker(value: &str) -> Self {
+        if value.trim() == "12b" {
+            GemmaTier::B12
+        } else {
+            GemmaTier::E4b
+        }
+    }
+    fn as_marker(self) -> &'static str {
+        match self {
+            GemmaTier::E4b => "e4b",
+            GemmaTier::B12 => "12b",
+        }
+    }
+    fn model_dir(self) -> &'static str {
+        match self {
+            GemmaTier::E4b => GEMMA_LLM_MODEL_DIR,
+            GemmaTier::B12 => GEMMA_12B_LLM_MODEL_DIR,
+        }
+    }
+    fn main_filename(self) -> &'static str {
+        match self {
+            GemmaTier::E4b => GEMMA_MAIN_GGUF_FILENAME,
+            GemmaTier::B12 => GEMMA_12B_MAIN_GGUF_FILENAME,
+        }
+    }
+}
+
+fn gemma_llm_relative_dir(tier: GemmaTier) -> PathBuf {
     PathBuf::from("python_sidecar")
         .join("models")
         .join("llm")
-        .join(GEMMA_LLM_MODEL_DIR)
+        .join(tier.model_dir())
 }
 
-fn gemma_debug_model_dir_candidates() -> Vec<PathBuf> {
+fn gemma_debug_model_dir_candidates(tier: GemmaTier) -> Vec<PathBuf> {
     let mut candidates = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
-            .join(gemma_llm_relative_dir()),
+            .join(gemma_llm_relative_dir(tier)),
     ];
     if let Ok(cwd) = env::current_dir() {
-        candidates.push(cwd.join(gemma_llm_relative_dir()));
+        candidates.push(cwd.join(gemma_llm_relative_dir(tier)));
     }
     candidates
 }
 
-fn gemma_release_model_dir(app: &AppHandle) -> Option<PathBuf> {
+fn gemma_release_model_dir(app: &AppHandle, tier: GemmaTier) -> Option<PathBuf> {
     release_models_root(app)
-        .map(|root| root.join("llm").join(GEMMA_LLM_MODEL_DIR))
+        .map(|root| root.join("llm").join(tier.model_dir()))
 }
 
-fn gemma_main_gguf_path(dir: &Path) -> PathBuf {
-    dir.join(GEMMA_MAIN_GGUF_FILENAME)
+fn gemma_main_gguf_path(dir: &Path, tier: GemmaTier) -> PathBuf {
+    dir.join(tier.main_filename())
 }
 
-fn gemma_mtp_gguf_candidates(dir: &Path) -> Vec<PathBuf> {
-    vec![
-        dir.join(GEMMA_MTP_GGUF_FILENAME),
-        dir.join("MTP").join(GEMMA_MTP_BF16_GGUF_FILENAME),
-    ]
+fn gemma_mtp_gguf_candidates(dir: &Path, tier: GemmaTier) -> Vec<PathBuf> {
+    match tier {
+        // E4B は同梱経路で BF16 ドラフトへのフォールバックも見る。
+        GemmaTier::E4b => vec![
+            dir.join(GEMMA_MTP_GGUF_FILENAME),
+            dir.join("MTP").join(GEMMA_MTP_BF16_GGUF_FILENAME),
+        ],
+        GemmaTier::B12 => vec![dir.join(GEMMA_12B_MTP_GGUF_FILENAME)],
+    }
 }
 
-fn find_existing_gemma_mtp_gguf(dir: &Path) -> Option<PathBuf> {
-    gemma_mtp_gguf_candidates(dir)
+fn find_existing_gemma_mtp_gguf(dir: &Path, tier: GemmaTier) -> Option<PathBuf> {
+    gemma_mtp_gguf_candidates(dir, tier)
         .into_iter()
         .find(|p| p.is_file())
+}
+
+/// 校正AIモデル選択マーカー。`app_local_data_dir()/proofread-model-tier.txt` に
+/// "e4b" / "12b" を保存する（NSIS の %LOCALAPPDATA%\{id} 一括削除で消える）。
+fn proofread_model_tier_marker_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|d| d.join("proofread-model-tier.txt"))
+}
+
+/// ユーザーが選択した校正AIモデル階層を読む。既定は E4b。
+/// AMD 版は 12B 非対応（MTP 未配線）のため、マーカー内容に関わらず常に E4b。
+fn read_proofread_model_tier(app: &AppHandle) -> GemmaTier {
+    if app.config().identifier.contains("amd") {
+        return GemmaTier::E4b;
+    }
+    proofread_model_tier_marker_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| GemmaTier::from_marker(&s))
+        .unwrap_or(GemmaTier::E4b)
+}
+
+/// 指定 tier の本体 GGUF を解決する（debug: プロジェクト相対 / release: app data）。
+fn resolve_gemma_main_path_for_tier(app: &AppHandle, tier: GemmaTier) -> Option<String> {
+    if cfg!(debug_assertions) {
+        for dir in gemma_debug_model_dir_candidates(tier) {
+            let p = gemma_main_gguf_path(&dir, tier);
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Some(dir) = gemma_release_model_dir(app, tier) {
+        let p = gemma_main_gguf_path(&dir, tier);
+        if p.exists() {
+            return Some(p.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// 指定 tier の MTP ドラフト GGUF を解決する。
+fn resolve_gemma_mtp_path_for_tier(app: &AppHandle, tier: GemmaTier) -> Option<String> {
+    if cfg!(debug_assertions) {
+        for dir in gemma_debug_model_dir_candidates(tier) {
+            if let Some(p) = find_existing_gemma_mtp_gguf(&dir, tier) {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Some(dir) = gemma_release_model_dir(app, tier) {
+        if let Some(p) = find_existing_gemma_mtp_gguf(&dir, tier) {
+            return Some(p.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// 実際にロードするモデル階層を決める。選択が B12 でも本体 GGUF が無ければ
+/// E4b へフォールバックする（フェイルセーフ。12B 未ダウンロードでもサーバは起動する）。
+fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
+    let want = read_proofread_model_tier(app);
+    if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
+        GemmaTier::B12
+    } else {
+        GemmaTier::E4b
+    }
 }
 
 /// アプリ固有キャッシュの user_models.json に既定の E4B QAT モデルを登録する。
@@ -3898,37 +4009,40 @@ fn check_whisper_turbo_cached(app: &AppHandle) -> bool {
 }
 
 fn get_gemma_gguf_info(app: &AppHandle) -> (bool, String) {
+    // セットアップタブの標準チェックリストは既定（E4B）モデルを対象にする。
+    let tier = GemmaTier::E4b;
     if cfg!(debug_assertions) {
-        for dir in gemma_debug_model_dir_candidates() {
-            let p = gemma_main_gguf_path(&dir);
+        for dir in gemma_debug_model_dir_candidates(tier) {
+            let p = gemma_main_gguf_path(&dir, tier);
             if p.exists() {
                 return (true, p.to_string_lossy().to_string());
             }
         }
-        let expected = gemma_main_gguf_path(&gemma_debug_model_dir_candidates()[0]);
+        let expected = gemma_main_gguf_path(&gemma_debug_model_dir_candidates(tier)[0], tier);
         return (false, expected.to_string_lossy().to_string());
     }
 
     // リリース: アプリ固有データ領域へ集約する（NSIS の %LOCALAPPDATA%\{id} 一括削除で消える）。
-    let p = gemma_release_model_dir(app)
-        .map(|dir| gemma_main_gguf_path(&dir))
-        .unwrap_or_else(|| gemma_main_gguf_path(&gemma_llm_relative_dir()));
+    let p = gemma_release_model_dir(app, tier)
+        .map(|dir| gemma_main_gguf_path(&dir, tier))
+        .unwrap_or_else(|| gemma_main_gguf_path(&gemma_llm_relative_dir(tier), tier));
     (p.exists(), p.to_string_lossy().to_string())
 }
 
 fn get_gemma_mtp_gguf_info(app: &AppHandle) -> (bool, String) {
+    let tier = GemmaTier::E4b;
     if cfg!(debug_assertions) {
-        for dir in gemma_debug_model_dir_candidates() {
-            if let Some(p) = find_existing_gemma_mtp_gguf(&dir) {
+        for dir in gemma_debug_model_dir_candidates(tier) {
+            if let Some(p) = find_existing_gemma_mtp_gguf(&dir, tier) {
                 return (true, p.to_string_lossy().to_string());
             }
         }
-        let expected = gemma_debug_model_dir_candidates()[0].join(GEMMA_MTP_GGUF_FILENAME);
+        let expected = gemma_debug_model_dir_candidates(tier)[0].join(GEMMA_MTP_GGUF_FILENAME);
         return (false, expected.to_string_lossy().to_string());
     }
 
-    let dir = gemma_release_model_dir(app).unwrap_or_else(gemma_llm_relative_dir);
-    if let Some(p) = find_existing_gemma_mtp_gguf(&dir) {
+    let dir = gemma_release_model_dir(app, tier).unwrap_or_else(|| gemma_llm_relative_dir(tier));
+    if let Some(p) = find_existing_gemma_mtp_gguf(&dir, tier) {
         return (true, p.to_string_lossy().to_string());
     }
     let expected = dir.join(GEMMA_MTP_GGUF_FILENAME);
@@ -4315,42 +4429,52 @@ fn open_llm_models_folder(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_default_llm_model_path(app: AppHandle) -> Option<String> {
-    if cfg!(debug_assertions) {
-        for dir in gemma_debug_model_dir_candidates() {
-            let p = gemma_main_gguf_path(&dir);
-            if p.exists() {
-                return Some(p.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    // リリース: アプリ固有データ領域へ集約する（NSIS の %LOCALAPPDATA%\{id} 一括削除で消える）。
-    if let Some(dir) = gemma_release_model_dir(&app) {
-        let p = gemma_main_gguf_path(&dir);
-        if p.exists() {
-            return Some(p.to_string_lossy().to_string());
-        }
-    }
-
-    None
+    // 選択中の階層（E4B 標準 / 12B 高精度）の本体 GGUF を解決する。
+    // B12 選択でも未ダウンロードなら E4b へフォールバックする（フェイルセーフ）。
+    resolve_gemma_main_path_for_tier(&app, resolve_effective_proofread_tier(&app))
 }
 
 fn get_default_llm_mtp_model_path(app: &AppHandle) -> Option<String> {
-    if cfg!(debug_assertions) {
-        for dir in gemma_debug_model_dir_candidates() {
-            if let Some(p) = find_existing_gemma_mtp_gguf(&dir) {
-                return Some(p.to_string_lossy().to_string());
-            }
-        }
-    }
+    // 本体と同じ実効階層の MTP ドラフトを解決し、本体と MTP の階層が食い違わないようにする。
+    resolve_gemma_mtp_path_for_tier(app, resolve_effective_proofread_tier(app))
+}
 
-    if let Some(dir) = gemma_release_model_dir(app) {
-        if let Some(p) = find_existing_gemma_mtp_gguf(&dir) {
-            return Some(p.to_string_lossy().to_string());
-        }
-    }
+/// 校正AIモデルの選択（"e4b" / "12b"）を返す。AMD 版は常に "e4b"。
+#[tauri::command]
+fn get_proofread_model_tier(app: AppHandle) -> String {
+    read_proofread_model_tier(&app).as_marker().to_string()
+}
 
-    None
+/// 校正AIモデルの選択を保存する。AMD 版（12B 非対応）では強制的に "e4b" に丸める。
+#[tauri::command]
+fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> {
+    let resolved = if app.config().identifier.contains("amd") {
+        GemmaTier::E4b
+    } else {
+        GemmaTier::from_marker(&tier)
+    };
+    let path = proofread_model_tier_marker_path(&app)
+        .ok_or_else(|| "設定の保存先を解決できませんでした。".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("設定フォルダの作成に失敗しました: {e}"))?;
+    }
+    std::fs::write(&path, resolved.as_marker())
+        .map_err(|e| format!("設定の保存に失敗しました: {e}"))?;
+    Ok(())
+}
+
+/// 上位モデル（Gemma 4 12B 本体 GGUF）がダウンロード済みかを返す。
+#[tauri::command]
+fn check_gemma_12b_installed(app: AppHandle) -> bool {
+    resolve_gemma_main_path_for_tier(&app, GemmaTier::B12).is_some()
+}
+
+/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする（large-v3 と同じ後付け方式）。
+#[tauri::command]
+async fn download_gemma_12b(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || download_gemma_12b_blocking(&app).map(|_| true))
+        .await
+        .map_err(|e| format!("12Bモデルのダウンロードに失敗しました: {e}"))?
 }
 
 #[tauri::command]
@@ -8348,23 +8472,23 @@ fn resolve_download_diarization_model_script_path(app: &AppHandle) -> Result<Pat
     ))
 }
 
-fn get_gemma_gguf_target_dir(app: &AppHandle) -> PathBuf {
+fn get_gemma_tier_target_dir(app: &AppHandle, tier: GemmaTier) -> PathBuf {
     if cfg!(debug_assertions) {
         return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
-            .join(gemma_llm_relative_dir());
+            .join(gemma_llm_relative_dir(tier));
     }
     // リリース: アプリ固有データ領域へ集約する（NSIS の %LOCALAPPDATA%\{id} 一括削除で消える）。
-    if let Some(dir) = gemma_release_model_dir(app) {
+    if let Some(dir) = gemma_release_model_dir(app, tier) {
         return dir;
     }
-    gemma_llm_relative_dir()
+    gemma_llm_relative_dir(tier)
 }
 
 fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
     let script_path = resolve_download_gemma_gguf_script_path(app)
         .map_err(|e| format!("Gemmaダウンロードスクリプトが見つかりません: {e}"))?;
-    let target_dir = get_gemma_gguf_target_dir(app);
+    let target_dir = get_gemma_tier_target_dir(app, GemmaTier::E4b);
 
     let python_bin = get_python_bin(app);
 
@@ -8379,6 +8503,29 @@ fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
     }
 
     run_download_streaming(app, &mut cmd, "gemma_gguf").map(|_| ())
+}
+
+/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする。NVIDIA/CUDA 版のみ。
+fn download_gemma_12b_blocking(app: &AppHandle) -> Result<(), String> {
+    if app.config().identifier.contains("amd") {
+        return Err("この構成（AMD版）では12Bモデルは利用できません。".to_string());
+    }
+    let script_path = resolve_download_gemma_gguf_script_path(app)
+        .map_err(|e| format!("Gemmaダウンロードスクリプトが見つかりません: {e}"))?;
+    let target_dir = get_gemma_tier_target_dir(app, GemmaTier::B12);
+
+    let python_bin = get_python_bin(app);
+
+    let mut cmd = Command::new(&python_bin);
+    apply_windows_no_window(&mut cmd);
+    cmd.env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg(&script_path)
+        .arg(target_dir.to_string_lossy().as_ref())
+        .arg("--model")
+        .arg("12b");
+
+    run_download_streaming(app, &mut cmd, "gemma_12b").map(|_| ())
 }
 
 fn emit_setup_progress(app: &AppHandle, component: &str, status: &str, message: &str) {
@@ -9173,6 +9320,10 @@ pub fn run() {
             list_llm_models,
             open_llm_models_folder,
             get_default_llm_model_path,
+            get_proofread_model_tier,
+            set_proofread_model_tier,
+            check_gemma_12b_installed,
+            download_gemma_12b,
             get_proofread_system_prompt,
             get_default_proofread_system_prompt,
             get_overall_proofread_system_prompt,

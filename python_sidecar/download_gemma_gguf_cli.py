@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""download_gemma_gguf_cli.py — download Gemma 4 E4B QAT GGUF + MTP from Hugging Face Hub.
+"""download_gemma_gguf_cli.py — download a Gemma 4 QAT GGUF + MTP from Hugging Face Hub.
 
 Usage:
-    python download_gemma_gguf_cli.py <target_dir> [--skip-mtp]
+    python download_gemma_gguf_cli.py <target_dir> [--model e4b|12b] [--skip-mtp]
+
+    --model e4b (default): Gemma 4 E4B QAT (standard / both CUDA and AMD)
+    --model 12b          : Gemma 4 12B QAT + MTP (high-accuracy / CUDA only)
 
 Prints JSON progress lines while downloading:
     {"type": "progress", "downloaded_bytes": N}
@@ -18,28 +21,55 @@ import sys
 import threading
 from pathlib import Path
 
-_REPO_ID = "unsloth/gemma-4-E4B-it-qat-GGUF"
-_MAIN_FILENAME = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
-_MTP_FILENAME = "mtp-gemma-4-E4B-it.gguf"
-_MTP_FALLBACK_FILENAME = "MTP/gemma-4-E4B-it-BF16-MTP.gguf"
 _MIN_SIZE_BYTES = 1024 * 1024  # 1 MB: zero-byte partial is not "done"
 
-_FILES = [
-    {
-        "component": "gemma_gguf",
-        "filenames": [_MAIN_FILENAME],
-        "label": "Gemma 4 E4B QAT UD-Q4_K_XL",
-        "total_bytes": 4_215_693_760,
-        "use_cache_progress": True,
+# モデル階層ごとの HF リポジトリとファイル仕様。
+# E4B は従来どおりセットアップタブの2コンポーネント（gemma_gguf / gemma_mtp_gguf）に分けて進捗表示する。
+# 12B は専用セレクタ用に1コンポーネント（gemma_12b）へまとめ、本体→MTP の順に取得する。
+_MODELS = {
+    "e4b": {
+        "repo_id": "unsloth/gemma-4-E4B-it-qat-GGUF",
+        "files": [
+            {
+                "component": "gemma_gguf",
+                "filenames": ["gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"],
+                "label": "Gemma 4 E4B QAT UD-Q4_K_XL",
+                "total_bytes": 4_215_693_760,
+                "use_cache_progress": True,
+                "is_mtp": False,
+            },
+            {
+                "component": "gemma_mtp_gguf",
+                "filenames": ["mtp-gemma-4-E4B-it.gguf", "MTP/gemma-4-E4B-it-BF16-MTP.gguf"],
+                "label": "Gemma 4 E4B MTP",
+                "total_bytes": 63_000_000,
+                "use_cache_progress": False,
+                "is_mtp": True,
+            },
+        ],
     },
-    {
-        "component": "gemma_mtp_gguf",
-        "filenames": [_MTP_FILENAME, _MTP_FALLBACK_FILENAME],
-        "label": "Gemma 4 E4B MTP",
-        "total_bytes": 63_000_000,
-        "use_cache_progress": False,
+    "12b": {
+        "repo_id": "unsloth/gemma-4-12B-it-qat-GGUF",
+        "files": [
+            {
+                "component": "gemma_12b",
+                "filenames": ["gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"],
+                "label": "Gemma 4 12B QAT UD-Q4_K_XL",
+                "total_bytes": 7_300_000_000,
+                "use_cache_progress": True,
+                "is_mtp": False,
+            },
+            {
+                "component": "gemma_12b",
+                "filenames": ["mtp-gemma-4-12B-it.gguf"],
+                "label": "Gemma 4 12B MTP",
+                "total_bytes": 242_000_000,
+                "use_cache_progress": False,
+                "is_mtp": True,
+            },
+        ],
     },
-]
+}
 
 
 def force_utf8_stdio() -> None:
@@ -171,7 +201,20 @@ def main() -> int:
         return 1
 
     target_dir = Path(sys.argv[1])
-    skip_mtp = "--skip-mtp" in sys.argv[2:]
+    rest = sys.argv[2:]
+    skip_mtp = "--skip-mtp" in rest
+
+    model_key = "e4b"
+    if "--model" in rest:
+        idx = rest.index("--model")
+        if idx + 1 < len(rest):
+            model_key = rest[idx + 1].strip().lower()
+    if model_key not in _MODELS:
+        print(json.dumps({"success": False, "message": f"未対応のモデルです: {model_key}"}))
+        return 1
+
+    model_repo_id = str(_MODELS[model_key]["repo_id"])
+    model_files = list(_MODELS[model_key]["files"])
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -182,11 +225,11 @@ def main() -> int:
 
         messages: list[str] = []
         all_skipped = True
-        for spec in _FILES:
-            if skip_mtp and spec["component"] == "gemma_mtp_gguf":
+        for spec in model_files:
+            if skip_mtp and spec.get("is_mtp"):
                 continue
             ok, message, skipped = _download_one(
-                repo_id=_REPO_ID,
+                repo_id=model_repo_id,
                 target_dir=target_dir,
                 component=str(spec["component"]),
                 filenames=list(spec["filenames"]),

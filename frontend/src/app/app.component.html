@@ -1392,11 +1392,11 @@
                     <button matSuffix mat-stroked-button type="button" class="segment-punctuation-btn" tabindex="-1"
                       [disabled]="isProofreadLocked || llmStatus === 'processing'"
                       (mousedown)="$event.preventDefault()"
-                      (click)="appendPunctuationToSegment(segment.id, '、', segmentTextInput)">+、</button>
+                      (click)="appendPunctuationToSegment(segment.id, editCommaChar(), segmentTextInput)">+{{ editCommaChar() }}</button>
                     <button matSuffix mat-stroked-button type="button" class="segment-punctuation-btn" tabindex="-1"
                       [disabled]="isProofreadLocked || llmStatus === 'processing'"
                       (mousedown)="$event.preventDefault()"
-                      (click)="appendPunctuationToSegment(segment.id, '。', segmentTextInput)">+。</button>
+                      (click)="appendPunctuationToSegment(segment.id, editPeriodChar(), segmentTextInput)">+{{ editPeriodChar() }}</button>
                   </mat-form-field>
                   <button mat-mini-fab type="button" class="segment-insert-btn segment-insert-btn-copy" tabindex="-1"
                     [disabled]="isProofreadLocked" (click)="insertSegmentRelative(segment.id, 'below')"
@@ -1408,7 +1408,7 @@
                   </button>
                   <button mat-mini-fab type="button" class="segment-insert-btn segment-insert-btn-split" tabindex="-1"
                     [disabled]="isProofreadLocked" (click)="splitSegmentByPeriod(segment.id)" aria-label="句点で分割して下に追加"
-                    matTooltip="「。」・「？」・「！」で文を分割します">
+                    [matTooltip]="editPunctuationIsJapanese() ? '「。」・「？」・「！」で文を分割します' : '「.」・「?」・「!」で文を分割します'">
                     <span class="segment-insert-icon-pair" aria-hidden="true">
                       <mat-icon
                         class="material-symbols-outlined segment-insert-icon segment-insert-icon-rotated">call_split</mat-icon>

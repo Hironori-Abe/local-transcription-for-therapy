@@ -505,6 +505,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly whisperModel = signal<string>('turbo');
   readonly transcriptionLanguage = signal<string>('ja');
   readonly transcriptionDevice = signal<TranscriptionDeviceOption>('cuda');
+  // 編集UIの「+、」「+。」ボタンが挿入する句読点。日本語のときは全角（、。）、
+  // それ以外の言語では半角（, .）。判定は結果が実際に文字起こしされた言語を優先し、
+  // 無ければ現在の言語設定にフォールバックする。
+  readonly editPunctuationIsJapanese = computed<boolean>(() => {
+    const lang = (this.result()?.settings?.language ?? this.transcriptionLanguage() ?? 'ja').toLowerCase();
+    return lang === 'ja';
+  });
+  readonly editCommaChar = computed<'、' | ','>(() => (this.editPunctuationIsJapanese() ? '、' : ','));
+  readonly editPeriodChar = computed<'。' | '.'>(() => (this.editPunctuationIsJapanese() ? '。' : '.'));
   readonly initialPrompt = signal<string>('');
   readonly baseInitialPrompt = signal<string>('');
   readonly running = signal<boolean>(false);
@@ -7068,11 +7077,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const sourceSegment = segments[sourceIndex];
     const sourceText = this.getEditableText(sourceSegment);
 
-    // 「。」「？」「！」で分割し、区切り文字を各パートの末尾に再付与
-    const tokens = sourceText.split(/(。|？|！)/);
+    // 文末記号で分割し、区切り文字を各パートの末尾に再付与する。
+    // 日本語: 「。」「？」「！」（ほぼ文末専用なので素朴に分割）。
+    // それ以外: 「.」「?」「!」だが、直後が空白／文末のときだけ分割する。
+    //   これで小数（3.14）や略語（U.S.A.）の途中では割れない（コンマは文中の区切りなので対象外）。
+    const isJa = this.editPunctuationIsJapanese();
+    const splitRe = isJa ? /(。|？|！)/ : /([.?!]+)(?=\s|$)/;
+    const tokens = sourceText.split(splitRe);
     const parts: string[] = [];
     for (let i = 0; i < tokens.length; i += 2) {
-      const combined = tokens[i] + (tokens[i + 1] ?? '');
+      let combined = tokens[i] + (tokens[i + 1] ?? '');
+      if (!isJa) combined = combined.trim();
       if (combined.length > 0) parts.push(combined);
     }
 
@@ -7193,7 +7208,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   appendPunctuationToSegment(
     segmentId: number,
-    punctuation: '、' | '。' | '？' | '！',
+    punctuation: '、' | '。' | '？' | '！' | ',' | '.',
     textInputEl?: HTMLInputElement | HTMLTextAreaElement
   ): void {
     const current = this.editedSegmentTextMap();

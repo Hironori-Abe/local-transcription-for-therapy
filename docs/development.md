@@ -93,6 +93,15 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
   - 既定: Gemma 4 E4B / Lemonade 系のローカル実行
   - 追加: ローカルGGUF / llama.cpp 系
   - 追加: ローカル OpenAI 互換 API（`localhost` / `127.*` / `[::1]` の loopback 接続のみ）
+
+### 外部 LLM アプリ（LM Studio / Ollama）連携のゲート
+
+ローカル OpenAI 互換 API（LM Studio / Ollama）連携は **既定で無効**です。インストーラのオプトイン（`nvidia-hooks.nsh` / `lemonade-hooks.nsh`）で「はい」を選んだときだけ、`app_local_data_dir()` 直下に `external-llm-policy.txt`（内容 `enabled`）が書き込まれて有効になります。
+
+- 判定の単一の真実はこのマーカーファイルです（内容が `enabled` のときだけ有効、それ以外はすべて無効＝フェイルクローズ）。
+- Rust `external_llm_enabled()`（`src-tauri/src/lib.rs`）が校正コマンドとモデル一覧取得をゲートし（多層防御の要）、無効時はフロントの LLM バックエンド選択肢からも LM Studio / Ollama を除外します。
+- アプリ内に再有効化トグルはありません。有効／無効の変更は再インストールで行います。
+- **dev で連携を試す場合**: `app_local_data_dir()` 相当のパス（Windows は `%LOCALAPPDATA%\{identifier}\`）に `external-llm-policy.txt` を作成し、内容を `enabled` にして再起動します。
 - セグメント単位の逐次校正（`proofread_llm_cli.py`）は 40 セグメントを1バッチで送信します。プロンプトには話者ラベル（例: `Th`・`Cl`）も含まれます。
 - 全体一括校正（`overall_proofread_cli.py`）は全セグメントをチャンク化して一括送信します。
 - ローカル OpenAI 互換 API は Base URL とモデルを登録してプロファイル化できます。モデル一覧は互換APIサーバーへ問い合わせて取得し、サーバー名（Ollama / LM Studio / llama.cpp server / Lemonade など）をベストエフォートで推定します。

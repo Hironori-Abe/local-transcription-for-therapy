@@ -2073,6 +2073,7 @@ struct RunTranscriptionRequest {
     device: Option<String>,
     compute_type: Option<String>,
     model: Option<String>,
+    language: Option<String>,
     initial_prompt: Option<String>,
     normalize_audio: Option<bool>,
     highpass_filter: Option<bool>,
@@ -2100,6 +2101,21 @@ fn normalize_noise_reduction_mode(value: Option<&str>) -> &'static str {
     {
         "weak" => "weak",
         _ => "standard",
+    }
+}
+
+/// 文字起こし言語コードを正規化する。
+///
+/// faster-whisper が受け付けるのは ISO 639-1 系の 2〜3 文字コード（例: `ja` / `en` /
+/// `haw` / `yue`）。pyannote の話者分離は言語非依存なので、対応言語の集合は
+/// faster-whisper のトークナイザー側に委ねる（不正値は sidecar が弾く）。ここでは
+/// 形式チェックのみ行い、空・不正時は既定の `ja` にフォールバックする。
+fn normalize_transcription_language(value: Option<&str>) -> String {
+    let v = value.unwrap_or("ja").trim().to_ascii_lowercase();
+    if (2..=3).contains(&v.len()) && v.chars().all(|c| c.is_ascii_lowercase()) {
+        v
+    } else {
+        "ja".to_string()
     }
 }
 
@@ -6306,6 +6322,7 @@ fn run_transcription_blocking(
         vec![selected_compute_type.clone()]
     };
     let initial_prompt = request.initial_prompt.as_deref();
+    let language = normalize_transcription_language(request.language.as_deref());
     let normalize_audio = request.normalize_audio.unwrap_or(false);
     let highpass_filter = request.highpass_filter.unwrap_or(false);
     let noise_reduction = request.noise_reduction.unwrap_or(false);
@@ -6366,6 +6383,7 @@ fn run_transcription_blocking(
         &transcription_device,
         &selected_attempt_compute,
         &requested_model,
+        &language,
         initial_prompt,
         low_memory_mode,
         normalize_audio,
@@ -6418,6 +6436,7 @@ fn run_transcription_blocking(
             &transcription_device,
             &retry_compute_type,
             &requested_model,
+            &language,
             initial_prompt,
             true,
             normalize_audio,
@@ -6735,6 +6754,7 @@ fn execute_transcription(
     device: &str,
     compute_type: &str,
     model: &str,
+    language: &str,
     initial_prompt: Option<&str>,
     low_memory_mode: bool,
     normalize_audio: bool,
@@ -6762,7 +6782,7 @@ fn execute_transcription(
         .arg("--compute-type")
         .arg(compute_type)
         .arg("--language")
-        .arg("ja")
+        .arg(language)
         .arg("--vad-filter")
         .arg("true")
         .arg("--word-timestamps")

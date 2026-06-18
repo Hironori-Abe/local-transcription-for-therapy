@@ -339,6 +339,15 @@
                 </mat-select>
               </mat-form-field>
               <mat-form-field appearance="outline" class="compute-type-field">
+                <mat-label>文字起こしする言語</mat-label>
+                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
+                  [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
+                  <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
+                    {{ option.label }}
+                  </mat-option>
+                </mat-select>
+              </mat-form-field>
+              <mat-form-field appearance="outline" class="compute-type-field">
                 <mat-label>計算方式</mat-label>
                 <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()" [value]="computeType()"
                   (valueChange)="onComputeTypeChange($event)">

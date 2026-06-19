@@ -592,8 +592,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.llmBackendMode() === 'ollama' ? this.ollamaModelInput() : this.lmstudioModelInput()
   );
   readonly lemonadeUiVisible = computed(() =>
-    // Editor 版は AI 校正機能を一切持たないため、Lemonade UI / 自動起動を常に抑止する。
-    // これにより maybeAutoStartLemonade()・ngOnDestroy の stopLemonade・
+    // Editor 版は AI 校正機能を一切持たないため、Lemonade UI / 状態確認を常に抑止する。
+    // これにより refreshLemonadeUiState()・ngOnDestroy の stopLemonade・
     // lemonadeInstallableGpuEntry など全参照箇所で Lemonade 挙動が発火しない。
     !this.editorOnlyBuild && this.llmBackendMode() === 'local_gguf'
   );
@@ -651,6 +651,37 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** コンテキスト長(n_ctx)。0=自動（VRAMで判定 / CUDAサーバーの--ctx-size）。手動値で上書き可。 */
   readonly llmNCtx = signal<number>(0);
   readonly llmMaxBatch = signal<number>(40);
+  /** 選択中のLLM用GPUデバイスのVRAM(MiB)。不明なら null。自動判定の現在値ヒントに使う。 */
+  readonly llmDeviceVramMib = computed<number | null>(() => {
+    const info = this.computeEnvInfo();
+    if (!info || info.devices.length === 0) return null;
+    let idx = this.selectedLlmHipDeviceIndex();
+    if (idx < 0) idx = info.recommendedIndex ?? -1;
+    const dev = info.devices.find(d => d.index === idx) ?? info.devices[0];
+    return dev ? dev.totalVramMb : null;
+  });
+  /** 並列処理数フィールドのヒント。自動(0)選択時のみ、VRAMから解決した実値（Rust choose_llm_parallelism 相当）を表示。手動値は空（非表示）。 */
+  readonly llmParallelHint = computed<string>(() => {
+    if (this.selectedLlmParallel() >= 1) return '';
+    const vram = this.llmDeviceVramMib();
+    // np 自動はCUDA経路のみ適用。AMD(rocm)やVRAM不明時は解決値を出さない。
+    if (this.computeEnvInfo()?.backendType === 'rocm' || vram == null) return '';
+    const np = this.resolveAutoLlmParallel(vram);
+    return `現在: ${np}（VRAM 約${Math.round(vram / 1024)}GB）`;
+  });
+  /** コンテキスト長フィールドのヒント。自動(0)選択時のみ、VRAM/バックエンドから解決した実値を表示。手動値は空（非表示）。 */
+  readonly llmNCtxHint = computed<string>(() => {
+    if (this.llmNCtx() >= 4096) return '';
+    // 外部API(lmstudio/ollama)経路はアプリ側でn_ctxを解決しないため表示しない。
+    if (this.llmBackendMode() !== 'local_gguf') return '';
+    // AMD/Lemonade経路は config.json の ctx_size=16384 固定。
+    if (this.computeEnvInfo()?.backendType === 'rocm') return '現在: 16,384';
+    const vram = this.llmDeviceVramMib();
+    if (vram == null) return '';
+    const np = this.resolveAutoLlmParallel(vram);
+    const ctx = Math.min(Math.max(np * 8192, 16384), 32768);
+    return `現在: ${ctx.toLocaleString('en-US')}（VRAM 約${Math.round(vram / 1024)}GB）`;
+  });
   readonly llmPromptType = signal<LlmPromptType>('gemma4');
   readonly proofreadSystemPrompt = signal<string>('');
   readonly fixedProofreadSystemPrompt = signal<string>('');
@@ -3309,6 +3340,40 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
+    // 既に完了済みのセグメントを除外して送信。校正対象が無ければエンジンを起動せず早期returnする
+    // （対象ゼロで同梱エンジン（llama-server / lemond）を無駄に起動・常駐させないため、起動より前に判定する）。
+    const currentDoneStatus = this.llmSegmentStatus();
+    this.llmProgressOffset = Object.values(currentDoneStatus).filter(v => v === 'done').length;
+    const resolvedSegments = segments
+      ? segments.filter((s) => currentDoneStatus[s.id] !== 'done')
+      : this.segmentRows
+          .filter((seg) => currentDoneStatus[seg.id] !== 'done')
+          .map((segment) => ({
+            id: segment.id,
+            text: this.getEditableText(segment),
+            speaker: this.getAssignedSpeakerKey(segment) || null,
+            speakerLabel: this.getAssignedSpeakerKey(segment) || null,
+            start: segment.start,
+            end: segment.end,
+          }));
+
+    if (resolvedSegments.length === 0) {
+      if (autoMode) {
+        this.llmProofreadStatus.set('全セグメント処理済みです。');
+        return;
+      }
+      this.openConfirmDialog({
+        actionKind: 'llmRerunAll',
+        title: 'AI校正を再実行しますか？',
+        message: 'すべてのセグメントが処理済みです。現在の内容にもう一度校正しても結果が変わるとは限りません。それでも実行しますか？',
+        confirmLabel: '実行',
+        cancelLabel: 'キャンセル',
+        confirmColor: 'primary',
+        cancelColor: null,
+      });
+      return;
+    }
+
     const backend = backendOverride ?? 'llama_cpp';
     let modelPath = this.llmModelPath();
     if (backend === 'llama_cpp' || backend === 'llama_cpp_rocm') {
@@ -3363,39 +3428,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
         return;
       }
-    }
-
-    // 既に完了済みのセグメントを除外して送信
-    const currentDoneStatus = this.llmSegmentStatus();
-    this.llmProgressOffset = Object.values(currentDoneStatus).filter(v => v === 'done').length;
-    const resolvedSegments = segments
-      ? segments.filter((s) => currentDoneStatus[s.id] !== 'done')
-      : this.segmentRows
-          .filter((seg) => currentDoneStatus[seg.id] !== 'done')
-          .map((segment) => ({
-            id: segment.id,
-            text: this.getEditableText(segment),
-            speaker: this.getAssignedSpeakerKey(segment) || null,
-            speakerLabel: this.getAssignedSpeakerKey(segment) || null,
-            start: segment.start,
-            end: segment.end,
-          }));
-
-    if (resolvedSegments.length === 0) {
-      if (autoMode) {
-        this.llmProofreadStatus.set('全セグメント処理済みです。');
-        return;
-      }
-      this.openConfirmDialog({
-        actionKind: 'llmRerunAll',
-        title: 'AI校正を再実行しますか？',
-        message: 'すべてのセグメントが処理済みです。現在の内容にもう一度校正しても結果が変わるとは限りません。それでも実行しますか？',
-        confirmLabel: '実行',
-        cancelLabel: 'キャンセル',
-        confirmColor: 'primary',
-        cancelColor: null,
-      });
-      return;
     }
 
     this.error.set('');
@@ -3827,6 +3859,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.llmBackendMode() === 'local_gguf' ? 'lemonade' : 'openai_compatible';
     const modelPath = '';
 
+    // 校正対象が無ければエンジンを起動せず早期returnする（無駄起動・常駐の防止）。
+    const segments = this.segmentRows.map((seg) => ({
+      id: seg.id,
+      text: this.getEditableText(seg),
+      speaker: this.displaySpeaker(this.getAssignedSpeakerKey(seg)) || null,
+      start: seg.start,
+      end: seg.end,
+    }));
+
+    if (segments.length === 0) {
+      this.overallProofreadError.set('校正対象のセグメントがありません。');
+      this.overallProofreadDialogOpen.set(true);
+      return;
+    }
+
     if (backend === 'lemonade') {
       await this.checkLemonadeStatus();
       if (this.lemonadeStatus() !== 'running') {
@@ -3849,20 +3896,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.overallProofreadDialogOpen.set(true);
         return;
       }
-    }
-
-    const segments = this.segmentRows.map((seg) => ({
-      id: seg.id,
-      text: this.getEditableText(seg),
-      speaker: this.displaySpeaker(this.getAssignedSpeakerKey(seg)) || null,
-      start: seg.start,
-      end: seg.end,
-    }));
-
-    if (segments.length === 0) {
-      this.overallProofreadError.set('校正対象のセグメントがありません。');
-      this.overallProofreadDialogOpen.set(true);
-      return;
     }
 
     this.overallProofreadRunning.set(true);
@@ -4641,7 +4674,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.appRef.tick();
     void this.initDefaultLlmModelPath();
     void this.initProofreadModelTier();
-    void this.maybeAutoStartLemonade();
+    void this.refreshLemonadeUiState();
   }
 
   /**
@@ -4812,6 +4845,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistLlmSettings();
   }
 
+  /** Rust choose_llm_parallelism の np 自動判定を再現。VRAM(MiB)階層: 11000+→4 / 7000+→2 / 他→1。 */
+  private resolveAutoLlmParallel(vramMib: number): number {
+    if (vramMib >= 11000) return 4;
+    if (vramMib >= 7000) return 2;
+    return 1;
+  }
+
   private static readonly _KNOWN_OK_GFX = new Set([
     'gfx1030', 'gfx1100', 'gfx1101', 'gfx1102',
     'gfx1150', 'gfx1151', 'gfx1200', 'gfx1201',
@@ -4845,15 +4885,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return `${device.name}（${gb}GB${igpu}${warn}${rec}）`;
   }
 
-  private async maybeAutoStartLemonade(): Promise<void> {
+  /**
+   * Lemonade のバックエンド導入状況とサーバー状態を確認してUI表示を更新する。
+   * pre-warm（起動直後のエンジン自動起動・モデル即ロード）は廃止し、遅延起動に統一した。
+   * エンジンは実際の校正実行時（runLlmProofread / runOverallProofread の startLemonade）に初めて起動する。
+   * これにより校正していない間は VRAM を保持しない（「自身が起動したモデルは終了後解放」の方針を、
+   * そもそも校正前から保持しない形で徹底する）。
+   */
+  private async refreshLemonadeUiState(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     if (!this.lemonadeUiVisible()) return;
     void this.checkLemonadeGpuBackendInstalled();
     await this.checkLemonadeStatus();
-    if (this.lemonadeStatus() === 'stopped') {
-      // 自動起動の失敗は赤字エラーにせず静かに見送る（フレッシュインストール直後など前提未整備時）
-      void this.startLemonade(true);
-    }
   }
 
   async checkLemonadeGpuBackendInstalled(): Promise<void> {
@@ -4955,7 +4998,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistLlmSettings();
     if (value === 'local_gguf') {
       this.llmPromptType.set('gemma4');
-      void this.maybeAutoStartLemonade();
+      void this.refreshLemonadeUiState();
     }
   }
 
@@ -5167,7 +5210,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onLlmGpuModeChange(value: LlmGpuMode): void {
     this.llmGpuMode.set(value);
     this.persistLlmSettings();
-    void this.maybeAutoStartLemonade();
+    void this.refreshLemonadeUiState();
   }
 
   onLlmPromptTypeChange(value: LlmPromptType): void {

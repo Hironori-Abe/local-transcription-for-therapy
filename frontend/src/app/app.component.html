@@ -339,15 +339,6 @@
                 </mat-select>
               </mat-form-field>
               <mat-form-field appearance="outline" class="compute-type-field">
-                <mat-label>文字起こしする言語</mat-label>
-                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                  [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
-                  <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
-                    {{ option.label }}
-                  </mat-option>
-                </mat-select>
-              </mat-form-field>
-              <mat-form-field appearance="outline" class="compute-type-field">
                 <mat-label>計算方式</mat-label>
                 <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()" [value]="computeType()"
                   (valueChange)="onComputeTypeChange($event)">
@@ -608,6 +599,15 @@
                     {{ selectedGpuAsrWarning() }}
                   </div>
                 </ng-container>
+                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                  <mat-label>対象言語</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                    [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
+                    <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
+                      {{ option.label }}
+                    </mat-option>
+                  </mat-select>
+                </mat-form-field>
                 <ng-template #envLoading>
                   <span class="compute-env-no-dev">演算環境を確認中...</span>
                 </ng-template>
@@ -736,6 +736,7 @@
                     <mat-option [value]="65536">65,536</mat-option>
                     <mat-option [value]="131072">131,072</mat-option>
                   </mat-select>
+                  <mat-hint *ngIf="llmNCtxHint()">{{ llmNCtxHint() }}</mat-hint>
                 </mat-form-field>
                 <button mat-icon-button type="button" class="settings-info-icon"
                   matTooltip="AIが1回の呼び出しで保持できる文脈量の上限（n_ctx / 入力・出力を含むトークン数）。&#10;自動: VRAMで判定（16GB以上→32,768 / それ未満→16,384）。&#10;大きいほど長い会話に対応できますがVRAM使用量が増えます。&#10;内蔵Gemma（RTX/AMD）に有効。変更は次回のAI校正から反映されます。"
@@ -757,6 +758,7 @@
                     <mat-option [value]="20">20</mat-option>
                     <mat-option [value]="24">24</mat-option>
                   </mat-select>
+                  <mat-hint *ngIf="llmParallelHint()">{{ llmParallelHint() }}</mat-hint>
                 </mat-form-field>
                 <button *ngIf="llmBackendMode() === 'local_gguf'" mat-icon-button type="button" class="settings-info-icon"
                   matTooltip="AI校正で同時にAIへ送るバッチ数（継続バッチング）。GPUのアイドル時間を埋めて高速化します。&#10;RTX（CUDA）でのみ有効。自動: VRAMで判定（12GB以上→4 / 8GB以上→2 / それ未満→1）。手動指定は最大24です。&#10;VRAM不足でエラーが出る場合は小さい値に。変更は次回のAI校正から反映されます。"

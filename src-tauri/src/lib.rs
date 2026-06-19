@@ -1012,9 +1012,13 @@ fn try_start_llama_server_cuda(
     let ctx_s = ctx_size.to_string();
     let np_s = n_parallel.to_string();
     let port_s = port.to_string();
-    // FlashAttention は MTP ドラフト併用時も含めて on にする。
-    // 12B QAT + MTP + --flash-attn on の実機通過を確認済みのため、現行ビルドでは on を採用する。
-    let flash_attn = "on";
+    // FlashAttention の選択:
+    // MTP ドラフト併用時は CUDA FlashAttention カーネル (ggml-cuda/fattn.cu:110) が
+    // 一部 GPU/ビルドで致命的に落ち、サーバがポートを開く前にクラッシュする
+    // （RTX 4060 Laptop + 同梱 llama.cpp build 9571 で確認。--flash-attn auto でも同様）。
+    // そのため MTP 配線時は off にする（MTP の投機的デコードは維持）。
+    // MTP 非併用時は従来どおり on（KV キャッシュ/VRAM 節約のため）。
+    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
     cmd.arg("-m")
         .arg(model_path)
         .arg("--port")
@@ -1067,7 +1071,8 @@ fn try_start_llama_server_cuda(
 }
 
 /// 子プロセスを Job Object に紐付け、親プロセス終了時に自動 kill させる（Windows のみ）。
-/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も llama-server.exe を確実に終了させる。
+/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、同梱エンジン
+/// （CUDA llama-server.exe / AMD lemond と配下のバックエンド）を確実に終了させ VRAM を解放する。
 #[cfg(target_os = "windows")]
 fn assign_to_kill_on_close_job(child: &Child) {
     use std::os::windows::io::AsRawHandle;
@@ -1616,6 +1621,12 @@ fn try_start_lemonade_bin(bin_path: &str, cache_dir: Option<&str>, _hip_device_i
     }
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     cmd.spawn()
+        .map(|child| {
+            // CUDA llama-server と同様、強制終了・クラッシュ時も lemond（と配下のバックエンド）を
+            // 確実に終了させ VRAM を解放するため kill-on-close Job に紐付ける。
+            assign_to_kill_on_close_job(&child);
+            child
+        })
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))
 }
 

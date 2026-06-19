@@ -179,6 +179,22 @@ call %PYTHON_BIN% -c "import python_sidecar.transcribe_cli as t; t.install_pyav_
 )
 echo.
 
+echo [3a/6] Bundled LGPL ffmpeg (audio decoding)...
+if exist "src-tauri\resources\ffmpeg\ffmpeg.exe" (
+  echo [OK] ffmpeg already present: src-tauri\resources\ffmpeg\ffmpeg.exe
+) else (
+  echo [INFO] Downloading LGPL ffmpeg, about 170MB...
+  call %PYTHON_BIN% scripts\setup_ffmpeg_lgpl.py
+  if errorlevel 1 (
+    echo [WARN] ffmpeg download failed. Transcription cannot run without it.
+    echo        Retry manually: %PYTHON_BIN% scripts\setup_ffmpeg_lgpl.py
+    set "HAS_WARN=1"
+  ) else (
+    echo [OK] ffmpeg placed: src-tauri\resources\ffmpeg\ffmpeg.exe
+  )
+)
+echo.
+
 echo [3b/6] Downloading Gemma4 E4B GGUF model (for LLM proofreading)...
 set "GEMMA_DIR=python_sidecar\models\llm\gemma-4-e4b-it"
 set "GEMMA_FILE=%GEMMA_DIR%\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"

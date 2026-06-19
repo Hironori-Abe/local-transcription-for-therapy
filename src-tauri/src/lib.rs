@@ -889,6 +889,25 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     None
 }
 
+/// lemond が `lemonade backends install llamacpp:vulkan` で取得した Vulkan ビルドの
+/// llama-server バイナリを探す（`~/.cache/{app-id}/lemonade/bin/llamacpp/vulkan/llama-server`）。
+/// AMD で 12B + MTP を直起動するために使う。rocm-stable ビルドは古くドラフトの
+/// `gemma4-assistant` を認識できないため、MTP には新しい Vulkan ビルドを用いる。
+fn find_lemonade_vulkan_llama_server(app: &AppHandle) -> Option<String> {
+    let cache = get_lemonade_app_cache_dir(app)?;
+    let exe = std::env::consts::EXE_SUFFIX;
+    let path = cache
+        .join("bin")
+        .join("llamacpp")
+        .join("vulkan")
+        .join(format!("llama-server{exe}"));
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 fn llama_server_supports_mtp(bin_path: &str) -> bool {
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
@@ -1070,6 +1089,109 @@ fn try_start_llama_server_cuda(
     Ok((child, oom_flag))
 }
 
+/// AMD GPU 向けに、lemond がダウンロードした Vulkan ビルドの llama-server を直接起動する。
+/// NVIDIA 直起動（try_start_llama_server_cuda）の AMD 版。lemond のモデル管理を介さず、
+/// ローカル GGUF（本体 + MTP ドラフト）を直接ロードして 12B + MTP（投機的デコード）を有効にする。
+///
+/// rocm-stable の llama-server（古いビルド）はドラフトのアーキテクチャ `gemma4-assistant` を
+/// 認識できないため、MTP には Lemonade が別途取得する新しい Vulkan ビルド（b9585+）を使う。
+/// VRAM が限られる AMD ノート GPU（8GB 等）でも収まるよう `-ngl` は指定せず auto-fit に任せる
+/// （明示すると auto-fit が無効化され、本体 + ドラフトで OOM する）。
+fn try_start_llama_server_vulkan(
+    bin_path: &str,
+    model_path: &str,
+    mtp_model_path: Option<&str>,
+    port: u16,
+    ctx_size: u32,
+    vk_device_index: Option<i32>,
+) -> Result<(Child, Arc<AtomicBool>), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(bin_path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o100 == 0 {
+                let mut perms = meta.permissions();
+                perms.set_mode(mode | 0o755);
+                let _ = std::fs::set_permissions(bin_path, perms);
+            }
+        }
+    }
+    let mut cmd = Command::new(bin_path);
+    apply_windows_no_window(&mut cmd);
+    // 同梱共有ライブラリ（libggml-*.so / libllama.so 等）をバイナリと同じディレクトリから
+    // 解決できるよう、bin ディレクトリを PATH と LD_LIBRARY_PATH の先頭に追加する。
+    if let Some(bin_dir) = PathBuf::from(bin_path).parent() {
+        if bin_dir.exists() {
+            #[cfg(target_os = "windows")]
+            let sep = ";";
+            #[cfg(not(target_os = "windows"))]
+            let sep = ":";
+            let current_path = env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}{sep}{current_path}", bin_dir.display()));
+            #[cfg(not(target_os = "windows"))]
+            {
+                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+                cmd.env(
+                    "LD_LIBRARY_PATH",
+                    format!("{}{sep}{current_ld}", bin_dir.display()),
+                );
+            }
+        }
+    }
+    // Vulkan デバイス選択。指定（>=0）があればそのデバイスのみ見せる（iGPU 誤選択を避け dGPU を使う）。
+    // 未指定（None/-1）は llama.cpp 既定（Vulkan0）。
+    if let Some(idx) = vk_device_index.filter(|&i| i >= 0) {
+        cmd.env("GGML_VK_VISIBLE_DEVICES", idx.to_string());
+    }
+    let ctx_s = ctx_size.to_string();
+    let port_s = port.to_string();
+    // MTP ドラフト併用時は FlashAttention off（CUDA 経路と同方針。ドラフト併用時の安定性を優先）。
+    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    cmd.arg("-m")
+        .arg(model_path)
+        .arg("--port")
+        .arg(&port_s)
+        // -ngl は指定しない（auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置）
+        .arg("--ctx-size")
+        .arg(&ctx_s)
+        .arg("--flash-attn")
+        .arg(flash_attn)
+        .arg("--host")
+        .arg("127.0.0.1");
+    if let Some(mtp_path) = mtp_model_path {
+        // ドラフトの GPU レイヤー数（--spec-draft-ngl）は指定せず auto に任せる
+        // （8GB クラスでも本体 auto-fit と両立させ OOM を避けるため）。
+        cmd.arg("--spec-type")
+            .arg("draft-mtp")
+            .arg("--spec-draft-model")
+            .arg(mtp_path)
+            .arg("--spec-draft-n-max")
+            .arg("3");
+    }
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map(|child| {
+            assign_to_kill_on_close_job(&child);
+            child
+        })
+        .map_err(|e| format!("AI校正エンジン (Vulkan) の起動に失敗しました: {e}"))?;
+    let oom_flag = Arc::new(AtomicBool::new(false));
+    if let Some(stderr) = child.stderr.take() {
+        let flag = Arc::clone(&oom_flag);
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if text_indicates_vram_oom(&line) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+    Ok((child, oom_flag))
+}
+
 /// 子プロセスを Job Object に紐付け、親プロセス終了時に自動 kill させる（Windows のみ）。
 /// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、同梱エンジン
 /// （CUDA llama-server.exe / AMD lemond と配下のバックエンド）を確実に終了させ VRAM を解放する。
@@ -1184,6 +1306,11 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
 /// QAT 版（UD-Q4_K_XL）は user_models.json へのカスタム登録で提供する。
 const LEMONADE_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
 const LEMONADE_DEFAULT_MODEL_CHECKPOINT: &str = "unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL";
+// AMD GPU で 12B + MTP を Vulkan llama-server 直起動する際の総コンテキスト長。
+// 8GB クラスの AMD dGPU（例: RX 7600M XT, 8176MiB）でも 12B(Q4) + MTP ドラフトが
+// auto-fit で収まる安全値（実測で 8192 は VRAM 約8.0GB/8.5GB に収まり MTP も有効）。
+// 校正は話者ごと最大40セグメントのバッチで、短い発話なら 8192 トークンに十分収まる。
+const AMD_12B_CTX_SIZE: u32 = 8192;
 // 既定（標準）モデル: Gemma 4 E4B QAT。従来どおりのデフォルト経路。
 const GEMMA_LLM_MODEL_DIR: &str = "gemma-4-e4b-it";
 const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
@@ -1286,11 +1413,10 @@ fn proofread_model_tier_marker_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// ユーザーが選択した校正AIモデル階層を読む。既定は E4b。
-/// AMD 版は 12B 非対応（MTP 未配線）のため、マーカー内容に関わらず常に E4b。
+/// NVIDIA は同梱 llama-server（CUDA）直起動、AMD は Vulkan llama-server 直起動で 12B+MTP を
+/// 動かすため、ビルド識別子による E4b 丸めは行わない（実際に 12B を使えるかは
+/// resolve_effective_proofread_tier / amd_vulkan_12b_launch が実行時に判定する）。
 fn read_proofread_model_tier(app: &AppHandle) -> GemmaTier {
-    if app.config().identifier.contains("amd") {
-        return GemmaTier::E4b;
-    }
     proofread_model_tier_marker_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| GemmaTier::from_marker(&s))
@@ -1344,8 +1470,30 @@ fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
     }
 }
 
+/// AMD GPU（NVIDIA 直起動が使えない環境）で 12B + MTP を Vulkan llama-server 直起動で
+/// 動かせるか判定し、起動に必要なパラメータ (vulkan_bin, 本体GGUF, MTPドラフト, ctx) を返す。
+/// 条件を満たさなければ None（E4B や 12B 未導入は従来どおり lemond 経路へ）。
+///
+/// NVIDIA 直起動と同じく、lemond のモデル管理を介さずローカル GGUF を直接ロードする。
+/// これにより rocm-stable では未対応のドラフト（`gemma4-assistant`）も、新しい Vulkan
+/// ビルドで MTP（投機的デコード）として有効化できる。
+fn amd_vulkan_12b_launch(app: &AppHandle) -> Option<(String, String, Option<String>, u32)> {
+    // 実効階層が 12B のときだけ対象（E4B は従来どおり lemond で動かす）。
+    if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
+        return None;
+    }
+    let vk_bin = find_lemonade_vulkan_llama_server(app)?;
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::B12)?;
+    // MTP ドラフトは任意。新しい Vulkan ビルドのみがドラフトの arch を解釈できるが、
+    // ビルド世代の検出はコスト高なので、ドラフトがあれば渡し、ロードに失敗したら
+    // OOM 検出と同様にサーバ起動失敗として扱う（古いビルドでは MTP 無しで使う運用は別途）。
+    let mtp_path = resolve_gemma_mtp_path_for_tier(app, GemmaTier::B12);
+    Some((vk_bin, main_path, mtp_path, AMD_12B_CTX_SIZE))
+}
+
 /// アプリ固有キャッシュの user_models.json に既定の E4B QAT モデルを登録する。
 /// 既に同名エントリがある場合は何もしない（ユーザーの手動編集を上書きしない）。
+/// 12B（高精度）は lemond ではなく Vulkan llama-server 直起動で動かすため、ここには登録しない。
 fn ensure_lemonade_default_model_registered(cache_dir: &Path) {
     let path = cache_dir.join("user_models.json");
     let mut models: Value = if path.exists() {
@@ -1820,6 +1968,43 @@ async fn start_lemonade_server(
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
+    } else if let Some((vk_bin, main_path, mtp_path, ctx_size)) = amd_vulkan_12b_launch(&app) {
+        // AMD GPU 直起動: 高精度(12B) + MTP を Vulkan llama-server で動かす（lemond 非経由）。
+        // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。
+        // VRAM 8GB クラスでは単一スロット運用（並列なし）。
+        tauri::async_runtime::spawn_blocking(move || {
+            mode_arc.store(1, Ordering::Relaxed);
+            parallel_arc.store(1, Ordering::Relaxed);
+            let (child, oom_flag) = try_start_llama_server_vulkan(
+                &vk_bin,
+                &main_path,
+                mtp_path.as_deref(),
+                resolved_port,
+                ctx_size,
+                None, // Vulkan デバイスは既定（dGPU）。将来 device 選択を配線する余地あり
+            )?;
+            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
+            // 12B は大きくロードに時間がかかるため最大 120 秒待つ
+            for _ in 0..240 {
+                thread::sleep(Duration::from_millis(500));
+                if lemonade_app_port_open(resolved_port) {
+                    return Ok("started".to_string());
+                }
+                if oom_flag.load(Ordering::Relaxed) {
+                    if let Ok(mut g) = child_arc.lock() {
+                        if let Some(mut c) = g.take() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
+                    }
+                    mode_arc.store(0, Ordering::Relaxed);
+                    return Err("AI校正エンジン(高精度12B)の起動時にGPUメモリ(VRAM)が不足しました。設定で校正AIモデルを標準(E4B)に戻してください。".to_string());
+                }
+            }
+            Err("AI校正エンジン (12B/Vulkan) の起動タイムアウト（120秒）".to_string())
+        })
+        .await
+        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
         let bin_path = find_lemonade_bundled_bin(&app).ok_or_else(|| {
             "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
@@ -1985,6 +2170,44 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
                 }
             }
             Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
+        })
+        .await
+        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
+    } else if let Some((vk_bin, main_path, mtp_path, ctx_size)) = amd_vulkan_12b_launch(&app) {
+        // AMD GPU 直起動: 高精度(12B) + MTP を Vulkan llama-server で動かす（lemond 非経由）。
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = app_clone.emit(
+                "lemonade-install-progress",
+                serde_json::json!({"stage": "starting", "message": "AI校正エンジン(高精度12B)を起動中..."}),
+            );
+            mode_arc.store(1, Ordering::Relaxed);
+            parallel_arc.store(1, Ordering::Relaxed);
+            let (child, oom_flag) = try_start_llama_server_vulkan(
+                &vk_bin,
+                &main_path,
+                mtp_path.as_deref(),
+                resolved_port,
+                ctx_size,
+                None,
+            )?;
+            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
+            for _ in 0..240 {
+                thread::sleep(Duration::from_millis(500));
+                if lemonade_app_port_open(resolved_port) {
+                    return Ok("installed_and_started".to_string());
+                }
+                if oom_flag.load(Ordering::Relaxed) {
+                    if let Ok(mut g) = child_arc.lock() {
+                        if let Some(mut c) = g.take() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
+                    }
+                    mode_arc.store(0, Ordering::Relaxed);
+                    return Err("AI校正エンジン(高精度12B)の起動時にGPUメモリ(VRAM)が不足しました。設定で校正AIモデルを標準(E4B)に戻してください。".to_string());
+                }
+            }
+            Err("AI校正エンジン (12B/Vulkan) の起動タイムアウト（120秒）".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -4456,14 +4679,10 @@ fn get_proofread_model_tier(app: AppHandle) -> String {
     read_proofread_model_tier(&app).as_marker().to_string()
 }
 
-/// 校正AIモデルの選択を保存する。AMD 版（12B 非対応）では強制的に "e4b" に丸める。
+/// 校正AIモデルの選択を保存する（"e4b" / "12b"）。NVIDIA(CUDA)・AMD(Vulkan) いずれも 12B 可。
 #[tauri::command]
 fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> {
-    let resolved = if app.config().identifier.contains("amd") {
-        GemmaTier::E4b
-    } else {
-        GemmaTier::from_marker(&tier)
-    };
+    let resolved = GemmaTier::from_marker(&tier);
     let path = proofread_model_tier_marker_path(&app)
         .ok_or_else(|| "設定の保存先を解決できませんでした。".to_string())?;
     if let Some(parent) = path.parent() {
@@ -8516,11 +8735,10 @@ fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
     run_download_streaming(app, &mut cmd, "gemma_gguf").map(|_| ())
 }
 
-/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする。NVIDIA/CUDA 版のみ。
+/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする（large-v3 と同じ後付け方式）。
+/// NVIDIA は CUDA 同梱 llama-server、AMD は Vulkan llama-server 直起動で 12B+MTP を使うため、
+/// 本体 GGUF と MTP ドラフトの両方を取得する（--skip-mtp は付けない）。
 fn download_gemma_12b_blocking(app: &AppHandle) -> Result<(), String> {
-    if app.config().identifier.contains("amd") {
-        return Err("この構成（AMD版）では12Bモデルは利用できません。".to_string());
-    }
     let script_path = resolve_download_gemma_gguf_script_path(app)
         .map_err(|e| format!("Gemmaダウンロードスクリプトが見つかりません: {e}"))?;
     let target_dir = get_gemma_tier_target_dir(app, GemmaTier::B12);

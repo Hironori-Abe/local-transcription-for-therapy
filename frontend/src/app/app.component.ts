@@ -224,6 +224,10 @@ interface LemonadeBackendEntry {
 }
 
 type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
+// 「AI校正バックエンド」セレクタの UI 上の選択肢。内蔵モデルは E4B / 12B の
+// 2階層を別項目として見せるが、内部的にはどちらも backendMode='local_gguf' で、
+// 階層は proofreadModelTier（'e4b' / '12b'）で表す。'local_gguf_12b' は CUDA 版のみ。
+type LlmBackendSelection = LlmBackendMode | 'local_gguf_12b';
 type LlmGpuMode = 'gpu' | 'cpu';
 type LlmPromptType = 'gemma4' | 'original';
 
@@ -630,6 +634,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     if (this.llmBackendMode() === 'ollama') {
       return '「localhost:11434」に接続します';
+    }
+    // 内蔵モデル（local_gguf）。12B（高精度）を選んでいる場合は階層を案内する。
+    if (this.proofreadModelTier() === '12b') {
+      if (this.gemma12bInstalled() === false) {
+        return '高精度モデル（Gemma4 12B）は約7GBの追加ダウンロードが必要です';
+      }
+      return '高精度モデル（Gemma4 12B）選択中。次回のAI校正から反映されます';
     }
     return '内蔵されたモデル（Gemma4 E4B）を使用します';
   });
@@ -1041,14 +1052,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return `${dlMb} MB`;
   });
-  /** 校正AIモデル階層セレクタの表示条件: CUDA版・Editor版以外・内蔵バックエンド時のみ。 */
+  /**
+   * 12B（高精度）関連 UI（説明アイコン・ダウンロード進捗）の表示条件:
+   * CUDA版・Editor版以外・内蔵バックエンド時のみ。階層選択自体は
+   * 「AI校正バックエンド」セレクタ（llmBackendSelection）へ統合済み。
+   */
   readonly proofreadModelTierVisible = computed<boolean>(() =>
-    !this.editorOnlyBuild && this.buildVariant() === 'cuda' && this.llmBackendMode() === 'local_gguf'
+    !this.editorOnlyBuild && this.llmBackendMode() === 'local_gguf'
   );
-  readonly proofreadModelTierOptions: ReadonlyArray<{ value: 'e4b' | '12b'; label: string }> = [
-    { value: 'e4b', label: '標準（Gemma 4 E4B・高速・既定）' },
-    { value: '12b', label: '高精度（Gemma 4 12B QAT+MTP・要ダウンロード）' },
-  ];
   readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => [
     { value: 'turbo', label: 'turbo（高速・既定）' },
     { value: 'large-v3', label: 'large-v3（高精度）' },
@@ -1175,16 +1186,30 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   ];
   // 外部 LLM アプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
   // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
-  readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendMode; label: string }>>(() => {
-    const options: Array<{ value: LlmBackendMode; label: string }> = [
-      { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B）' },
+  readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendSelection; label: string }>>(() => {
+    const options: Array<{ value: LlmBackendSelection; label: string }> = [
+      { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' },
     ];
+    // 高精度（12B）は CUDA（同梱 llama-server 直起動）/ AMD（Vulkan llama-server 直起動）の
+    // 両方で提供する。Editor 版はこのセクション自体が非表示。
+    if (!this.editorOnlyBuild) {
+      options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
+    }
     if (this.externalLlmEnabled()) {
       options.push({ value: 'lmstudio', label: 'LM Studio' });
       options.push({ value: 'ollama', label: 'Ollama' });
     }
     return options;
   });
+  /**
+   * 「AI校正バックエンド」セレクタの現在値（UI 表示用）。
+   * 内蔵モデルかつ CUDA 版で 12B 階層なら 'local_gguf_12b' を返し、それ以外は backendMode そのもの。
+   */
+  readonly llmBackendSelection = computed<LlmBackendSelection>(() =>
+    this.llmBackendMode() === 'local_gguf' && this.proofreadModelTier() === '12b'
+      ? 'local_gguf_12b'
+      : this.llmBackendMode()
+  );
   readonly locationAreaOptions: ReadonlyArray<{ value: LocationAreaCode; label: string }> = [
     { value: 'hokkaidoTohoku', label: '北海道・東北' },
     { value: 'kanto', label: '関東' },
@@ -4981,6 +5006,30 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const savedMode = saved as LlmBackendMode;
     const usesExternal = savedMode === 'lmstudio' || savedMode === 'ollama';
     this.llmBackendMode.set(usesExternal && !this.externalLlmEnabled() ? 'local_gguf' : savedMode);
+  }
+
+  /**
+   * 「AI校正バックエンド」セレクタの変更ハンドラ。内蔵モデルの E4B / 12B 階層と
+   * 外部API（lmstudio / ollama）の切替を 1 つのセレクタで扱う。
+   * 内蔵モデルは backendMode='local_gguf' に統一し、階層は proofreadModelTier で表す。
+   */
+  async onLlmBackendSelectionChange(value: LlmBackendSelection): Promise<void> {
+    if (value === 'local_gguf_12b') {
+      this.onLlmBackendModeChange('local_gguf');
+      // 12B 選択。未導入なら onProofreadModelTierChange 内でダウンロードを開始する。
+      await this.onProofreadModelTierChange('12b');
+      return;
+    }
+    if (value === 'local_gguf') {
+      this.onLlmBackendModeChange('local_gguf');
+      // 内蔵モデルを E4B（標準）へ戻す。
+      if (this.proofreadModelTier() === '12b') {
+        await this.onProofreadModelTierChange('e4b');
+      }
+      return;
+    }
+    // 外部API（lmstudio / ollama）。階層は内蔵モデル専用なので変更しない。
+    this.onLlmBackendModeChange(value);
   }
 
   onLlmBackendModeChange(value: LlmBackendMode): void {

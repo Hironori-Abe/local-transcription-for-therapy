@@ -634,33 +634,17 @@
               <div class="actions-row settings-llm-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
                   <mat-label>AI校正バックエンド</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning()" [value]="llmBackendMode()"
-                    (valueChange)="onLlmBackendModeChange($event)">
+                  <mat-select [disabled]="llmProofreadRunning() || gemma12bDownloading()"
+                    [value]="llmBackendSelection()" (valueChange)="onLlmBackendSelectionChange($event)">
                     <mat-option *ngFor="let option of llmBackendModeOptions()" [value]="option.value">
                       {{ option.label }}
                     </mat-option>
                   </mat-select>
                   <mat-hint>{{ llmBackendModeHint() }}</mat-hint>
                 </mat-form-field>
-                <mat-form-field *ngIf="proofreadModelTierVisible()"
-                  appearance="outline" class="settings-llm-field settings-field-wide">
-                  <mat-label>校正AIモデル</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning() || gemma12bDownloading()"
-                    [value]="proofreadModelTier()" (valueChange)="onProofreadModelTierChange($event)">
-                    <mat-option *ngFor="let option of proofreadModelTierOptions" [value]="option.value">
-                      {{ option.label }}
-                    </mat-option>
-                  </mat-select>
-                  <mat-hint *ngIf="proofreadModelTier() === '12b' && gemma12bInstalled() === false && !gemma12bDownloading()">
-                    12Bモデルはダウンロードが必要です（約7GB）
-                  </mat-hint>
-                  <mat-hint *ngIf="proofreadModelTier() === '12b' && gemma12bInstalled() === true">
-                    高精度モデル選択中。次回のAI校正から反映されます
-                  </mat-hint>
-                </mat-form-field>
                 <button *ngIf="proofreadModelTierVisible()" mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;標準（Gemma 4 E4B）: 高速・既定。&#10;高精度（Gemma 4 12B QAT+MTP）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります（RTX/CUDA版のみ）。&#10;変更は次回のAI校正から反映されます。"
-                  matTooltipClass="settings-info-tooltip" aria-label="校正AIモデルの説明">
+                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります（NVIDIA/AMD GPU 対応・MTP高速化あり）。&#10;変更は次回のAI校正から反映されます。"
+                  matTooltipClass="settings-info-tooltip" aria-label="AI校正バックエンドの説明">
                   <mat-icon class="material-symbols-outlined">info</mat-icon>
                 </button>
                 <div *ngIf="proofreadModelTierVisible() && gemma12bDownloading()" class="whisper-dl-progress">

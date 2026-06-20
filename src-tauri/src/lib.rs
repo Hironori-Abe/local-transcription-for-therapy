@@ -908,6 +908,45 @@ fn find_lemonade_vulkan_llama_server(app: &AppHandle) -> Option<String> {
     }
 }
 
+/// lemond がダウンロードした ROCm ビルドの llama-server を返す（Vulkan 版の対）。
+/// AMD の 12B + MTP 高速経路で使う。
+fn find_lemonade_rocm_llama_server(app: &AppHandle) -> Option<String> {
+    let cache = get_lemonade_app_cache_dir(app)?;
+    let exe = std::env::consts::EXE_SUFFIX;
+    let path = cache
+        .join("bin")
+        .join("llamacpp")
+        .join("rocm-stable")
+        .join(format!("llama-server{exe}"));
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// ROCm ビルドがドラフト arch `gemma4-assistant`（MTP）を解釈できるかを、同梱
+/// `libllama.so.0.0.<build>` のビルド番号で判定する。b9247 は非対応・b9585 以降が対応
+/// （実機確認）。既知良好値の閾値 9585 を使う。旧ビルドなら ROCm 経路を選ばず Vulkan へ。
+fn rocm_build_supports_gemma4_assistant(bin_path: &str) -> bool {
+    let Some(dir) = PathBuf::from(bin_path).parent().map(|p| p.to_path_buf()) else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // 例: libllama.so.0.0.9630
+        if let Some(rest) = name.strip_prefix("libllama.so.0.0.") {
+            if let Ok(build) = rest.parse::<u32>() {
+                return build >= 9585;
+            }
+        }
+    }
+    false
+}
+
 fn llama_server_supports_mtp(bin_path: &str) -> bool {
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
@@ -935,6 +974,25 @@ fn text_indicates_vram_oom(text: &str) -> bool {
         "cudamalloc",
         "cudaerrormemoryallocation",
         "ggml_backend_cuda_buffer_type_alloc",
+    ];
+    MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// ROCm 直起動の失敗を示すかを判定する。VRAM 不足に加え、対象 GPU arch の rocBLAS
+/// Tensile カーネル欠如・HIP/HSA 初期化失敗なども拾う。これを検出したら ROCm 起動を
+/// 失敗扱いにして Vulkan へフォールバックする。
+fn text_indicates_rocm_failure(text: &str) -> bool {
+    if text_indicates_vram_oom(text) {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "rocblas error",
+        "tensilelibrary",
+        "no such file or directory for gpu arch",
+        "hip error",
+        "hsa_status_error",
+        "no rocm-capable device",
     ];
     MARKERS.iter().any(|m| lower.contains(m))
 }
@@ -1192,6 +1250,113 @@ fn try_start_llama_server_vulkan(
     Ok((child, oom_flag))
 }
 
+/// AMD GPU 向けに、lemond がダウンロードした ROCm ビルドの llama-server を直接起動する。
+/// Vulkan 版（try_start_llama_server_vulkan）の ROCm 版。新しい rocm ビルド（b9585+）は
+/// ドラフト arch `gemma4-assistant` を解釈でき、MTP（投機的デコード）を有効化できる。
+///
+/// rocBLAS は `LD_LIBRARY_PATH` に therock を載せず、システム ROCm（/opt/rocm。対象 GPU arch の
+/// Tensile を含む）から解決する。lemonade の therock は iGPU 専用 arch のことがあり、dGPU では
+/// 推論時に rocBLAS が落ちるため。`-ngl` は指定せず `--fit on`（auto-fit）に任せ、warmup は
+/// 無効化しない（起動時 forward パスで arch 不整合を表面化させ、呼び出し側が Vulkan へ退避できる）。
+fn try_start_llama_server_rocm(
+    bin_path: &str,
+    model_path: &str,
+    mtp_model_path: Option<&str>,
+    port: u16,
+    ctx_size: u32,
+    hip_device_index: Option<i32>,
+) -> Result<(Child, Arc<AtomicBool>), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(bin_path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o100 == 0 {
+                let mut perms = meta.permissions();
+                perms.set_mode(mode | 0o755);
+                let _ = std::fs::set_permissions(bin_path, perms);
+            }
+        }
+    }
+    let mut cmd = Command::new(bin_path);
+    apply_windows_no_window(&mut cmd);
+    // 同梱共有ライブラリ（libggml-hip.so / libllama.so 等）をバイナリと同じディレクトリから
+    // 解決できるよう bin ディレクトリを PATH / LD_LIBRARY_PATH 先頭に追加する。
+    // therock は載せない（その rocBLAS は対象 GPU arch を欠くことがある）。libamdhip64 /
+    // librocblas と対象 arch の Tensile はシステム ROCm（ldconfig / /opt/rocm）から解決する。
+    if let Some(bin_dir) = PathBuf::from(bin_path).parent() {
+        if bin_dir.exists() {
+            #[cfg(target_os = "windows")]
+            let sep = ";";
+            #[cfg(not(target_os = "windows"))]
+            let sep = ":";
+            let current_path = env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}{sep}{current_path}", bin_dir.display()));
+            #[cfg(not(target_os = "windows"))]
+            {
+                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+                cmd.env(
+                    "LD_LIBRARY_PATH",
+                    format!("{}{sep}{current_ld}", bin_dir.display()),
+                );
+            }
+        }
+    }
+    // HIP デバイス選択。指定（>=0）があればその dGPU のみ見せる（iGPU 誤選択・VRAM不足を避ける）。
+    if let Some(idx) = hip_device_index.filter(|&i| i >= 0) {
+        cmd.env("HIP_VISIBLE_DEVICES", idx.to_string());
+        cmd.env("ROCR_VISIBLE_DEVICES", idx.to_string());
+    }
+    let ctx_s = ctx_size.to_string();
+    let port_s = port.to_string();
+    // MTP 併用時は FlashAttention off（CUDA / Vulkan 経路と同方針）。
+    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    cmd.arg("-m")
+        .arg(model_path)
+        .arg("--port")
+        .arg(&port_s)
+        // -ngl は指定せず --fit on（auto-fit）に任せる（8GB クラスで本体+ドラフトを収める）。
+        .arg("--fit")
+        .arg("on")
+        .arg("--ctx-size")
+        .arg(&ctx_s)
+        .arg("--flash-attn")
+        .arg(flash_attn)
+        .arg("--host")
+        .arg("127.0.0.1");
+    if let Some(mtp_path) = mtp_model_path {
+        // ドラフトの GPU レイヤー数（--spec-draft-ngl）は指定せず auto-fit に任せる。
+        cmd.arg("--spec-type")
+            .arg("draft-mtp")
+            .arg("--spec-draft-model")
+            .arg(mtp_path)
+            .arg("--spec-draft-n-max")
+            .arg("3");
+    }
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map(|child| {
+            assign_to_kill_on_close_job(&child);
+            child
+        })
+        .map_err(|e| format!("AI校正エンジン (ROCm) の起動に失敗しました: {e}"))?;
+    // stderr から OOM・rocBLAS/Tensile arch 失敗を検出するフラグ。立ったら Vulkan へ退避する。
+    let fail_flag = Arc::new(AtomicBool::new(false));
+    if let Some(stderr) = child.stderr.take() {
+        let flag = Arc::clone(&fail_flag);
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if text_indicates_rocm_failure(&line) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+    Ok((child, fail_flag))
+}
+
 /// 子プロセスを Job Object に紐付け、親プロセス終了時に自動 kill させる（Windows のみ）。
 /// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、同梱エンジン
 /// （CUDA llama-server.exe / AMD lemond と配下のバックエンド）を確実に終了させ VRAM を解放する。
@@ -1288,6 +1453,10 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
     // Lemonade 10.7.0 で LEMONADE_CTX_SIZE 環境変数は廃止されたため、config.json の
     // ctx_size キーが唯一の設定手段（旧版でも config.json の ctx_size を読むため後方互換）。
     config["ctx_size"] = serde_json::json!(16384);
+    // プライバシー: lemond の LAN ディスカバリ・ビーコン（RFC1918 ブロードキャスト）を止める。
+    // オフライン要件上、ネットワークへ自身の存在を広報しない。Lemonade 10.8.0 で追加された
+    // Cloud offload は接続先プロバイダを設定しない限り無効のため、ここでは何も登録しない。
+    config["no_broadcast"] = serde_json::json!(true);
     // システム llama-server (Debian b8681) は ROCm/gfx1150 でクラッシュするため
     // prefer_system=false にしてバンドル版 ROCm バイナリを優先する
     if !config["llamacpp"].is_object() {
@@ -1489,6 +1658,237 @@ fn amd_vulkan_12b_launch(app: &AppHandle) -> Option<(String, String, Option<Stri
     // OOM 検出と同様にサーバ起動失敗として扱う（古いビルドでは MTP 無しで使う運用は別途）。
     let mtp_path = resolve_gemma_mtp_path_for_tier(app, GemmaTier::B12);
     Some((vk_bin, main_path, mtp_path, AMD_12B_CTX_SIZE))
+}
+
+/// ROCm 直起動パラメータ: (rocm_bin, 本体GGUF, MTPドラフト, ctx, hip_index)。
+type RocmLaunch = (String, String, Option<String>, u32, i32);
+/// Vulkan 直起動パラメータ: (vulkan_bin, 本体GGUF, MTPドラフト, ctx)。
+type VulkanLaunch = (String, String, Option<String>, u32);
+
+/// rocminfo（gfx 名）と rocm-smi（VRAM）から AMD GPU を列挙し、VRAM 降順（dGPU 先頭）で返す。
+/// 戻り値: (hip_index, gfx, vram_mib)。取得不能時は空。
+fn amd_gpu_priority_list() -> Vec<(i32, String, u64)> {
+    // rocminfo: GPU エージェントの gfx 名を列挙順（= HIP デバイス順）に集める。
+    let mut info_cmd = Command::new("rocminfo");
+    apply_windows_no_window(&mut info_cmd);
+    let gfx_list: Vec<String> = match info_cmd.output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter_map(|l| {
+                // 例: "  Name:                    gfx1102"。ISA 行（amdgcn-...）は除外。
+                let v = l.trim().strip_prefix("Name:")?.trim();
+                if v.starts_with("gfx")
+                    && v.len() <= 8
+                    && v[3..].chars().all(|c| c.is_ascii_alphanumeric())
+                    && !v[3..].is_empty()
+                {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => vec![],
+    };
+    // rocm-smi: GPU[N] ごとの VRAM Total Memory (B)。
+    let mut smi_cmd = Command::new("rocm-smi");
+    apply_windows_no_window(&mut smi_cmd);
+    let mut vram_by_index: std::collections::BTreeMap<i32, u64> = std::collections::BTreeMap::new();
+    if let Ok(o) = smi_cmd.arg("--showmeminfo").arg("vram").output() {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                // 例: "GPU[0]		: VRAM Total Memory (B): 8573157376"
+                if !line.contains("VRAM Total Memory") {
+                    continue;
+                }
+                if let (Some(lb), Some(rb)) = (line.find("GPU["), line.find(']')) {
+                    if let Ok(idx) = line[lb + 4..rb].parse::<i32>() {
+                        if let Some(bytes) = line
+                            .rsplit(':')
+                            .next()
+                            .and_then(|s| s.trim().parse::<u64>().ok())
+                        {
+                            vram_by_index.insert(idx, bytes / (1024 * 1024));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let n = gfx_list.len().max(vram_by_index.len());
+    let mut gpus: Vec<(i32, String, u64)> = Vec::new();
+    for i in 0..n as i32 {
+        let gfx = gfx_list.get(i as usize).cloned().unwrap_or_default();
+        let vram = vram_by_index.get(&i).copied().unwrap_or(0);
+        if gfx.is_empty() && vram == 0 {
+            continue;
+        }
+        gpus.push((i, gfx, vram));
+    }
+    gpus.sort_by(|a, b| b.2.cmp(&a.2));
+    gpus
+}
+
+/// システム ROCm（/opt/rocm*）の rocBLAS Tensile ライブラリに、指定 gfx arch のカーネルが
+/// 含まれるかを確認する。含まれなければ ROCm 直起動は推論時に rocBLAS で落ちるため、この
+/// ゲートで弾いて Vulkan へフォールバックする（lemonade の therock は arch を欠くことがある）。
+fn system_rocm_tensile_has_arch(gfx: &str) -> bool {
+    if gfx.is_empty() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir("/opt") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("rocm") {
+            continue;
+        }
+        let libdir = entry.path().join("lib").join("rocblas").join("library");
+        if let Ok(files) = std::fs::read_dir(&libdir) {
+            for f in files.flatten() {
+                if f.file_name().to_string_lossy().contains(gfx) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// AMD GPU で 12B + MTP を ROCm llama-server 直起動で動かせるか判定し、起動パラメータを返す。
+/// 条件: 実効階層 12B ∧ rocm ビルドが gemma4-assistant 対応(b9585+) ∧ AMD GPU 検出 ∧
+/// システム ROCm にその GPU arch の rocBLAS Tensile がある（推論時クラッシュを起動前に排除）。
+/// 満たさなければ None（→ Vulkan 直起動、それも不可なら lemond E4B へフォールバック）。
+fn amd_rocm_12b_launch(app: &AppHandle) -> Option<RocmLaunch> {
+    if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
+        return None;
+    }
+    let rocm_bin = find_lemonade_rocm_llama_server(app)?;
+    if !rocm_build_supports_gemma4_assistant(&rocm_bin) {
+        return None;
+    }
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::B12)?;
+    let (hip_index, gfx, _vram) = amd_gpu_priority_list().into_iter().next()?;
+    if !system_rocm_tensile_has_arch(&gfx) {
+        return None;
+    }
+    let mtp_path = resolve_gemma_mtp_path_for_tier(app, GemmaTier::B12);
+    Some((rocm_bin, main_path, mtp_path, AMD_12B_CTX_SIZE, hip_index))
+}
+
+/// AMD で 12B を直起動する計画（ROCm 優先・Vulkan フォールバック）を返す。
+/// どちらも不可なら None（→ lemond E4B 経路へ）。NVIDIA・E4B では常に None。
+fn amd_12b_launch_plan(app: &AppHandle) -> Option<(Option<RocmLaunch>, Option<VulkanLaunch>)> {
+    let rocm = amd_rocm_12b_launch(app);
+    let vulkan = amd_vulkan_12b_launch(app);
+    if rocm.is_some() || vulkan.is_some() {
+        Some((rocm, vulkan))
+    } else {
+        None
+    }
+}
+
+/// AMD 12B 起動の共通処理（ROCm 優先 → 起動失敗時 Vulkan フォールバック）。
+/// start_lemonade_server / install_lemonade の spawn_blocking 内から呼ぶ。
+/// `success_msg` は成功時の戻り文字列（"started" / "installed_and_started"）。
+/// 成功すれば mode=1（per-job 停止・kill-on-close の対象）を保つ。
+#[allow(clippy::too_many_arguments)]
+fn start_amd_12b_blocking(
+    rocm: Option<RocmLaunch>,
+    vulkan: Option<VulkanLaunch>,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+    resolved_port: u16,
+    success_msg: &str,
+) -> Result<String, String> {
+    mode_arc.store(1, Ordering::Relaxed);
+    parallel_arc.store(1, Ordering::Relaxed);
+
+    // 1) ROCm 直起動（高速経路）を試す。失敗（起動エラー・rocBLAS arch・OOM・プロセス即死・
+    //    タイムアウト）なら残骸を kill して Vulkan へフォールバックする。
+    if let Some((bin, main_path, mtp_path, ctx_size, hip_index)) = rocm {
+        if let Ok((child, fail_flag)) = try_start_llama_server_rocm(
+            &bin,
+            &main_path,
+            mtp_path.as_deref(),
+            resolved_port,
+            ctx_size,
+            Some(hip_index),
+        ) {
+            if let Ok(mut g) = child_arc.lock() {
+                *g = Some(child);
+            }
+            // 12B はロード+warmup に時間がかかるため最大 120 秒待つ。
+            let mut started = false;
+            for _ in 0..240 {
+                thread::sleep(Duration::from_millis(500));
+                if lemonade_app_port_open(resolved_port) {
+                    started = true;
+                    break;
+                }
+                let child_dead = child_arc
+                    .lock()
+                    .ok()
+                    .and_then(|mut g| {
+                        g.as_mut()
+                            .map(|c| c.try_wait().map(|s| s.is_some()).unwrap_or(false))
+                    })
+                    .unwrap_or(false);
+                if fail_flag.load(Ordering::Relaxed) || child_dead {
+                    break;
+                }
+            }
+            if started {
+                return Ok(success_msg.to_string());
+            }
+            // ROCm 失敗: 残骸を kill して Vulkan へ。
+            if let Ok(mut g) = child_arc.lock() {
+                if let Some(mut c) = g.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+        }
+    }
+
+    // 2) Vulkan 直起動（フォールバック）。
+    if let Some((bin, main_path, mtp_path, ctx_size)) = vulkan {
+        let (child, oom_flag) = try_start_llama_server_vulkan(
+            &bin,
+            &main_path,
+            mtp_path.as_deref(),
+            resolved_port,
+            ctx_size,
+            None,
+        )?;
+        if let Ok(mut g) = child_arc.lock() {
+            *g = Some(child);
+        }
+        for _ in 0..240 {
+            thread::sleep(Duration::from_millis(500));
+            if lemonade_app_port_open(resolved_port) {
+                return Ok(success_msg.to_string());
+            }
+            if oom_flag.load(Ordering::Relaxed) {
+                if let Ok(mut g) = child_arc.lock() {
+                    if let Some(mut c) = g.take() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                }
+                mode_arc.store(0, Ordering::Relaxed);
+                return Err("AI校正エンジン(高精度12B)の起動時にGPUメモリ(VRAM)が不足しました。設定で校正AIモデルを標準(E4B)に戻してください。".to_string());
+            }
+        }
+        mode_arc.store(0, Ordering::Relaxed);
+        return Err("AI校正エンジン (12B) の起動タイムアウト（120秒）".to_string());
+    }
+
+    // ROCm も Vulkan も起動できなかった。
+    mode_arc.store(0, Ordering::Relaxed);
+    Err("AI校正エンジン(高精度12B)を起動できませんでした。設定で校正AIモデルを標準(E4B)に戻してください。".to_string())
 }
 
 /// アプリ固有キャッシュの user_models.json に既定の E4B QAT モデルを登録する。
@@ -1968,40 +2368,19 @@ async fn start_lemonade_server(
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if let Some((vk_bin, main_path, mtp_path, ctx_size)) = amd_vulkan_12b_launch(&app) {
-        // AMD GPU 直起動: 高精度(12B) + MTP を Vulkan llama-server で動かす（lemond 非経由）。
-        // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。
-        // VRAM 8GB クラスでは単一スロット運用（並列なし）。
+    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app) {
+        // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
+        // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。単一スロット運用。
         tauri::async_runtime::spawn_blocking(move || {
-            mode_arc.store(1, Ordering::Relaxed);
-            parallel_arc.store(1, Ordering::Relaxed);
-            let (child, oom_flag) = try_start_llama_server_vulkan(
-                &vk_bin,
-                &main_path,
-                mtp_path.as_deref(),
+            start_amd_12b_blocking(
+                rocm,
+                vulkan,
+                &child_arc,
+                &mode_arc,
+                &parallel_arc,
                 resolved_port,
-                ctx_size,
-                None, // Vulkan デバイスは既定（dGPU）。将来 device 選択を配線する余地あり
-            )?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            // 12B は大きくロードに時間がかかるため最大 120 秒待つ
-            for _ in 0..240 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
-                    return Ok("started".to_string());
-                }
-                if oom_flag.load(Ordering::Relaxed) {
-                    if let Ok(mut g) = child_arc.lock() {
-                        if let Some(mut c) = g.take() {
-                            let _ = c.kill();
-                            let _ = c.wait();
-                        }
-                    }
-                    mode_arc.store(0, Ordering::Relaxed);
-                    return Err("AI校正エンジン(高精度12B)の起動時にGPUメモリ(VRAM)が不足しました。設定で校正AIモデルを標準(E4B)に戻してください。".to_string());
-                }
-            }
-            Err("AI校正エンジン (12B/Vulkan) の起動タイムアウト（120秒）".to_string())
+                "started",
+            )
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -2173,41 +2552,22 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if let Some((vk_bin, main_path, mtp_path, ctx_size)) = amd_vulkan_12b_launch(&app) {
-        // AMD GPU 直起動: 高精度(12B) + MTP を Vulkan llama-server で動かす（lemond 非経由）。
+    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app) {
+        // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
                 "lemonade-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジン(高精度12B)を起動中..."}),
             );
-            mode_arc.store(1, Ordering::Relaxed);
-            parallel_arc.store(1, Ordering::Relaxed);
-            let (child, oom_flag) = try_start_llama_server_vulkan(
-                &vk_bin,
-                &main_path,
-                mtp_path.as_deref(),
+            start_amd_12b_blocking(
+                rocm,
+                vulkan,
+                &child_arc,
+                &mode_arc,
+                &parallel_arc,
                 resolved_port,
-                ctx_size,
-                None,
-            )?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            for _ in 0..240 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
-                    return Ok("installed_and_started".to_string());
-                }
-                if oom_flag.load(Ordering::Relaxed) {
-                    if let Ok(mut g) = child_arc.lock() {
-                        if let Some(mut c) = g.take() {
-                            let _ = c.kill();
-                            let _ = c.wait();
-                        }
-                    }
-                    mode_arc.store(0, Ordering::Relaxed);
-                    return Err("AI校正エンジン(高精度12B)の起動時にGPUメモリ(VRAM)が不足しました。設定で校正AIモデルを標準(E4B)に戻してください。".to_string());
-                }
-            }
-            Err("AI校正エンジン (12B/Vulkan) の起動タイムアウト（120秒）".to_string())
+                "installed_and_started",
+            )
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?

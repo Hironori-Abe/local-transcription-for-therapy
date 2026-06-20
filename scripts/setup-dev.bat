@@ -232,7 +232,7 @@ if exist "%GEMMA_MTP_FILE%" (
 echo.
 
 echo [3c/6] Lemonade embeddable binary (for src-tauri\resources)...
-set "LEMONADE_VERSION=10.7.0"
+set "LEMONADE_VERSION=10.8.0"
 set "LEMONADE_EMBED_URL=https://github.com/lemonade-sdk/lemonade/releases/download/v%LEMONADE_VERSION%/lemonade-embeddable-%LEMONADE_VERSION%-windows-x64.zip"
 set "LEMONADE_DEST=src-tauri\resources\lemonade"
 set "LEMONADE_TMP=%TEMP%\lemonade-embeddable"

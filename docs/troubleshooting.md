@@ -49,3 +49,11 @@ where.exe cudnn64_9.dll
 - 原因はデフォルトのメモリアロケータ（MallocAsync）が AMD GPU と非互換であること（OpenNMT/CTranslate2 issue #2012）。
 - 修正済み: `transcribe_cli.py` が gfx1102 検出時に `CT2_CUDA_ALLOCATOR=cub_caching` と `HSA_OVERRIDE_GFX_VERSION=11.0.0` を自動設定します（3分・10分ファイルで完走確認済み）。
 - 話者分離（pyannote + MIOpen）も gfx1102 で GPU 動作します。
+
+## AMD: 高精度(12B)校正が ROCm にならず Vulkan（やや遅い）で動く
+
+- 12B 校正は AMD で **ROCm 優先 → 失敗時 Vulkan フォールバック**です。ROCm 経路（約35〜37 tok/s）が選ばれず Vulkan（約28〜29 tok/s）になる主因は次のいずれか。
+  - **ROCm ビルドが古い**: `lemonade backends install llamacpp:rocm` が配るビルドが b9585 未満（例 b9247）だとドラフト arch `gemma4-assistant` を読めません。**同梱 Lemonade 10.8.0** で再導入すると b9630 が入ります（`~/.cache/{app-id}/lemonade/bin/llamacpp/rocm-stable/libllama.so.0.0.<build>` で確認）。
+  - **対象 GPU arch の rocBLAS が無い**: ROCm 直起動は rocBLAS を system ROCm（`/opt/rocm*/lib/rocblas/library/*<gfx>*`）から解決します。dGPU の arch（例 gfx1102）の Tensile が無いと起動前ゲート（`system_rocm_tensile_has_arch`）で弾かれ Vulkan になります。system ROCm を導入してください（lemonade の therock は iGPU arch 専用のことがあり dGPU には使えません）。
+- いずれも該当しなければ Vulkan で安全に動作します（機能差はなく速度のみ）。
+- 関連クラッシュ痕跡: ROCm を therock 経由で起動すると `rocBLAS error: Cannot read ... TensileLibrary.dat ... for GPU arch : gfx1102` が出ます。本アプリは therock を `LD_LIBRARY_PATH` に載せないことでこれを回避しています。

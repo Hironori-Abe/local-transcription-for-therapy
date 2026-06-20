@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-LEMONADE_VERSION="10.7.0"
+LEMONADE_VERSION="10.8.0"
 LEMONADE_DEST="src-tauri/resources/lemonade"
 CONFIG_NVIDIA="tauri.build.nvidia-ubuntu.override.json"
 CONFIG_AMD="tauri.build.amd-ubuntu.override.json"

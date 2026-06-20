@@ -905,7 +905,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedSpeakerBySegmentId = signal<Record<number, string>>({});
   readonly editedSegmentTextMap = signal<Record<number, string>>({});
   readonly playingSegmentId = signal<number | null>(null);
-  readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
+  readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6 /*, 1.8, 2.0 */];
   readonly playbackRate = signal<number>(1.0);
   readonly hiddenSegmentIds = signal<Record<number, boolean>>({});
   readonly diarizationModelChecked = signal<boolean>(false);

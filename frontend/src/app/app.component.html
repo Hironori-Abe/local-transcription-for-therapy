@@ -993,47 +993,9 @@
               <!-- <div class="section-separator"><span>LLM バックエンド</span></div> -->
               <!-- 利用可能な engine/backend: 封印中（lemonadeHwInfo UIは未使用のため削除済み） -->
               <!-- iGPU/NPU割当スライダー: 封印中（lemonadeParallelEnabled UIは未使用のため削除済み） -->
-              <div *ngIf="lemonadeUiVisible() && lemonadeStatus() !== 'running'" class="actions-row settings-llm-row">
-                <span class="copy-status">
-                  AI校正エンジン:
-                  <span
-                    [style.color]="lemonadeStatus() === 'running' ? 'green' :
-                                     lemonadeStatus() === 'starting' || lemonadeStatus() === 'installing' ? 'orange' : 'red'">
-                    {{ lemonadeStatus() === 'running' ? '稼働中' :
-                    lemonadeStatus() === 'starting' ? '起動中...' :
-                    lemonadeStatus() === 'installing' ? 'インストール中...' :
-                    lemonadeStatus() === 'stopped' ? '停止中' :
-                    lemonadeStatus() === 'not_installed' ? '未インストール' :
-                    lemonadeStatus() === 'error' ? 'エラー' : '未確認' }}
-                  </span>
-                </span>
-                <span class="copy-status" *ngIf="lemonadeStatus() === 'running'">
-                  実行デバイス:
-                  <span
-                    [style.color]="lemonadeLoadedDevice() === 'cpu' ? '#d32f2f' : lemonadeLoadedDevice() === 'gpu' ? 'green' : '#616161'">
-                    {{ lemonadeLoadedDeviceText() }}
-                  </span>
-                </span>
-                <span class="copy-status" *ngIf="lemonadeInstallMessage()">{{ lemonadeInstallMessage() }}</span>
-                <button mat-stroked-button (click)="installLemonade()"
-                  *ngIf="(lemonadeStatus() === 'not_installed' || lemonadeStatus() === 'unknown') && buildVariant() !== 'cuda'"
-                  [disabled]="lemonadeStatus() === 'installing'">
-                  インストール
-                </button>
-                <button mat-stroked-button (click)="startLemonade()"
-                  *ngIf="lemonadeStatus() === 'stopped' || lemonadeStatus() === 'error'"
-                  [disabled]="lemonadeStatus() === 'starting'">
-                  起動
-                </button>
-                <button mat-stroked-button (click)="stopLemonade()"
-                  *ngIf="lemonadeStatus() === 'running' || lemonadeStatus() === 'starting' || lemonadeStatus() === 'installing'"
-                  [disabled]="lemonadeStatus() !== 'running'">
-                  停止
-                </button>
-                <button mat-icon-button (click)="checkLemonadeStatus()" aria-label="ステータスを更新">
-                  <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-                </button>
-              </div>
+              <!-- AI校正エンジンの状態/起動/停止/更新の行は廃止。エンジンは校正実行時に
+                   オンデマンド起動し、ジョブ後に解放するため手動操作は不要。AMD/Editor の
+                   バックエンド導入はセットアップタブ（installLemonadeBackend）に集約。 -->
             </ng-container>
           </mat-card-content>
         </mat-card>

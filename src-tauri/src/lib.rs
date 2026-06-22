@@ -1045,6 +1045,11 @@ fn choose_llm_parallelism(
 /// llama-server.exe を CUDA モードで起動する。
 /// GGUF モデルをモデルパスから直接ロードし、OpenAI 互換 API を提供する。
 /// `n_parallel` は並列スロット数 (-np)、`ctx_size` は総コンテキスト長 (--ctx-size)。
+/// `autofit` が true なら `--fit on`（auto-fit）で起動し `-ngl` を指定しない。
+/// llama.cpp が VRAM に収まる範囲で本体・MTP ドラフトを GPU へ自動配置し、収まらない分は
+/// CPU へ逃がす。12B の gemma4-assistant ドラフトは `-ngl` 明示（auto-fit 無効）下で GPU へ
+/// オフロードするとロードに失敗するが、auto-fit 有効なら GPU に載っても正常に動く。
+/// false（E4B 既定）なら従来どおり `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。
 fn try_start_llama_server_cuda(
     bin_path: &str,
     model_path: &str,
@@ -1053,6 +1058,7 @@ fn try_start_llama_server_cuda(
     n_parallel: u32,
     ctx_size: u32,
     device_index: Option<i32>,
+    autofit: bool,
 ) -> Result<(Child, Arc<AtomicBool>), String> {
     #[cfg(unix)]
     {
@@ -1096,13 +1102,15 @@ fn try_start_llama_server_cuda(
     // そのため MTP 配線時は off にする（MTP の投機的デコードは維持）。
     // MTP 非併用時は従来どおり on（KV キャッシュ/VRAM 節約のため）。
     let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
-    cmd.arg("-m")
-        .arg(model_path)
-        .arg("--port")
-        .arg(&port_s)
-        .arg("-ngl")
-        .arg("99") // 全レイヤーを GPU へオフロード
-        .arg("--ctx-size")
+    cmd.arg("-m").arg(model_path).arg("--port").arg(&port_s);
+    if autofit {
+        // auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置（-ngl は指定しない）。
+        // 12B の gemma4-assistant ドラフトを GPU に載せても auto-fit 経由なら落ちない。
+        cmd.arg("--fit").arg("on");
+    } else {
+        cmd.arg("-ngl").arg("99"); // 本体の全レイヤーを GPU へオフロード（E4B 既定）
+    }
+    cmd.arg("--ctx-size")
         .arg(&ctx_s) // 総コンテキスト長（VRAM 階層で自動 or ユーザー上書き）
         .arg("--flash-attn")
         .arg(flash_attn)
@@ -1118,9 +1126,13 @@ fn try_start_llama_server_cuda(
             .arg("--spec-draft-model")
             .arg(mtp_path)
             .arg("--spec-draft-n-max")
-            .arg("3")
-            .arg("--spec-draft-ngl")
-            .arg("99");
+            .arg("3");
+        // auto-fit 時はドラフトの GPU レイヤー数も auto-fit に任せる（--spec-draft-ngl を付けない）。
+        // 非 auto-fit（E4B）は従来どおりドラフトも全 GPU(99)。明示 -ngl 下で 12B ドラフトを
+        // GPU に載せると Windows CUDA ビルドがロードに失敗するため、12B は autofit=true で動かす。
+        if !autofit {
+            cmd.arg("--spec-draft-ngl").arg("99");
+        }
     }
     // stderr は破棄せずパイプで読み取り、起動時 VRAM 不足（OOM）を検出する。
     // パイプを溜めるとプロセスが書き込みでブロックするため、専用スレッドで常時ドレインする。
@@ -2279,6 +2291,63 @@ fn get_lemonade_loaded_device(app: AppHandle, state: tauri::State<'_, LemonadeSe
     Ok("unknown".to_string())
 }
 
+/// CUDA llama-server を起動し、ポートが開く（=応答可能になる）まで待つ。OOM 検出付き。
+/// `autofit` が true（12B）なら `--fit on` で起動し、本体・MTP ドラフトの GPU/CPU 配置を
+/// llama.cpp の auto-fit に委ねる（VRAM に収まる分だけ GPU、残りは CPU）。これにより
+/// gemma4-assistant ドラフトを GPU に載せても落ちず、収まる環境では GPU に載って高速化する。
+/// false（E4B）なら従来どおり `-ngl 99` + `--spec-draft-ngl 99`（本体・ドラフトとも全 GPU）。
+///
+/// 成功時は child_arc にプロセスをセットして Ok(())。失敗時は Err（OOM 時は VRAM_OOM_MARKER 付き）。
+#[allow(clippy::too_many_arguments)]
+fn start_cuda_llama_blocking(
+    bin: &str,
+    model_path: &str,
+    mtp_model_path: Option<&str>,
+    port: u16,
+    n_parallel: u32,
+    ctx_size: u32,
+    device_index: Option<i32>,
+    autofit: bool,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    mode_arc: &Arc<AtomicU8>,
+) -> Result<(), String> {
+    let (child, oom_flag) = try_start_llama_server_cuda(
+        bin,
+        model_path,
+        mtp_model_path,
+        port,
+        n_parallel,
+        ctx_size,
+        device_index,
+        autofit,
+    )?;
+    *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
+
+    // llama-server はモデルをロードしてから応答可能になるため、最大 60 秒待機する。
+    for _ in 0..120 {
+        thread::sleep(Duration::from_millis(500));
+        if lemonade_app_port_open(port) {
+            return Ok(());
+        }
+        // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
+        // フロントが「並列処理数を下げて再試行」できるよう OOM マーカー付きで早期に失敗させる。
+        // （auto-fit は通常 CPU へ逃がして OOM を回避するため、主に E4B の -ngl 99 経路向け。）
+        if oom_flag.load(Ordering::Relaxed) {
+            if let Ok(mut g) = child_arc.lock() {
+                if let Some(mut c) = g.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+            mode_arc.store(0, Ordering::Relaxed);
+            return Err(format!(
+                "{VRAM_OOM_MARKER} AI校正エンジンの起動時にGPUメモリ(VRAM)が不足しました。並列処理数を下げて再試行してください。"
+            ));
+        }
+    }
+    Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
+}
+
 #[tauri::command]
 async fn start_lemonade_server(
     app: AppHandle,
@@ -2329,42 +2398,32 @@ async fn start_lemonade_server(
             .map(|g| g.2)
             .unwrap_or(0);
         let (n_parallel, ctx_size) = choose_llm_parallelism(vram_mib, llm_parallel, llm_ctx);
+        // 12B は auto-fit 起動（ドラフト含め GPU/CPU を llama.cpp が自動配置）。8GB クラスで本体を
+        // 多く GPU に載せ高速化するため、ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
+        // （ctx16384/np2 だと KV が大きく本体が CPU に逃げて遅くなる実測。8192/np1 で約24 tok/s）。
+        // E4B は従来どおり -ngl 99 + 自動 ctx/np。
+        let is_12b = matches!(resolve_effective_proofread_tier(&app), GemmaTier::B12);
+        let (n_parallel, ctx_size) = if is_12b {
+            (1u32, AMD_12B_CTX_SIZE)
+        } else {
+            (n_parallel, ctx_size)
+        };
         tauri::async_runtime::spawn_blocking(move || {
             mode_arc.store(1, Ordering::Relaxed);
             parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
-            let (child, oom_flag) =
-                try_start_llama_server_cuda(
-                    &bin,
-                    &mpath,
-                    mtp_path.as_deref(),
-                    resolved_port,
-                    n_parallel,
-                    ctx_size,
-                    sel_idx,
-                )?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            // llama-server はモデルをロードしてから起動するため、最大 60 秒待機する
-            for _ in 0..120 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
-                    return Ok("started".to_string());
-                }
-                // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
-                // フロントが「並列処理数を下げて再試行」できるよう OOM マーカー付きで早期に失敗させる。
-                if oom_flag.load(Ordering::Relaxed) {
-                    if let Ok(mut g) = child_arc.lock() {
-                        if let Some(mut c) = g.take() {
-                            let _ = c.kill();
-                            let _ = c.wait();
-                        }
-                    }
-                    mode_arc.store(0, Ordering::Relaxed);
-                    return Err(format!(
-                        "{VRAM_OOM_MARKER} AI校正エンジンの起動時にGPUメモリ(VRAM)が不足しました。並列処理数を下げて再試行してください。"
-                    ));
-                }
-            }
-            Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
+            start_cuda_llama_blocking(
+                &bin,
+                &mpath,
+                mtp_path.as_deref(),
+                resolved_port,
+                n_parallel,
+                ctx_size,
+                sel_idx,
+                is_12b,
+                &child_arc,
+                &mode_arc,
+            )?;
+            Ok("started".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -2511,6 +2570,14 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         // VRAM から並列スロット数・コンテキスト長を自動決定（install/start 経路は上書きなし=auto）
         let vram_mib = nvidia_list.first().map(|g| g.2).unwrap_or(0);
         let (n_parallel, ctx_size) = choose_llm_parallelism(vram_mib, None, None);
+        // 12B は auto-fit 起動。ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
+        // （auto-fit が本体を多く GPU に載せ高速化するため）。E4B は従来の自動値。
+        let is_12b = matches!(resolve_effective_proofread_tier(&app), GemmaTier::B12);
+        let (n_parallel, ctx_size) = if is_12b {
+            (1u32, AMD_12B_CTX_SIZE)
+        } else {
+            (n_parallel, ctx_size)
+        };
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
                 "lemonade-install-progress",
@@ -2519,36 +2586,19 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
             mode_arc.store(1, Ordering::Relaxed);
             parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
             // install/start 経路はデバイス選択 UI を経由しないため None（llama.cpp 既定）
-            let (child, oom_flag) =
-                try_start_llama_server_cuda(
-                    &bin,
-                    &mpath,
-                    mtp_path.as_deref(),
-                    resolved_port,
-                    n_parallel,
-                    ctx_size,
-                    None,
-                )?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            for _ in 0..120 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
-                    return Ok("installed_and_started".to_string());
-                }
-                if oom_flag.load(Ordering::Relaxed) {
-                    if let Ok(mut g) = child_arc.lock() {
-                        if let Some(mut c) = g.take() {
-                            let _ = c.kill();
-                            let _ = c.wait();
-                        }
-                    }
-                    mode_arc.store(0, Ordering::Relaxed);
-                    return Err(format!(
-                        "{VRAM_OOM_MARKER} AI校正エンジンの起動時にGPUメモリ(VRAM)が不足しました。並列処理数を下げて再試行してください。"
-                    ));
-                }
-            }
-            Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
+            start_cuda_llama_blocking(
+                &bin,
+                &mpath,
+                mtp_path.as_deref(),
+                resolved_port,
+                n_parallel,
+                ctx_size,
+                None,
+                is_12b,
+                &child_arc,
+                &mode_arc,
+            )?;
+            Ok("installed_and_started".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?

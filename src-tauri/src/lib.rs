@@ -3965,7 +3965,34 @@ fn save_transcription_xlsx(app: AppHandle, request: SaveTranscriptionXlsxRequest
     Ok(())
 }
 
-fn run_encrypt_script(app: &AppHandle, args: &[&str]) -> Result<(), String> {
+/// スコープ離脱時（早期 return・`?`・panic を含む）に登録済みの一時ファイルを
+/// 必ず削除する RAII ガード。会話本文や校正プロンプトなど PII を含む一時ファイルの
+/// 取り残しを防ぐ。
+struct TempFileGuard {
+    paths: Vec<PathBuf>,
+}
+
+impl TempFileGuard {
+    fn new() -> Self {
+        Self { paths: Vec::new() }
+    }
+
+    fn push(&mut self, path: PathBuf) {
+        self.paths.push(path);
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn run_encrypt_script(app: &AppHandle, args: &[&str], password: &str) -> Result<(), String> {
+    use std::io::Write;
+
     let script_path = resolve_encrypt_office_script_path(app)?;
     let python_bin = get_python_bin(app);
 
@@ -3977,11 +4004,32 @@ fn run_encrypt_script(app: &AppHandle, args: &[&str]) -> Result<(), String> {
     for arg in args {
         cmd.arg(arg);
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // パスワードはコマンドライン引数ではなく stdin 経由で渡す。Windows では同一
+    // ユーザーの他プロセスが実行中プロセスの引数（コマンドライン）を参照できるため、
+    // PII 保護対象である暗号化パスワードを argv に載せない。
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("暗号化スクリプトの起動に失敗しました: {e}"))?;
+
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "暗号化スクリプトの stdin 取得に失敗しました。".to_string())?;
+        stdin
+            .write_all(password.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .map_err(|e| format!("暗号化パスワードの送信に失敗しました: {e}"))?;
+        // stdin をここで drop して EOF を送る。
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("暗号化スクリプトの実行に失敗しました: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3992,11 +4040,11 @@ fn run_encrypt_script(app: &AppHandle, args: &[&str]) -> Result<(), String> {
 }
 
 fn encrypt_office_file(app: &AppHandle, file_path: &str, password: &str) -> Result<(), String> {
-    run_encrypt_script(app, &["office", file_path, password])
+    run_encrypt_script(app, &["office", file_path], password)
 }
 
 fn encrypt_json_to_zip(app: &AppHandle, json_temp: &str, zip_path: &str, password: &str) -> Result<(), String> {
-    run_encrypt_script(app, &["json", json_temp, zip_path, password])
+    run_encrypt_script(app, &["json", json_temp, zip_path], password)
 }
 
 // ─── Audio streaming server ──────────────────────────────────────────────────
@@ -5435,6 +5483,14 @@ fn proofread_transcription_llm_blocking_with_kind(
             Ok::<PathBuf, String>(path)
         })
         .transpose()?;
+
+    // 会話本文/システムプロンプトを含む一時ファイルは、以降のどの早期 return でも
+    // 確実に削除されるよう RAII ガードへ登録する（spawn 失敗・パイプ取得失敗を含む）。
+    let mut _tmp_guard = TempFileGuard::new();
+    _tmp_guard.push(tmp_path.clone());
+    if let Some(ref path) = system_prompt_tmp_path {
+        _tmp_guard.push(path.clone());
+    }
 
     let n_gpu_layers = request.n_gpu_layers.unwrap_or(-1);
     let n_ctx = request.n_ctx.unwrap_or(16384).clamp(4096, 131072);
@@ -7574,6 +7630,8 @@ fn execute_transcription(
     apply_child_runtime_env(&mut cmd, device, hip_device_index);
     apply_diarization_model_env(&mut cmd, app, script_path);
     apply_ffmpeg_bin_env(&mut cmd, app);
+    // 文字起こしは事前取得済みモデルをキャッシュから読む。実行時のネット取得を禁止する。
+    apply_offline_model_env(&mut cmd);
 
     if is_retry {
         emit_progress(
@@ -7721,6 +7779,8 @@ fn execute_diarization(
     apply_child_runtime_env(&mut cmd, device, hip_device_index);
     apply_diarization_model_env(&mut cmd, app, script_path);
     apply_ffmpeg_bin_env(&mut cmd, app);
+    // 話者分離モデルはローカル配置。実行時のネット取得を禁止する。
+    apply_offline_model_env(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -7874,6 +7934,23 @@ fn apply_ffmpeg_bin_env(cmd: &mut Command, app: &AppHandle) {
     if let Some(bin) = find_bundled_ffmpeg_bin(app) {
         cmd.env("FFMPEG_BIN", bin);
     }
+}
+
+/// 実行時サイドカー（文字起こし・話者分離）がモデル読み込み時に意図せず
+/// インターネットへ接続しないよう、offline 系の環境変数を付与して fail-closed 化する。
+///
+/// 本アプリのモデルはローカル配置（pyannote community-1）または事前ダウンロード済み
+/// （faster-whisper を HF_HUB_CACHE へ取得）であり、通常運用ではキャッシュヒットで
+/// 完結する。万一サブファイルが欠落していた場合でも、黙ってネットワーク取得する
+/// （= 通常運用時にインターネットへ接続する）のではなく、明示的に失敗させる。
+///
+/// 注意: モデル取得を行うダウンロード系 CLI（download_*_cli.py / setup_venv_cli.py /
+/// detect_env_cli.py）にはこのヘルパーを適用しないこと。これらはネットワーク取得が前提。
+fn apply_offline_model_env(cmd: &mut Command) {
+    cmd.env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1");
 }
 
 fn apply_child_runtime_env(cmd: &mut Command, device: &str, _hip_device_index: Option<i32>) {
@@ -8670,6 +8747,14 @@ fn run_overall_proofread_blocking(
     ));
     std::fs::write(&tmp_path, &segments_json_str)
         .map_err(|e| format!("一時ファイルの書き込みに失敗: {e}"))?;
+
+    // 会話本文/システムプロンプトを含む一時ファイルは、以降のどの早期 return でも
+    // 確実に削除されるよう RAII ガードへ登録する（spawn 失敗・パイプ取得失敗を含む）。
+    let mut _tmp_guard = TempFileGuard::new();
+    _tmp_guard.push(tmp_path.clone());
+    if let Some(ref path) = system_prompt_tmp_path {
+        _tmp_guard.push(path.clone());
+    }
 
     let n_gpu_layers = request.n_gpu_layers.unwrap_or(-1);
     let n_ctx = request.n_ctx.unwrap_or(16384).clamp(4096, 131072);

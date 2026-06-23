@@ -25,6 +25,12 @@ where.exe cublas64_12.dll
 where.exe cudnn64_9.dll
 ```
 
+## 文字起こしが「モデルが見つからない」「オフライン」エラーで失敗する
+
+- 本アプリは通常運用時、モデル取得ライブラリ（Hugging Face Hub）を**オフラインモードに固定**しています（意図しない外部接続を防ぐためのフェイルクローズ設計）。そのため、文字起こしモデル（Whisper）が未取得の状態では実行時に自動ダウンロードされず、`LocalEntryNotFoundError` / "outgoing traffic has been disabled" のようなエラーになります。
+- セットアップタブから**文字起こしモデル（Whisper turbo）を事前にダウンロード**してください。モデル取得はネット接続が必要な工程で、ダウンロード後はオフラインで動作します。
+- ダウンロードと文字起こしは同じアプリ専用キャッシュを参照します。セットアップで取得済みであれば、オフラインのままでも読み込めます。
+
 ## 話者分離モデルが見つからない
 
 - `python_sidecar/models/pyannote-speaker-diarization-community-1` にモデル一式を配置してください（dev）。

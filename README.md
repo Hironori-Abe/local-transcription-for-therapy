@@ -1,7 +1,8 @@
 # Local Transcription for Therapy (LoTT)
 
-臨床心理・カウンセリング会話のための、ローカル完結の日本語文字起こしデスクトップアプリです。
+臨床心理・カウンセリング会話のための、ローカル完結の日本語文字起こし・逐語録作成を補助するデスクトップアプリケーションです。
 文字起こし・話者分離・文章校正を、会話データを PC の外へ送ることなく実行できます。
+アプリケーションが全自動で完璧な逐語録を作ることを目指してはおらず、アプリケーションはおおまかな下書きを作ります。それを人間が会話（音声ファイル）を振り返りながら逐語録を完成させることを想定しています。
 
 ![メイン画面](docs/screenshots/main-window.png)
 
@@ -10,7 +11,7 @@
 - **完全ローカル実行** — 運用時はインターネット接続不要。会話・音声データを外部 API へ送信しません
 - **日本語の文字起こし** — faster-whisper（Whisper turbo モデル）
 - **話者分離** — pyannote.audio による話者の自動識別（既定ラベル: Th / Cl / IP …）
-- **校正** — ルールベース + ローカル LLM。氏名・地名など個人の特定につながりうる語の警告表示。校正AIは標準（Gemma 4 E4B）に加え、高精度モデル（Gemma 4 12B、NVIDIA / CUDA 版のみ・後からダウンロード）を選択可能
+- **校正** — ルールベース + ローカル LLM。氏名・地名など個人の特定につながりうる語の警告表示。校正AIは標準（Gemma 4 E4B）に加え、高精度モデル（Gemma 4 12B、NVIDIA / AMD 共通・後からダウンロード）を選択可能
 - セグメント表の編集・句点での分割・セグメント単位の音声再生
 - Word（.docx）/ Excel（.xlsx）/ JSON 形式での保存
 
@@ -65,7 +66,7 @@
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper / Diarization: pyannote.audio
-- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・CUDA 版のみ後付けダウンロード）+ Lemonade / llama.cpp / ローカル OpenAI 互換 API（loopback 限定）
+- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ Lemonade / llama.cpp / ローカル OpenAI 互換 API（loopback 限定）
 
 ## ドキュメント
 

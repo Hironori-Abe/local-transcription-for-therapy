@@ -95,7 +95,7 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
   - 追加: ローカル OpenAI 互換 API（`localhost` / `127.*` / `[::1]` の loopback 接続のみ）
 - 内蔵校正AIモデルの階層は「AI校正バックエンド」セレクタで選べます（E4B / 12B が同セレクタに並びます）。
   - 標準: Gemma 4 E4B QAT（既定。CUDA / AMD 共通）
-  - 高精度: Gemma 4 12B QAT + MTP（**NVIDIA / CUDA 版のみ**。large-v3 と同じく後からダウンロード（約7GB））
+  - 高精度: Gemma 4 12B QAT + MTP（**NVIDIA / AMD 共通**、GPU 直起動経路。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック。large-v3 と同じく後からダウンロード（約7GB））
   - 既定は常に E4B。12B はオプトインで、未ダウンロード時は自動で E4B にフォールバックして起動します。
   - 選択は `app_local_data_dir()/proofread-model-tier.txt`（`e4b` / `12b`）に保存。MTP（投機デコード）の適用範囲・FlashAttention の扱いは [AGENTS.md](../AGENTS.md) の「MTP（投機的デコード）の適用範囲」を参照してください。
 

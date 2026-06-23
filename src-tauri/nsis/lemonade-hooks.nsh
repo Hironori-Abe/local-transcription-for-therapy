@@ -89,33 +89,11 @@ winget を使ってインストールします。$\n$\n\
   DetailPrint "インストールフォルダの残存ファイルを削除しています..."
   RMDir /r "$INSTDIR"
 
-  ; ── 旧 HuggingFace デフォルトキャッシュの Whisper モデルを削除 ──────────────
-  ; v0.1 以前のインストールでは Whisper モデルが %USERPROFILE%\.cache\huggingface\hub\
-  ; に保存されていた。ユーザーに確認してから削除する。
-  IfFileExists "$PROFILE\.cache\huggingface\hub\models--mobiuslabsgmbh--faster-whisper-large-v3-turbo\*.*" legacy_hf_exists 0
-  IfFileExists "$PROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-turbo\*.*" legacy_hf_exists 0
-  IfFileExists "$PROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\*.*" legacy_hf_exists 0
-  Goto legacy_hf_skip
-
-  legacy_hf_exists:
-    MessageBox MB_YESNO \
-      "以前のバージョンでダウンロードした音声認識モデル（Whisper）が見つかりました。$\n\
-削除しますか？（合計数GB）$\n$\n\
-保存場所: $PROFILE\.cache\huggingface\hub\$\n$\n\
-「いいえ」を選ぶとファイルはそのまま残ります。$\n\
-他のアプリでも同じモデルを使っている場合は「いいえ」を選んでください。" \
-      /SD IDNO IDNO legacy_hf_skip
-
-    DetailPrint "旧 HuggingFace キャッシュの Whisper モデルを削除しています..."
-    RMDir /r "$PROFILE\.cache\huggingface\hub\models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
-    RMDir /r "$PROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-turbo"
-    RMDir /r "$PROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3"
-    RMDir /r "$PROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-large-v2"
-    ; ディレクトリが空になった場合のみ削除（他アプリのキャッシュが残っていれば削除されない）
-    RMDir "$PROFILE\.cache\huggingface\hub"
-    RMDir "$PROFILE\.cache\huggingface"
-
-  legacy_hf_skip:
+  ; ── 共有 HuggingFace キャッシュ (~/.cache/huggingface) には触れない ──────────
+  ; リリース版はモデルを %LOCALAPPDATA%\${BUNDLEID}\ 配下にのみ保存する
+  ; (Rust: get_app_hf_hub_cache / release_models_root)。~/.cache/huggingface は
+  ; dev 実行や他プロジェクトと共有される汎用キャッシュであり、本アプリが
+  ; インストールした領域ではないため、アンインストール時には削除しない。
 
   nsis_skip_full_cleanup:
 !macroend

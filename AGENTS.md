@@ -75,7 +75,7 @@ scripts\run-dev.bat
 - Microsoft C++ Build Tools
 - NVIDIA Driver, CUDA 12.x, cuDNN 9.x（GPU利用時）
 
-話者分離モデルは UI セットアップタブまたは別PCからのローカルコピーで配置する。
+話者分離モデルは UI セットアップタブから配置する。
 
 ## Setup and Run (Ubuntu / Linux)
 
@@ -98,7 +98,8 @@ bash scripts/run-dev.sh
 - モデル配置先（dev）: `python_sidecar/models/pyannote-speaker-diarization-community-1/`
 - モデル配置先（リリース）: `%LOCALAPPDATA%\{identifier}\models\pyannote-speaker-diarization-community-1\`（`app_local_data_dir()/models/`）。NSIS アンインストーラーの `%LOCALAPPDATA%\{identifier}` 一括削除対象
 - 必要に応じて `DIARIZATION_MODEL_PATH` で上書き可能
-- モデル取得は UI セットアップタブまたは別PCからのローカルコピーで対応
+- モデル取得は UI セットアップタブで対応
+- インストール完了判定は `config.yaml` の有無だけでなく、それが参照する実体ファイル（`segmentation/` `embedding/` `plda/`）の存在・非空サイズと、DL 中断マーカー（`.cache/.../*.incomplete`）の不在まで確認する（`diarization_model_is_complete`）。途中で切れて一部だけ揃った状態は「未完了」と判定し、セットアップで補完ダウンロードを促す。この判定は**設定タブのステータス確認専用**で、アプリ起動初期化からは呼ばない（起動を巻き込まないため）／IO エラーで panic しない（未完了側へ倒す）
 
 ## Audio Decode / FFmpeg License Policy
 

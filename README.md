@@ -53,7 +53,7 @@
    - 話者分離モデル（`pyannote-speaker-diarization-community-1`、Hugging Face トークンが必要）
    - 校正用 LLM（Gemma 4 E4B GGUF）
 
-モデル取得後はオフラインで運用できます。話者分離モデルは別 PC からのローカルコピーでも配置できます。
+モデル取得後はオフラインで運用できます。
 
 ## 使い方
 

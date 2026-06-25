@@ -62,7 +62,7 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
 話者分離はモデル `pyannote-speaker-diarization-community-1`（pyannote.audio 4.x）がローカル配置されていると有効になります。
 
 - 配置先（dev）: `python_sidecar/models/pyannote-speaker-diarization-community-1/`
-- アプリ内セットアップタブから Hugging Face トークンでダウンロードするか、別 PC からフォルダごとコピーします。
+- アプリ内セットアップタブから Hugging Face トークンでダウンロードします。
 - `DIARIZATION_MODEL_PATH` 環境変数で配置先を上書きできます。
 
 詳細は [python_sidecar/models/README.md](../python_sidecar/models/README.md) を参照してください。

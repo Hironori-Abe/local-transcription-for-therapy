@@ -4587,6 +4587,69 @@ fn xml_escape(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// 指定ディレクトリ配下に huggingface_hub のダウンロード中断マーカー
+/// （`*.incomplete`）が残っているかを再帰的に調べる。
+///
+/// 走査中の IO エラーは「マーカー無し」として扱い、決して panic しない。
+/// これは「完了しているのに未完了と誤判定する（= false negative）」を避けるため。
+/// 実際にマーカーを見つけたときだけ true を返す。
+fn has_incomplete_download_markers(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            if has_incomplete_download_markers(&path) {
+                return true;
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("incomplete") {
+            return true;
+        }
+    }
+    false
+}
+
+/// 話者分離モデル（pyannote community-1）が「実行に使える完全な状態」かを判定する。
+///
+/// 設定タブのインストール状況表示・ダウンロード要否判定の**専用**ヘルパー。
+/// アプリ起動の初期化経路（Tauri `setup` 等）からは呼ばない（呼ぶと判定コストや
+/// 誤判定が起動を巻き込むため）。`config.yaml` だけでなく、それが参照する実体ファイル
+/// （segmentation / embedding / plda）の存在と非空サイズ、さらに DL 中断マーカーの
+/// 不在まで確認することで、「途中で切れて一部だけ揃った状態」を正しく未完了と判定する。
+///
+/// IO エラーで panic しない。判定不能なものは「未完了（false）」側へ倒す。
+fn diarization_model_is_complete(model_dir: &Path) -> bool {
+    // config.yaml が参照する実体ファイル。いずれも存在し、サイズが 0 でないこと。
+    const ESSENTIAL_FILES: &[&[&str]] = &[
+        &["config.yaml"],
+        &["segmentation", "pytorch_model.bin"],
+        &["embedding", "pytorch_model.bin"],
+        &["plda", "plda.npz"],
+        &["plda", "xvec_transform.npz"],
+    ];
+    for parts in ESSENTIAL_FILES {
+        let mut path = model_dir.to_path_buf();
+        for part in *parts {
+            path.push(part);
+        }
+        match fs::metadata(&path) {
+            Ok(meta) if meta.is_file() && meta.len() > 0 => {}
+            _ => return false,
+        }
+    }
+
+    // ダウンロードが途中で止まっていれば未完了扱い（補完 DL を促す）。
+    if has_incomplete_download_markers(&model_dir.join(".cache").join("huggingface")) {
+        return false;
+    }
+
+    true
+}
+
 #[tauri::command]
 fn check_diarization_model_status(
     app: AppHandle,
@@ -4601,7 +4664,7 @@ fn check_diarization_model_status(
     }
 
     let model_dir = resolve_default_diarization_model_dir(&app)?;
-    let has_config = model_dir.join("config.yaml").exists();
+    let has_config = diarization_model_is_complete(&model_dir);
     Ok(DiarizationModelStatusResponse {
         exists: model_dir.exists(),
         has_config,
@@ -4753,7 +4816,7 @@ fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
     let diarization = if should_emulate_missing_community_1() {
         false
     } else {
-        model_dir.join("config.yaml").exists()
+        diarization_model_is_complete(&model_dir)
     };
     let diarization_expected_path = model_dir.to_string_lossy().to_string();
 
@@ -9556,8 +9619,10 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     }
 
     // 2. diarization model (requires HF token)
+    // config.yaml だけでなく実体ファイル・DL中断マーカーまで見て完全性を判定する。
+    // 途中で切れて一部だけ揃った状態は未完了扱いにし、補完 DL を走らせる。
     let dia_ok = resolve_default_diarization_model_dir(&app)
-        .map(|d| d.join("config.yaml").exists())
+        .map(|d| diarization_model_is_complete(&d))
         .unwrap_or(false);
     if dia_ok {
         emit_setup_progress(&app, "diarization", "skipped", "インストール済みです");

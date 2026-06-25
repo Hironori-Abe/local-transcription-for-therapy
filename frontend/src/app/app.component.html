@@ -150,7 +150,7 @@
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['diarization']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['diarization'] as p">{{ p.message }}</span>
+                *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
             <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
             <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf' && !allSetupStatus()?.lemonadeBackend">
@@ -195,6 +195,21 @@
                 [class.setup-comp-progress-error]="setupProgressMap()['gemma_mtp_gguf']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['gemma_mtp_gguf']?.status === 'done' || setupProgressMap()['gemma_mtp_gguf']?.status === 'skipped'"
                 *ngIf="setupProgressMap()['gemma_mtp_gguf'] as p">{{ p.message }}</span>
+            </div>
+          </div>
+
+          <!-- 話者分離ダウンロードのエラー詳細（困惑しないよう手厚く案内する） -->
+          <div class="diarization-error-panel"
+            *ngIf="setupProgressMap()['diarization']?.status === 'error'">
+            <mat-icon class="material-symbols-outlined diarization-error-icon">error</mat-icon>
+            <div class="diarization-error-body">
+              <div class="diarization-error-title">話者分離モデルのダウンロードに失敗しました</div>
+              <div class="diarization-error-message">{{ setupProgressMap()['diarization']?.message }}</div>
+              <div class="diarization-error-actions">
+                <button mat-stroked-button color="primary" (click)="openDiarizationConsentPage()">同意ページを開く</button>
+                <button mat-stroked-button color="primary" (click)="openHuggingFaceTokenPage()">トークン作成ページを開く</button>
+                <button mat-flat-button color="primary" [disabled]="setupRunning() || setupNeedsHfToken()" (click)="runFullSetup()">もう一度ダウンロード</button>
+              </div>
             </div>
           </div>
 

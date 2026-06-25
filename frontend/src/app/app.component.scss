@@ -1040,6 +1040,50 @@
   ol { margin: 0 0 8px 18px; padding: 0; }
 }
 
+.diarization-error-panel {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 10px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #ef9a9a;
+  border-left: 4px solid #c62828;
+  border-radius: 6px;
+  background: #fdecea;
+
+  .diarization-error-icon {
+    color: #c62828;
+    font-size: 22px;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .diarization-error-body { flex: 1 1 auto; min-width: 0; }
+
+  .diarization-error-title {
+    font-weight: 600;
+    color: #b71c1c;
+    margin-bottom: 6px;
+  }
+
+  .diarization-error-message {
+    white-space: pre-line; // 改行（\n）を反映して手厚い説明を読みやすく表示
+    color: #4e342e;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+
+  .diarization-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+}
+
 .setup-guide-note {
   color: #6d4c41;
   font-size: 0.82rem;

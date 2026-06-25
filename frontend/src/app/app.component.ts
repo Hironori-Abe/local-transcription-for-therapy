@@ -5988,8 +5988,61 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.activeTabIndex.set(0);
   }
 
+  /**
+   * Hugging Face アクセストークンの形式を送信前にチェックする。
+   * 明らかな打ち間違い・貼り付けミス（途中切れ・空白混入・接頭辞違い）を
+   * ダウンロード実行前に弾き、ユーザーが原因を切り分けやすくする。
+   * 問題なければ null、問題があればユーザー向けの説明文字列を返す。
+   */
+  validateHfTokenFormat(rawToken: string): string | null {
+    const token = (rawToken ?? '').trim();
+    if (!token) return null; // 未入力は別経路（スキップ）で扱う
+
+    if (/\s/.test(token)) {
+      return (
+        'トークンに空白や改行が含まれています。\n' +
+        '● トークンの前後や途中に余分な空白・改行が入っていないか確認してください。\n' +
+        '● コピー＆ペーストで貼り付け直すと混入を防げます。'
+      );
+    }
+    if (!token.startsWith('hf_')) {
+      return (
+        'Hugging Face のアクセストークンは「hf_」で始まります。入力された値はその形式になっていません。\n' +
+        '● トークンをすべて選択してコピーし、貼り付け直してください（先頭が欠けていることがあります）。\n' +
+        '● ユーザー名や別の値を貼り付けていないか確認してください。'
+      );
+    }
+    if (token.length < 20) {
+      return (
+        'トークンが短すぎます。途中で切れている可能性があります。\n' +
+        '● トークン全体をコピーできているか確認し、貼り付け直してください。'
+      );
+    }
+    if (!/^hf_[A-Za-z0-9]+$/.test(token)) {
+      return (
+        'トークンに使用できない文字が含まれています（記号や全角文字が混入している可能性があります）。\n' +
+        '● 日本語入力（IME）がオンのまま入力していないか確認してください。\n' +
+        '● 「トークン作成ページを開く」から発行した値をコピー＆ペーストで貼り付けてください。'
+      );
+    }
+    return null;
+  }
+
   async runFullSetup(): Promise<void> {
     if (this.setupRunning()) return;
+
+    // 話者分離トークンの形式チェック（送信前に明らかな打ち間違いを弾く）
+    const tokenForValidation = this.diarizationInstallToken().trim();
+    if (tokenForValidation) {
+      const tokenError = this.validateHfTokenFormat(tokenForValidation);
+      if (tokenError) {
+        this.setupProgressMap.set({
+          diarization: { component: 'diarization', status: 'error', message: tokenError },
+        });
+        return;
+      }
+    }
+
     this.setupRunning.set(true);
     this.setupProgressMap.set({});
     try {

@@ -25,12 +25,11 @@
       "../python_sidecar/setup_venv_cli.py",
       "../python_sidecar/requirements-amd.txt",
       "resources/python312",
-      "resources/ffmpeg",
-      "resources/lemonade"
+      "resources/ffmpeg"
     ],
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/lemonade-hooks.nsh",
+        "installerHooks": "nsis/nvidia-hooks.nsh",
         "languages": [
           "Japanese"
         ],

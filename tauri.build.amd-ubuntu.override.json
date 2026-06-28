@@ -25,8 +25,7 @@
       "../python_sidecar/models/pyannote-speaker-diarization-community-1",
       "../python_sidecar/setup_venv_cli.py",
       "../python_sidecar/requirements-amd.txt",
-      "resources/ffmpeg",
-      "resources/lemonade"
+      "resources/ffmpeg"
     ]
   }
 }

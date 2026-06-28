@@ -1616,7 +1616,6 @@ fi
 install_system_packages
 install_rocm_packages
 install_amd_npu_packages
-install_lemonade_server
 ensure_amd_group_membership
 check_rust
 check_node
@@ -1626,8 +1625,6 @@ install_python_dependencies
 write_linux_env_file
 install_llama_cpp
 download_gemma_model
-check_lemonade
-setup_lemonade_embeddable
 check_cuda
 check_amd_acceleration
 doctor_summary

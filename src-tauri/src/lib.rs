@@ -622,24 +622,8 @@ fn prepare_openai_unload_info(
     }
 }
 
-/// lemonade unload CLI を実行してモデルをメモリから解放する（失敗しても無視）。
-/// snap 版 (/snap/bin/lemonade) → PATH 上の lemonade の順で試みる。
-fn try_unload_lemonade_cli(port: u16) {
-    for candidate in &["/snap/bin/lemonade", "lemonade"] {
-        let mut cmd = Command::new(candidate);
-        apply_windows_no_window(&mut cmd);
-        if port > 0 {
-            cmd.env("LEMONADE_PORT", port.to_string());
-        }
-        if let Ok(mut child) = cmd.arg("unload").stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-            let _ = child.wait();
-            return;
-        }
-    }
-}
-
 /// アンロードリクエストを送信する（失敗しても無視）。
-fn try_unload_openai_model(unload: &OpenAiUnloadTarget, lemonade_port: u16) {
+fn try_unload_openai_model(unload: &OpenAiUnloadTarget, _lemonade_port: u16) {
     let target = unload.as_http_target();
     match unload.server_type.as_str() {
         "ollama" => {
@@ -669,9 +653,6 @@ fn try_unload_openai_model(unload: &OpenAiUnloadTarget, lemonade_port: u16) {
                 &body,
                 Duration::from_secs(5),
             );
-        }
-        "lemonade" => {
-            try_unload_lemonade_cli(lemonade_port);
         }
         _ => {}
     }
@@ -777,80 +758,6 @@ fn list_local_openai_models(
         server_name,
         models,
     })
-}
-
-// バンドルされた Lemonade バイナリを探す（ポータブル/オフライン専用、PATH・Program Files は参照しない）
-fn find_lemonade_bundled_bin(app: &AppHandle) -> Option<String> {
-    let path_api = app.path();
-    let mut search_dirs: Vec<PathBuf> = Vec::new();
-
-    // resource_dir: dev では target/debug 配下(executable_dir 相当)に解決され、
-    // リソースは未コピーのため dev では当てにならない。NSIS production = $INSTDIR/
-    if let Ok(rd) = path_api.resource_dir() {
-        search_dirs.push(rd.join("resources").join("lemonade"));
-        search_dirs.push(rd.join("lemonade"));
-    }
-
-    // executable_dir: dev = target/debug/, NSIS production = $INSTDIR/
-    if let Ok(ed) = path_api.executable_dir() {
-        search_dirs.push(ed.join("resources").join("lemonade"));
-        search_dirs.push(ed.join("lemonade"));
-        // ポータブル ZIP 展開時の _up_ パス
-        search_dirs.push(ed.join("_up_").join("resources").join("lemonade"));
-        search_dirs.push(ed.join("_up_").join("lemonade"));
-    }
-
-    // dev ビルドではリソースが target/debug 配下にコピーされず resource_dir() / executable_dir()
-    // からも解決できないため、ソースツリーの src-tauri/resources/lemonade を直接参照する。
-    // これにより AMD dev でも同梱 lemond が見つかり、Lemonade(rocm/vulkan) 経路で AI 校正が動く。
-    // find_bundled_llama_server_bin と同じ方式。cfg(debug_assertions) ガードのため
-    // リリース挙動・配布物・ライセンス前提は不変で、NVIDIA リリースにも影響しない。
-    #[cfg(debug_assertions)]
-    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("lemonade"));
-
-    let exe = std::env::consts::EXE_SUFFIX;
-    for dir in &search_dirs {
-        // lemond(.exe) = lemonade daemon (embeddable版のサーバー本体)
-        // lemonade-server(.exe) = 旧来のスタンドアロンサーバー (MSIインストール版)
-        for stem in &["lemonade-server", "lemond"] {
-            let path = dir.join(format!("{stem}{exe}"));
-            if path.exists() {
-                return Some(path.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
-}
-
-// バンドルされた Lemonade CLI バイナリを探す（status 取得用）
-fn find_lemonade_cli_bin(app: &AppHandle) -> Option<String> {
-    let path_api = app.path();
-    let mut search_dirs: Vec<PathBuf> = Vec::new();
-
-    if let Ok(rd) = path_api.resource_dir() {
-        search_dirs.push(rd.join("resources").join("lemonade"));
-        search_dirs.push(rd.join("lemonade"));
-    }
-
-    if let Ok(ed) = path_api.executable_dir() {
-        search_dirs.push(ed.join("resources").join("lemonade"));
-        search_dirs.push(ed.join("lemonade"));
-        search_dirs.push(ed.join("_up_").join("resources").join("lemonade"));
-        search_dirs.push(ed.join("_up_").join("lemonade"));
-    }
-
-    // dev ビルド用ソースツリー fallback（find_lemonade_bundled_bin と同じ理由・同じガード）。
-    #[cfg(debug_assertions)]
-    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("lemonade"));
-
-    let exe = std::env::consts::EXE_SUFFIX;
-    for dir in &search_dirs {
-        let path = dir.join(format!("lemonade{exe}"));
-        if path.exists() {
-            return Some(path.to_string_lossy().into_owned());
-        }
-    }
-    None
 }
 
 /// バンドルされた llama-server バイナリのパスを返す。
@@ -1448,35 +1355,9 @@ fn check_lemonade_gpu_backend_installed(app: AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// lemond の llamacpp バックエンドを ROCm に固定してよいかを判定する。
-/// 既定の `backend: "auto"` は AMD iGPU + dGPU 構成で Vulkan を選びがちで、一部の Mesa/RADV
-/// ではマルチGPU初期化でハングする（実測: CachyOS kernel 7.1.1 で E4B が "Loading model" の
-/// まま無限ループ → 校正タイムアウト）。動く ROCm があるなら rocm に固定して速い経路を使う。
-/// 条件: 同梱 rocm バックエンドが存在 ∧ AMD GPU 検出 ∧ システム ROCm にその GPU arch の
-/// rocBLAS Tensile がある（推論時の rocBLAS クラッシュを起動前に排除）。満たさなければ false
-/// （= auto のまま。挙動不変）。デバイス選択は従来どおり HIP_VISIBLE_DEVICES が担う。
-/// Linux 以外では常に false（system ROCm は /opt/rocm 前提）。NVIDIA は lemond 非経由のため、
-/// この値が config に書かれても使われない（CUDA llama-server 直起動経路）。
-#[cfg(target_os = "linux")]
-fn lemonade_should_force_rocm(app: &AppHandle) -> bool {
-    if find_lemonade_rocm_llama_server(app).is_none() {
-        return false;
-    }
-    // VRAM 最大の GPU（通常 dGPU）の arch を見て system ROCm に Tensile があるか確認する。
-    match amd_gpu_priority_list().into_iter().next() {
-        Some((_idx, gfx, _vram)) => system_rocm_tensile_has_arch(&gfx),
-        None => false,
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn lemonade_should_force_rocm(_app: &AppHandle) -> bool {
-    false
-}
-
-/// アプリ固有キャッシュの config.json に解決済みポートを書き込む。
-/// lemond は起動時にこの値を読み取るため、システムスナップ (13305) と分離される。
-fn ensure_lemonade_app_port_config(app: &AppHandle, cache_dir: &Path, port: u16) {
+/// アプリ固有キャッシュの config.json に解決済みポートを書き込む（次回起動での再利用用）。
+/// lemond 撤去後は直起動 llama-server のポート永続化のみに使う（他のキーは参照されない）。
+fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
     let config_path = cache_dir.join("config.json");
     let mut config: Value = if config_path.exists() {
         std::fs::read_to_string(&config_path)
@@ -1487,31 +1368,6 @@ fn ensure_lemonade_app_port_config(app: &AppHandle, cache_dir: &Path, port: u16)
         serde_json::json!({})
     };
     config["port"] = serde_json::json!(port);
-    // 40セグメントバッチに対応するため n_ctx を拡張する（既定 4096 では不足）。
-    // Lemonade 10.7.0 で LEMONADE_CTX_SIZE 環境変数は廃止されたため、config.json の
-    // ctx_size キーが唯一の設定手段（旧版でも config.json の ctx_size を読むため後方互換）。
-    config["ctx_size"] = serde_json::json!(16384);
-    // プライバシー: lemond の LAN ディスカバリ・ビーコン（RFC1918 ブロードキャスト）を止める。
-    // オフライン要件上、ネットワークへ自身の存在を広報しない。Lemonade 10.8.0 で追加された
-    // Cloud offload は接続先プロバイダを設定しない限り無効のため、ここでは何も登録しない。
-    config["no_broadcast"] = serde_json::json!(true);
-    // システム llama-server (Debian b8681) は ROCm/gfx1150 でクラッシュするため
-    // prefer_system=false にしてバンドル版 ROCm バイナリを優先する
-    if !config["llamacpp"].is_object() {
-        config["llamacpp"] = serde_json::json!({});
-    }
-    if let Some(obj) = config["llamacpp"].as_object_mut() {
-        obj.insert("prefer_system".to_string(), serde_json::json!(false));
-        // backend: 既定 auto は AMD マルチGPU で Vulkan を選び、RADV でハング/低速になることがある。
-        // 動く ROCm がある AMD/Linux 機では rocm に固定する。それ以外は auto のまま（無影響）。
-        // 毎起動で再適用するため、GPU 構成が変わって ROCm 不可になれば auto へ戻る。
-        let backend = if lemonade_should_force_rocm(app) {
-            "rocm"
-        } else {
-            "auto"
-        };
-        obj.insert("backend".to_string(), serde_json::json!(backend));
-    }
     if let Ok(json) = serde_json::to_string_pretty(&config) {
         let _ = std::fs::write(&config_path, json);
     }
@@ -2170,11 +2026,12 @@ fn get_lemonade_status(app: AppHandle, state: tauri::State<'_, LemonadeServer>) 
         "running".to_string()
     } else if has_process {
         "starting".to_string()
-    } else if find_lemonade_bundled_bin(&app).is_some() || find_bundled_llama_server_bin(&app).is_some() {
-        // NVIDIA 版は Lemonade を同梱せず、同梱 llama-server (CUDA) を直接起動するため、
-        // llama-server バイナリの存在も「インストール済み（起動可能）」と見なす。
-        // これにより NVIDIA で誤って "not_installed"（＝インストールボタン）にならない。
-        // AMD では find_bundled_llama_server_bin が None のため従来どおり lemonade 側で判定される。
+    } else if find_bundled_llama_server_bin(&app).is_some()
+        || find_lemonade_rocm_llama_server(&app).is_some()
+        || find_lemonade_vulkan_llama_server(&app).is_some()
+    {
+        // 起動可能な llama-server バイナリが存在すれば「インストール済み（停止中）」と見なす。
+        // NVIDIA=同梱 CUDA llama-server、AMD=取得済み ROCm/Vulkan バックエンド。
         "stopped".to_string()
     } else {
         "not_installed".to_string()
@@ -2196,71 +2053,15 @@ fn get_llm_attempted_parallel(state: tauri::State<'_, LemonadeServer>) -> u32 {
     state.parallel.load(Ordering::Relaxed).max(1) as u32
 }
 
-// LLM バックエンドが現在ロードしているデバイスを返す: gpu / cpu / unknown / stopped
+// LLM バックエンドが現在ロードしているデバイスを返す: gpu / stopped
 #[tauri::command]
-fn get_lemonade_loaded_device(app: AppHandle, state: tauri::State<'_, LemonadeServer>) -> Result<String, String> {
+fn get_lemonade_loaded_device(state: tauri::State<'_, LemonadeServer>) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
     if !lemonade_app_port_open(port) {
         return Ok("stopped".to_string());
     }
-
-    // llama-server CUDA モード: ポートが開いていれば GPU 確定
-    if state.mode.load(Ordering::Relaxed) == 1 {
-        return Ok("gpu".to_string());
-    }
-
-    let cli_path = find_lemonade_cli_bin(&app).ok_or_else(|| {
-        "Lemonade CLI が見つかりません。".to_string()
-    })?;
-
-    let mut cmd = Command::new(&cli_path);
-    apply_windows_no_window(&mut cmd);
-    let output = cmd
-        .arg("status")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Lemonade status の実行に失敗しました: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() { stderr } else { stdout };
-        return Err(if detail.is_empty() {
-            "Lemonade status の実行に失敗しました。".to_string()
-        } else {
-            format!("Lemonade status の実行に失敗しました: {detail}")
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    for line in stdout.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.len() < 4 {
-            continue;
-        }
-        for i in 0..(tokens.len() - 2) {
-            if tokens[i].eq_ignore_ascii_case("llm")
-                && tokens[i + 2].eq_ignore_ascii_case("llamacpp")
-            {
-                return Ok(tokens[i + 1].to_ascii_lowercase());
-            }
-        }
-    }
-
-    for line in stdout.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.len() < 3 {
-            continue;
-        }
-        for i in 0..(tokens.len() - 1) {
-            if tokens[i].eq_ignore_ascii_case("llm") {
-                return Ok(tokens[i + 1].to_ascii_lowercase());
-            }
-        }
-    }
-
-    Ok("unknown".to_string())
+    // 直起動の llama-server はすべて GPU 経路（CUDA / ROCm / Vulkan、mode=1）。
+    Ok("gpu".to_string())
 }
 
 /// CUDA llama-server を起動し、ポートが開く（=応答可能になる）まで待つ。OOM 検出付き。
@@ -2346,7 +2147,7 @@ async fn start_lemonade_server(
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&app, &p, rp);
+            ensure_lemonade_app_port_config(&p, rp);
             rp
         }
         None => 13306,
@@ -2543,7 +2344,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&app, &p, rp);
+            ensure_lemonade_app_port_config(&p, rp);
             rp
         }
         None => 13306,
@@ -5704,8 +5505,8 @@ fn proofread_transcription_llm_blocking_with_kind(
                     *guard = None;
                 }
             }
-            if is_lemonade && !try_stop_cuda_llama_server(&app) {
-                try_unload_lemonade_cli(lemonade_port);
+            if is_lemonade {
+                let _ = try_stop_cuda_llama_server(&app);
             }
             return Err(format!(
                 "LLM proofread sidecar の終了待機に失敗しました: {e}"
@@ -5727,8 +5528,8 @@ fn proofread_transcription_llm_blocking_with_kind(
             *guard = None;
         }
     }
-    if is_lemonade && !try_stop_cuda_llama_server(&app) {
-        try_unload_lemonade_cli(lemonade_port);
+    if is_lemonade {
+        let _ = try_stop_cuda_llama_server(&app);
     }
 
     let stdout = stdout_buf.lock().map(|v| v.clone()).unwrap_or_default();
@@ -8942,8 +8743,8 @@ fn run_overall_proofread_blocking(
                     *guard = None;
                 }
             }
-            if is_lemonade && !try_stop_cuda_llama_server(&app) {
-                try_unload_lemonade_cli(lemonade_port);
+            if is_lemonade {
+                let _ = try_stop_cuda_llama_server(&app);
             }
             return Err(format!("overall proofread sidecar の終了待機に失敗しました: {e}"));
         }
@@ -8963,8 +8764,8 @@ fn run_overall_proofread_blocking(
             *guard = None;
         }
     }
-    if is_lemonade && !try_stop_cuda_llama_server(&app) {
-        try_unload_lemonade_cli(lemonade_port);
+    if is_lemonade {
+        let _ = try_stop_cuda_llama_server(&app);
     }
 
     let stdout = stdout_buf.lock().map(|v| v.clone()).unwrap_or_default();
@@ -10126,8 +9927,6 @@ pub fn run() {
                             }
                         }
                         let lemonade_port = lemonade_port_arc.load(Ordering::Relaxed) as u16;
-                        // アプリ終了時: Lemonade モデルをアンロード（snap/bundled 共通）
-                        try_unload_lemonade_cli(lemonade_port);
                         // アプリ終了時: ローカルOpenAI互換API経由でロードしたモデルをアンロード
                         if let Ok(mut guard) = openai_unload_arc.lock() {
                             if let Some(unload_info) = guard.take() {

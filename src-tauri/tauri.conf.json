@@ -38,6 +38,7 @@
       "../python_sidecar/detect_env_cli.py",
       "../python_sidecar/download_whisper_model_cli.py",
       "../python_sidecar/download_gemma_gguf_cli.py",
+      "../python_sidecar/download_llama_backend_cli.py",
       "../python_sidecar/download_diarization_model_cli.py",
       "../python_sidecar/encrypt_office_cli.py",
       "../python_sidecar/prompt_templates",

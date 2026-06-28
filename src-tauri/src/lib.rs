@@ -2597,58 +2597,61 @@ async fn start_lemonade_server(
 #[tauri::command]
 async fn install_lemonade_backend(
     app: AppHandle,
-    state: tauri::State<'_, LemonadeServer>,
     backend: String,
 ) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
-    const ALLOWED: &[&str] = &[
-        "llamacpp:cuda",
-        "llamacpp:rocm",
-        "llamacpp:vulkan",
-        "llamacpp:cpu",
-        "whispercpp:cpu",
-        "whispercpp:vulkan",
-    ];
-    if !ALLOWED.contains(&backend.as_str()) {
-        return Err(format!("未サポートのバックエンド名です: {backend}"));
-    }
+    // backend 名 → (Python downloader の --backend 値, bin 配下のサブディレクトリ名)。
+    // 配置先は従来の lemonade バックエンドと同じく find_lemonade_{rocm,vulkan}_llama_server が
+    // 解決する rocm-stable / vulkan / cpu。lemonade CLI には依存しない（上流から直接取得）。
+    let (py_backend, subdir) = match backend.as_str() {
+        "llamacpp:rocm" => ("rocm", "rocm-stable"),
+        "llamacpp:vulkan" => ("vulkan", "vulkan"),
+        "llamacpp:cpu" => ("cpu", "cpu"),
+        other => return Err(format!("未サポートのバックエンド名です: {other}")),
+    };
 
-    let cli_path = find_lemonade_cli_bin(&app)
-        .ok_or_else(|| "Lemonade CLI が見つかりません。セットアップを実行してください。".to_string())?;
-
-    let port = state.port.load(Ordering::Relaxed) as u16;
+    let cache_dir = get_lemonade_app_cache_dir(&app)
+        .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
+    let dest = cache_dir.join("bin").join("llamacpp").join(subdir);
+    let script_path = resolve_download_llama_backend_script_path(&app)?;
+    let python_bin = get_python_bin(&app);
     let app_clone = app.clone();
     let backend_clone = backend.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = Command::new(&cli_path);
+        let mut cmd = Command::new(&python_bin);
         apply_windows_no_window(&mut cmd);
-        if port > 0 {
-            cmd.env("LEMONADE_PORT", port.to_string());
-        }
-        cmd.arg("backends").arg("install").arg(&backend_clone);
+        cmd.env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .arg(&script_path)
+            .arg("--backend")
+            .arg(py_backend)
+            .arg("--dest")
+            .arg(dest.to_string_lossy().as_ref());
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
-            .map_err(|e| format!("バックエンドインストールの起動に失敗しました: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("バックエンドダウンロードの起動に失敗しました: {e}"))?;
 
-        // stdout を行単位で読み取り、フロントエンドへ進捗を通知する
+        // stdout を行単位で読み取り、フロントエンドへ進捗を通知する（イベント名は従来どおり）。
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(msg) = line {
-                    let msg = msg.trim().to_string();
-                    if msg.is_empty() { continue; }
-                    let _ = app_clone.emit(
-                        "lemonade-backend-install-progress",
-                        serde_json::json!({"message": msg}),
-                    );
+            for line in reader.lines().map_while(Result::ok) {
+                let msg = line.trim().to_string();
+                if msg.is_empty() {
+                    continue;
                 }
+                let _ = app_clone.emit(
+                    "lemonade-backend-install-progress",
+                    serde_json::json!({"message": msg}),
+                );
             }
         }
 
-        let status = child.wait()
+        let status = child
+            .wait()
             .map_err(|e| format!("インストール完了待ちに失敗: {e}"))?;
 
         if status.success() {
@@ -9396,6 +9399,41 @@ fn resolve_download_diarization_model_script_path(app: &AppHandle) -> Result<Pat
 
     Err(format!(
         "話者分離ダウンロードスクリプトが見つかりません: {}",
+        bundled_candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<String>>()
+            .join(" / ")
+    ))
+}
+
+fn resolve_download_llama_backend_script_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let script_name = "download_llama_backend_cli.py";
+    let script_relative = PathBuf::from("python_sidecar").join(script_name);
+
+    if cfg!(debug_assertions) {
+        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(&script_relative);
+        if manifest_dev_path.exists() {
+            return Ok(manifest_dev_path);
+        }
+        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
+        let dev_path = cwd.join(&script_relative);
+        if dev_path.exists() {
+            return Ok(dev_path);
+        }
+    }
+
+    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
+    for candidate in &bundled_candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    Err(format!(
+        "llama-server バックエンドのダウンロードスクリプトが見つかりません: {}",
         bundled_candidates
             .iter()
             .map(|p| p.display().to_string())

@@ -1521,7 +1521,6 @@ fn ensure_lemonade_app_port_config(app: &AppHandle, cache_dir: &Path, port: u16)
 /// 内蔵レジストリの Gemma-4-E4B-it-GGUF は非QAT（Q4_K_M）のため、
 /// QAT 版（UD-Q4_K_XL）は user_models.json へのカスタム登録で提供する。
 const LEMONADE_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
-const LEMONADE_DEFAULT_MODEL_CHECKPOINT: &str = "unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL";
 // AMD GPU で 12B + MTP を Vulkan llama-server 直起動する際の総コンテキスト長。
 // 8GB クラスの AMD dGPU（例: RX 7600M XT, 8176MiB）でも 12B(Q4) + MTP ドラフトが
 // auto-fit で収まる安全値（実測で 8192 は VRAM 約8.0GB/8.5GB に収まり MTP も有効）。
@@ -1900,7 +1899,8 @@ fn start_amd_12b_blocking(
         }
     }
 
-    // 2) Vulkan 直起動（フォールバック）。
+    // 2) Vulkan 直起動（フォールバック）。単一GPU固定（GGML_VK_VISIBLE_DEVICES=0 = ggml 順で
+    //    最良＝dGPU）で iGPU+dGPU 同時列挙による RADV 初期化ハングを避ける。
     if let Some((bin, main_path, mtp_path, ctx_size)) = vulkan {
         let (child, oom_flag) = try_start_llama_server_vulkan(
             &bin,
@@ -1908,7 +1908,7 @@ fn start_amd_12b_blocking(
             mtp_path.as_deref(),
             resolved_port,
             ctx_size,
-            None,
+            Some(0),
         )?;
         if let Ok(mut g) = child_arc.lock() {
             *g = Some(child);
@@ -2015,34 +2015,71 @@ fn try_start_amd_e4b_rocm_direct(
     false
 }
 
-/// アプリ固有キャッシュの user_models.json に既定の E4B QAT モデルを登録する。
-/// 既に同名エントリがある場合は何もしない（ユーザーの手動編集を上書きしない）。
-/// 12B（高精度）は lemond ではなく Vulkan llama-server 直起動で動かすため、ここには登録しない。
-fn ensure_lemonade_default_model_registered(cache_dir: &Path) {
-    let path = cache_dir.join("user_models.json");
-    let mut models: Value = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
+/// AMD で E4B(標準) を Vulkan 直起動するパラメータを返す。ROCm 直起動が使えない機
+/// （Windows AMD は system ROCm ゲートが /opt/rocm 前提で常に不成立、system ROCm 無し Linux AMD 等）
+/// の受け皿。vulkan バイナリが取得済みのときだけ Some。未取得なら None → lemond へ。
+/// MTP は使わない（lemond E4B 既定と同じ挙動）。
+fn amd_e4b_vulkan_launch(app: &AppHandle) -> Option<VulkanLaunch> {
+    if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
+        return None;
+    }
+    let vk_bin = find_lemonade_vulkan_llama_server(app)?;
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
+    Some((vk_bin, main_path, None, AMD_E4B_CTX_SIZE))
+}
+
+/// E4B(標準) を Vulkan llama-server で直起動する（lemond 非経由）。**単一GPU固定**
+/// （`GGML_VK_VISIBLE_DEVICES=0` = ggml 順で最良＝dGPU）で、iGPU+dGPU 同時列挙による
+/// RADV 初期化ハング（最初の不具合と同根）を回避する。起動して resolved_port が開けば true。
+/// 失敗・OOM・即死・タイムアウトなら残骸を kill して false を返し、呼び出し側の次段
+/// （lemond）へ退避する。12B と違い失敗をエラーにしない。
+fn try_start_amd_e4b_vulkan_direct(
+    launch: VulkanLaunch,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+    resolved_port: u16,
+) -> bool {
+    let (bin, main_path, mtp_path, ctx_size) = launch;
+    let Ok((child, oom_flag)) = try_start_llama_server_vulkan(
+        &bin,
+        &main_path,
+        mtp_path.as_deref(),
+        resolved_port,
+        ctx_size,
+        Some(0),
+    ) else {
+        return false;
     };
-    if !models.is_object() {
-        models = serde_json::json!({});
+    mode_arc.store(1, Ordering::Relaxed);
+    parallel_arc.store(1, Ordering::Relaxed);
+    if let Ok(mut g) = child_arc.lock() {
+        *g = Some(child);
     }
-    if models.get(LEMONADE_DEFAULT_MODEL).is_some() {
-        return;
+    for _ in 0..240 {
+        thread::sleep(Duration::from_millis(500));
+        if lemonade_app_port_open(resolved_port) {
+            return true;
+        }
+        let child_dead = child_arc
+            .lock()
+            .ok()
+            .and_then(|mut g| {
+                g.as_mut()
+                    .map(|c| c.try_wait().map(|s| s.is_some()).unwrap_or(false))
+            })
+            .unwrap_or(false);
+        if oom_flag.load(Ordering::Relaxed) || child_dead {
+            break;
+        }
     }
-    models[LEMONADE_DEFAULT_MODEL] = serde_json::json!({
-        "checkpoints": { "main": LEMONADE_DEFAULT_MODEL_CHECKPOINT },
-        "labels": ["custom"],
-        "recipe": "llamacpp",
-        "suggested": true
-    });
-    if let Ok(json) = serde_json::to_string_pretty(&models) {
-        let _ = std::fs::write(&path, json);
+    if let Ok(mut g) = child_arc.lock() {
+        if let Some(mut c) = g.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
+    false
 }
 
 /// nvidia-smi から NVIDIA GPU 情報を取得し、VRAM 降順・compute capability 降順でソートする。
@@ -2123,183 +2160,6 @@ fn nvidia_devices_for_env() -> Vec<serde_json::Value> {
             }))
         })
         .collect()
-}
-
-/// vulkaninfo --summary から「deviceName → Vulkan デバイスインデックス」マップを構築する。
-fn vulkan_name_to_index_map() -> Option<std::collections::HashMap<String, u32>> {
-    let mut vk_cmd = Command::new("vulkaninfo");
-    apply_windows_no_window(&mut vk_cmd);
-    let output = vk_cmd.arg("--summary").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut map = std::collections::HashMap::new();
-    let mut cur_idx: Option<u32> = None;
-    for line in stdout.lines() {
-        let t = line.trim();
-        if t.starts_with("GPU") && t.ends_with(':') {
-            cur_idx = t[3..t.len() - 1].trim().parse().ok();
-        } else if let Some(idx) = cur_idx {
-            // "deviceName         = NVIDIA GeForce RTX 4060 Laptop GPU" 形式
-            if let Some(rest) = t.strip_prefix("deviceName") {
-                let name = rest
-                    .trim_start_matches(|c: char| c == '=' || c.is_whitespace())
-                    .to_string();
-                if !name.is_empty() {
-                    map.insert(name, idx);
-                    cur_idx = None;
-                }
-            }
-        }
-    }
-    if map.is_empty() {
-        None
-    } else {
-        Some(map)
-    }
-}
-
-/// 優先度の高い NVIDIA GPU 名と vulkaninfo のデバイス名を照合してインデックスを返す。
-/// 完全一致 → 上位文字列包含の順で試みる。
-fn match_nvidia_in_vulkan_map(
-    priority_list: &[(u32, String, u64, f32)],
-    vk_map: &std::collections::HashMap<String, u32>,
-) -> Option<u32> {
-    for (_, name, _, _) in priority_list {
-        // 完全一致
-        if let Some(&idx) = vk_map.get(name.as_str()) {
-            return Some(idx);
-        }
-        // 部分一致（"RTX 4060" ↔ "RTX 4060 Laptop GPU" など）
-        let nu = name.to_uppercase();
-        for (vk_name, &idx) in vk_map {
-            if !vk_name.to_uppercase().contains("NVIDIA") {
-                continue;
-            }
-            let vu = vk_name.to_uppercase();
-            if vu.contains(&nu) || nu.contains(&vu) {
-                return Some(idx);
-            }
-        }
-    }
-    None
-}
-
-/// Windows WMIC フォールバック: アダプター順から最良 NVIDIA GPU の Vulkan インデックスを推定する。
-/// nvidia-smi 優先リスト先頭の GPU 名（best_name）と WMIC 行を照合し、
-/// その GPU より前に並ぶ他 GPU 数を Vulkan インデックスとして返す。
-#[cfg(target_os = "windows")]
-fn detect_nvidia_vulkan_index_wmic(best_name: &str) -> Option<u32> {
-    let mut wmic_cmd = Command::new("wmic");
-    apply_windows_no_window(&mut wmic_cmd);
-    let output = wmic_cmd
-        .args(["path", "win32_VideoController", "get", "Name"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let names: Vec<String> = stdout
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("Name"))
-        .collect();
-
-    let best_up = best_name.to_uppercase();
-    let mut vk_idx: u32 = 0;
-    for name in &names {
-        let up = name.to_uppercase();
-        if up.contains("NVIDIA") {
-            // 優先 GPU と名前が一致するか（完全 or 包含）
-            if up.contains(&best_up) || best_up.contains(&up) {
-                return Some(vk_idx);
-            }
-        }
-        // 他のアダプター（AMD / Intel / 別 NVIDIA）はインデックスを進める
-        if up.contains("AMD") || up.contains("RADEON") || up.contains("INTEL") || up.contains("NVIDIA") {
-            vk_idx += 1;
-        }
-    }
-    None
-}
-
-/// 最優先 NVIDIA GPU（VRAM 最大 → compute capability 最大）の Vulkan デバイスインデックスを返す。
-/// 検出できない場合は None（GGML_VK_DEVICE を設定しない）。
-fn detect_nvidia_vulkan_index() -> Option<u32> {
-    let priority_list = nvidia_gpu_priority_list();
-    if priority_list.is_empty() {
-        return None;
-    }
-
-    // vulkaninfo で正確に照合
-    if let Some(vk_map) = vulkan_name_to_index_map() {
-        if let Some(idx) = match_nvidia_in_vulkan_map(&priority_list, &vk_map) {
-            return Some(idx);
-        }
-    }
-
-    // WMIC フォールバック（vulkaninfo が使えない環境向け）
-    #[cfg(target_os = "windows")]
-    {
-        let best_name = &priority_list[0].1;
-        if let Some(idx) = detect_nvidia_vulkan_index_wmic(best_name) {
-            return Some(idx);
-        }
-    }
-
-    None
-}
-
-fn try_start_lemonade_bin(bin_path: &str, cache_dir: Option<&str>, _hip_device_index: Option<i32>) -> Result<Child, String> {
-    // Tauri extracts resources without the execute bit on Linux; fix it before spawning.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(bin_path) {
-            let mode = meta.permissions().mode();
-            if mode & 0o100 == 0 {
-                let mut perms = meta.permissions();
-                perms.set_mode(mode | 0o755);
-                let _ = std::fs::set_permissions(bin_path, perms);
-            }
-        }
-    }
-    let mut cmd = Command::new(bin_path);
-    apply_windows_no_window(&mut cmd);
-    // NVIDIA Optimus 環境（AMD iGPU + NVIDIA dGPU）では Vulkan device 0 が AMD iGPU に
-    // なりがちで、共有 RAM を使うため推論が大幅に遅くなる。
-    // NVIDIA GPU の Vulkan インデックスを検出して GGML_VK_DEVICE に設定する。
-    cmd.env("DISABLE_LAYER_NV_OPTIMUS_1", "1");
-    if let Some(vk_idx) = detect_nvidia_vulkan_index() {
-        cmd.env("GGML_VK_DEVICE", vk_idx.to_string());
-    }
-    // n_ctx は config.json の ctx_size で設定する（ensure_lemonade_app_port_config が書き込む）。
-    // Lemonade 10.7.0 で LEMONADE_CTX_SIZE 環境変数は廃止されたため env では渡さない。
-    // AMD ROCm 環境: HIP_VISIBLE_DEVICES でデバイスを選択する。
-    // ROCR_VISIBLE_DEVICES は設定しない（二重フィルター問題を避けるため）。
-    #[cfg(target_os = "linux")]
-    if std::path::Path::new("/dev/kfd").exists() {
-        let idx = _hip_device_index
-            .filter(|&i| i >= 0)
-            .unwrap_or(0)
-            .to_string();
-        cmd.env("HIP_VISIBLE_DEVICES", idx);
-    }
-    // アプリ固有キャッシュディレクトリを位置引数で渡す（lemond [cache_dir] 形式）
-    if let Some(dir) = cache_dir {
-        cmd.arg(dir);
-    }
-    cmd.stdout(Stdio::null()).stderr(Stdio::null());
-    cmd.spawn()
-        .map(|child| {
-            // CUDA llama-server と同様、強制終了・クラッシュ時も lemond（と配下のバックエンド）を
-            // 確実に終了させ VRAM を解放するため kill-on-close Job に紐付ける。
-            assign_to_kill_on_close_job(&child);
-            child
-        })
-        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))
 }
 
 #[tauri::command]
@@ -2482,15 +2342,14 @@ async fn start_lemonade_server(
         _ => None,
     };
 
-    let (cache_dir_str, resolved_port) = match get_lemonade_app_cache_dir(&app) {
+    let resolved_port = match get_lemonade_app_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
             ensure_lemonade_app_port_config(&app, &p, rp);
-            ensure_lemonade_default_model_registered(&p);
-            (Some(p.to_string_lossy().into_owned()), rp)
+            rp
         }
-        None => (None, 13306),
+        None => 13306,
     };
     state.port.store(resolved_port as u32, Ordering::Relaxed);
     let child_arc = Arc::clone(&state.child);
@@ -2556,11 +2415,12 @@ async fn start_lemonade_server(
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
-        // AMD E4B(標準): ROCm が使えるなら lemond 非経由で直起動する（lemonade 撤去 Phase 1）。
-        // 直起動できない/失敗した場合のみ従来の lemond E4B 経路へフォールバック（挙動不変）。
+        // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
+        // どちらも不可ならエラー（lemond は撤去済み）。GPU ランタイム/モデルの準備を促す。
         let e4b_rocm = amd_e4b_rocm_launch(&app);
-        let bin_path = find_lemonade_bundled_bin(&app);
+        let e4b_vulkan = amd_e4b_vulkan_launch(&app);
         tauri::async_runtime::spawn_blocking(move || {
+            // 1) ROCm 直起動（最速）。
             if let Some(launch) = e4b_rocm {
                 if try_start_amd_e4b_rocm_direct(
                     launch,
@@ -2572,20 +2432,21 @@ async fn start_lemonade_server(
                     return Ok("started".to_string());
                 }
             }
-            // フォールバック: 従来の lemond E4B 経路。
-            let bin_path = bin_path.ok_or_else(|| {
-                "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
-            })?;
-            mode_arc.store(0, Ordering::Relaxed);
-            let child = try_start_lemonade_bin(&bin_path, cache_dir_str.as_deref(), hip_device_index)?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            for _ in 0..60 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
+            // 2) Vulkan 直起動（単一GPU固定）。ROCm 不可な AMD 機（Windows AMD 等）の受け皿。
+            if let Some(launch) = e4b_vulkan {
+                if try_start_amd_e4b_vulkan_direct(
+                    launch,
+                    &child_arc,
+                    &mode_arc,
+                    &parallel_arc,
+                    resolved_port,
+                ) {
                     return Ok("started".to_string());
                 }
             }
-            Err("AI校正エンジンの起動タイムアウト（30秒）".to_string())
+            // どちらも起動できなかった。
+            mode_arc.store(0, Ordering::Relaxed);
+            Err("AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -2678,15 +2539,14 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         _ => None,
     };
 
-    let (cache_dir_str, resolved_port) = match get_lemonade_app_cache_dir(&app) {
+    let resolved_port = match get_lemonade_app_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
             ensure_lemonade_app_port_config(&app, &p, rp);
-            ensure_lemonade_default_model_registered(&p);
-            (Some(p.to_string_lossy().into_owned()), rp)
+            rp
         }
-        None => (None, 13306),
+        None => 13306,
     };
     state.port.store(resolved_port as u32, Ordering::Relaxed);
     let child_arc = Arc::clone(&state.child);
@@ -2753,15 +2613,16 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
-        // AMD E4B(標準): ROCm が使えるなら lemond 非経由で直起動する（lemonade 撤去 Phase 1）。
-        // 直起動できない/失敗した場合のみ従来の lemond E4B 経路へフォールバック（挙動不変）。
+        // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
+        // どちらも不可ならエラー（lemond は撤去済み）。
         let e4b_rocm = amd_e4b_rocm_launch(&app);
-        let bin_path = find_lemonade_bundled_bin(&app);
+        let e4b_vulkan = amd_e4b_vulkan_launch(&app);
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
                 "lemonade-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
             );
+            // 1) ROCm 直起動（最速）。
             if let Some(launch) = e4b_rocm {
                 if try_start_amd_e4b_rocm_direct(
                     launch,
@@ -2773,20 +2634,21 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
                     return Ok("installed_and_started".to_string());
                 }
             }
-            // フォールバック: 従来の lemond E4B 経路。
-            let bin_path = bin_path.ok_or_else(|| {
-                "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
-            })?;
-            mode_arc.store(0, Ordering::Relaxed);
-            let child = try_start_lemonade_bin(&bin_path, cache_dir_str.as_deref(), None)?;
-            *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-            for _ in 0..60 {
-                thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
+            // 2) Vulkan 直起動（単一GPU固定）。ROCm 不可な AMD 機の受け皿。
+            if let Some(launch) = e4b_vulkan {
+                if try_start_amd_e4b_vulkan_direct(
+                    launch,
+                    &child_arc,
+                    &mode_arc,
+                    &parallel_arc,
+                    resolved_port,
+                ) {
                     return Ok("installed_and_started".to_string());
                 }
             }
-            Err("AI校正エンジンの起動タイムアウト（30秒）".to_string())
+            // どちらも起動できなかった。
+            mode_arc.store(0, Ordering::Relaxed);
+            Err("AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?

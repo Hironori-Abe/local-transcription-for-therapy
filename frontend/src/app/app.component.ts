@@ -6052,32 +6052,30 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
       // GPU バックエンドのインストール（local_gguf モードかつ未インストールの場合）
       if (this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.lemonadeBackend) {
-        // GPU 種別に応じてバックエンドを自動選択
-        const gpuBackend = this.cudaAvailable() ? 'llamacpp:vulkan'
-          : this.rocmAvailable() ? 'llamacpp:rocm'
-          : 'llamacpp:cpu';
-        const backendLabel = gpuBackend === 'llamacpp:vulkan' ? 'NVIDIA GPU (Vulkan)'
-          : gpuBackend === 'llamacpp:rocm' ? 'AMD GPU (ROCm)'
+        // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
+        // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
+        // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
+        const gpuBackends = this.cudaAvailable() ? ['llamacpp:vulkan']
+          : this.rocmAvailable() ? ['llamacpp:rocm', 'llamacpp:vulkan']
+          : ['llamacpp:cpu'];
+        const backendLabel = (b: string) => b === 'llamacpp:vulkan' ? 'Vulkan'
+          : b === 'llamacpp:rocm' ? 'AMD GPU (ROCm)'
           : 'CPU';
 
         this.setupProgressMap.update(m => ({
           ...m,
-          lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: 'lemond を起動中...' },
+          lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
         }));
         try {
           await this.startLemonade();
         } catch (e) {
           this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'error', message: 'lemond の起動に失敗しました: ' + this.normalizeErrorMessage(e) },
+            lemonade_backend: { component: 'lemonade_backend', status: 'error', message: 'AI校正エンジンの準備に失敗しました: ' + this.normalizeErrorMessage(e) },
           }));
           return;
         }
 
-        this.setupProgressMap.update(m => ({
-          ...m,
-          lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: `${backendLabel} バックエンドをダウンロード中...` },
-        }));
         const unlisten = await listen<{ message: string }>(
           'lemonade-backend-install-progress',
           (ev) => this.setupProgressMap.update(m => ({
@@ -6086,7 +6084,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           })),
         );
         try {
-          await invoke('install_lemonade_backend', { backend: gpuBackend });
+          // 主バックエンド（必須）。
+          this.setupProgressMap.update(m => ({
+            ...m,
+            lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: `${backendLabel(gpuBackends[0])} バックエンドをダウンロード中...` },
+          }));
+          await invoke('install_lemonade_backend', { backend: gpuBackends[0] });
+          // フォールバック（任意。失敗しても主経路で動くので続行する）。
+          for (const fb of gpuBackends.slice(1)) {
+            try {
+              this.setupProgressMap.update(m => ({
+                ...m,
+                lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: `${backendLabel(fb)} バックエンド（フォールバック）をダウンロード中...` },
+              }));
+              await invoke('install_lemonade_backend', { backend: fb });
+            } catch (e) {
+              console.warn(`フォールバックバックエンド ${fb} の取得に失敗しました（主経路は利用可能）:`, this.normalizeErrorMessage(e));
+            }
+          }
           this.setupProgressMap.update(m => ({
             ...m,
             lemonade_backend: { component: 'lemonade_backend', status: 'done', message: 'インストール完了' },

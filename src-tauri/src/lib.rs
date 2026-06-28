@@ -1938,6 +1938,83 @@ fn start_amd_12b_blocking(
     Err("AI校正エンジン(高精度12B)を起動できませんでした。設定で校正AIモデルを標準(E4B)に戻してください。".to_string())
 }
 
+// E4B(標準) を AMD で直起動する際の ctx。lemond が config.json に書く ctx_size と同じ 16384
+// （校正の話者別バッチ＝最大40セグメントを単一スロットで処理するため。lemond E4B も単一スロット）。
+const AMD_E4B_CTX_SIZE: u32 = 16384;
+
+/// AMD で E4B(標準) を ROCm 直起動するパラメータを返す。lemonade(lemond) 撤去の布石として、
+/// E4B も 12B と同様 lemond 非経由でローカル GGUF を直接ロードする。ROCm が確実に使える機
+/// （rocm バイナリ存在 ∧ AMD GPU 検出 ∧ system ROCm に対象 arch の rocBLAS Tensile あり）
+/// だけを対象にし、満たさなければ None → 従来の lemond E4B 経路へ（挙動完全不変）。
+/// MTP は使わない（lemond E4B 既定と同じ挙動を保つ）。Linux 以外では GPU 検出系が空を返し None。
+fn amd_e4b_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
+    if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
+        return None;
+    }
+    let rocm_bin = find_lemonade_rocm_llama_server(app)?;
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
+    let (hip_index, gfx, _vram) = amd_gpu_priority_list().into_iter().next()?;
+    if !system_rocm_tensile_has_arch(&gfx) {
+        return None;
+    }
+    Some((rocm_bin, main_path, None, AMD_E4B_CTX_SIZE, hip_index))
+}
+
+/// E4B(標準) を ROCm llama-server で直起動する（lemond 非経由）。起動して resolved_port が
+/// 開けば true（mode=1: per-job 停止・kill-on-close の対象、単一スロット）。起動失敗・即死・
+/// タイムアウトなら残骸を kill して false を返し、呼び出し側が従来の lemond 経路へ退避する。
+/// 12B と違い失敗をエラーにせず lemond へ委ねるので、ROCm 直起動が不調でも校正は止まらない。
+fn try_start_amd_e4b_rocm_direct(
+    launch: RocmLaunch,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+    resolved_port: u16,
+) -> bool {
+    let (bin, main_path, mtp_path, ctx_size, hip_index) = launch;
+    let Ok((child, fail_flag)) = try_start_llama_server_rocm(
+        &bin,
+        &main_path,
+        mtp_path.as_deref(),
+        resolved_port,
+        ctx_size,
+        Some(hip_index),
+    ) else {
+        return false;
+    };
+    mode_arc.store(1, Ordering::Relaxed);
+    parallel_arc.store(1, Ordering::Relaxed);
+    if let Ok(mut g) = child_arc.lock() {
+        *g = Some(child);
+    }
+    // E4B はロードが速い（実測 ~3秒）が、warmup 込みで余裕を見て最大 120 秒待つ。
+    for _ in 0..240 {
+        thread::sleep(Duration::from_millis(500));
+        if lemonade_app_port_open(resolved_port) {
+            return true;
+        }
+        let child_dead = child_arc
+            .lock()
+            .ok()
+            .and_then(|mut g| {
+                g.as_mut()
+                    .map(|c| c.try_wait().map(|s| s.is_some()).unwrap_or(false))
+            })
+            .unwrap_or(false);
+        if fail_flag.load(Ordering::Relaxed) || child_dead {
+            break;
+        }
+    }
+    // 失敗: 残骸を kill して呼び出し側の lemond フォールバックへ。
+    if let Ok(mut g) = child_arc.lock() {
+        if let Some(mut c) = g.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+    false
+}
+
 /// アプリ固有キャッシュの user_models.json に既定の E4B QAT モデルを登録する。
 /// 既に同名エントリがある場合は何もしない（ユーザーの手動編集を上書きしない）。
 /// 12B（高精度）は lemond ではなく Vulkan llama-server 直起動で動かすため、ここには登録しない。
@@ -2479,10 +2556,26 @@ async fn start_lemonade_server(
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
-        let bin_path = find_lemonade_bundled_bin(&app).ok_or_else(|| {
-            "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
-        })?;
+        // AMD E4B(標準): ROCm が使えるなら lemond 非経由で直起動する（lemonade 撤去 Phase 1）。
+        // 直起動できない/失敗した場合のみ従来の lemond E4B 経路へフォールバック（挙動不変）。
+        let e4b_rocm = amd_e4b_rocm_launch(&app);
+        let bin_path = find_lemonade_bundled_bin(&app);
         tauri::async_runtime::spawn_blocking(move || {
+            if let Some(launch) = e4b_rocm {
+                if try_start_amd_e4b_rocm_direct(
+                    launch,
+                    &child_arc,
+                    &mode_arc,
+                    &parallel_arc,
+                    resolved_port,
+                ) {
+                    return Ok("started".to_string());
+                }
+            }
+            // フォールバック: 従来の lemond E4B 経路。
+            let bin_path = bin_path.ok_or_else(|| {
+                "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
+            })?;
             mode_arc.store(0, Ordering::Relaxed);
             let child = try_start_lemonade_bin(&bin_path, cache_dir_str.as_deref(), hip_device_index)?;
             *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
@@ -2657,14 +2750,30 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
-        let bin_path = find_lemonade_bundled_bin(&app).ok_or_else(|| {
-            "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
-        })?;
+        // AMD E4B(標準): ROCm が使えるなら lemond 非経由で直起動する（lemonade 撤去 Phase 1）。
+        // 直起動できない/失敗した場合のみ従来の lemond E4B 経路へフォールバック（挙動不変）。
+        let e4b_rocm = amd_e4b_rocm_launch(&app);
+        let bin_path = find_lemonade_bundled_bin(&app);
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
                 "lemonade-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
             );
+            if let Some(launch) = e4b_rocm {
+                if try_start_amd_e4b_rocm_direct(
+                    launch,
+                    &child_arc,
+                    &mode_arc,
+                    &parallel_arc,
+                    resolved_port,
+                ) {
+                    return Ok("installed_and_started".to_string());
+                }
+            }
+            // フォールバック: 従来の lemond E4B 経路。
+            let bin_path = bin_path.ok_or_else(|| {
+                "AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string()
+            })?;
             mode_arc.store(0, Ordering::Relaxed);
             let child = try_start_lemonade_bin(&bin_path, cache_dir_str.as_deref(), None)?;
             *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);

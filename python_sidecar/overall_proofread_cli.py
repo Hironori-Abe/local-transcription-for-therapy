@@ -224,8 +224,8 @@ def parse_args() -> argparse.Namespace:
         "--backend", default="llama_cpp",
         choices=["llama_cpp", "llama_cpp_rocm", "lemonade", "openai_compatible"],
     )
-    parser.add_argument("--lemonade-url", default="http://localhost:13305")
-    parser.add_argument("--lemonade-model", default="gemma-4-E4B-it-qat")
+    parser.add_argument("--llm-url", default="http://localhost:13305")
+    parser.add_argument("--llm-model", default="gemma-4-E4B-it-qat")
     parser.add_argument("--openai-base-url", default="")
     parser.add_argument("--openai-model", default="")
     parser.add_argument("--n-ctx", type=int, default=16384)
@@ -525,7 +525,7 @@ def _collect_model_ids(models_data: Dict[str, Any]) -> List[str]:
     return available_ids
 
 
-def _stream_lemonade_chat(session: Any, url: str, payload: dict, idle_timeout: int) -> str:
+def _stream_llm_chat(session: Any, url: str, payload: dict, idle_timeout: int) -> str:
     payload = {**payload, "stream": True}
     full_text = ""
     bracket_depth = 0
@@ -691,7 +691,7 @@ def _run_openai_chat_batches(
         if extra_payload:
             payload.update(extra_payload)
 
-        raw_text = _stream_lemonade_chat(session, chat_url, payload, idle_timeout=idle_timeout)
+        raw_text = _stream_llm_chat(session, chat_url, payload, idle_timeout=idle_timeout)
         batch_results = extract_batch_result(raw_text, batch)
         # 共有状態の更新と累積進捗の emit は直列化する（結果は id で disjoint）
         with results_lock:
@@ -724,13 +724,13 @@ def _run_openai_chat_batches(
     return results_map
 
 
-def overall_proofread_lemonade(
-    segments: List[Dict], lemonade_url: str, lemonade_model: str,
+def overall_proofread_llm(
+    segments: List[Dict], llm_url: str, llm_model: str,
 ) -> Dict[int, Dict]:
     return _run_openai_chat_batches(
         segments=segments,
-        base_url=lemonade_url,
-        model=lemonade_model,
+        base_url=llm_url,
+        model=llm_model,
         provider_label="AI校正エンジン",
         backend_name="lemonade",
         require_model_list=True,
@@ -873,7 +873,7 @@ def main() -> int:
         emit_progress("overall_proofread", f"全体校正を開始します（セグメント数: {len(segments)}）")
 
         if args.backend == "lemonade":
-            results_map = overall_proofread_lemonade(segments, args.lemonade_url, args.lemonade_model)
+            results_map = overall_proofread_llm(segments, args.llm_url, args.llm_model)
         elif args.backend == "openai_compatible":
             results_map = overall_proofread_openai_compatible(segments, args.openai_base_url, args.openai_model)
         elif args.backend == "llama_cpp_rocm":

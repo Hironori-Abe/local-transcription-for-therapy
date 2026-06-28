@@ -18,12 +18,9 @@ LLAMA_CPP_BACKEND="${LOTT_LLAMA_CPP_BACKEND:-auto}"
 AMD_PACKAGES=0
 INSTALL_ROCM=0
 INSTALL_AMD_NPU=0
-INSTALL_LEMONADE=0
 ROCM_VERSION="${LOTT_ROCM_VERSION:-7.2}"
 PYTORCH_ROCM_INDEX_URL="${LOTT_PYTORCH_ROCM_INDEX_URL:-https://download.pytorch.org/whl/rocm7.2}"
 CTRANSLATE2_ROCM_VERSION="${CTRANSLATE2_ROCM_VERSION:-4.7.1}"
-LEMONADE_DEB_PATH="${LEMONADE_DEB_PATH:-}"
-LEMONADE_EMBEDDABLE_VERSION="${LEMONADE_EMBEDDABLE_VERSION:-10.8.0}"
 RYZEN_AI_NPU_DEB_DIR="${RYZEN_AI_NPU_DEB_DIR:-}"
 
 usage() {
@@ -39,19 +36,17 @@ Options:
   --only-rust            Only install/check Rustup/Cargo, then exit.
   --cpu-torch            Install the default PyTorch wheels instead of CUDA 12.8 wheels.
   --amd                  Prepare for AMD validation: ROCm PyTorch, Vulkan/OpenCL diagnostics,
-                         and AMD runtime env checks. llama_cpp is skipped by default because
-                         Lemonade is the preferred AMD LLM backend. Use
-                         --llama-cpp-backend=hipblas or --llama-cpp-backend=vulkan to build
-                         llama_cpp explicitly.
+                         and AMD runtime env checks. llama_cpp is skipped by default; AI
+                         proofreading uses the llama.cpp ROCm/Vulkan llama-server downloaded
+                         from the in-app setup tab. Use --llama-cpp-backend=hipblas or
+                         --llama-cpp-backend=vulkan to build llama_cpp explicitly.
   --torch-backend VALUE  Python torch backend: cuda, rocm, or cpu. Default: cuda.
   --llama-cpp-backend VALUE
                          llama-cpp-python backend: cuda, hipblas, vulkan, openblas, or none.
                          Default: auto, derived from --torch-backend.
   --install-rocm         Register the AMD ROCm apt repo and install ROCm/HIP/ML packages.
   --install-amd-npu      Install AMD XDNA NPU packages available through Ubuntu/PPA,
-                         then check XRT/FastFlowLM/Lemonade readiness.
-  --install-lemonade     Install Lemonade Server from LEMONADE_DEB_PATH if set, otherwise
-                         install the snap package when snap is available.
+                         then check XRT/FastFlowLM readiness.
   -h, --help             Show this help.
 
 Environment:
@@ -62,7 +57,6 @@ Environment:
   LOTT_ROCM_VERSION      ROCm apt repo version for --install-rocm. Default: 7.2
   LOTT_PYTORCH_ROCM_INDEX_URL
                          PyTorch ROCm wheel index. Default: rocm7.2.
-  LEMONADE_DEB_PATH      Optional local Lemonade Server .deb for --install-lemonade.
   RYZEN_AI_NPU_DEB_DIR   Optional local Ryzen AI/XRT .deb directory for --install-amd-npu.
 EOF
 }
@@ -137,10 +131,6 @@ while [[ $# -gt 0 ]]; do
     --install-amd-npu)
       AMD_PACKAGES=1
       INSTALL_AMD_NPU=1
-      shift
-      ;;
-    --install-lemonade)
-      INSTALL_LEMONADE=1
       shift
       ;;
     -h|--help)
@@ -688,37 +678,6 @@ install_amd_npu_packages() {
   configure_npu_memlock
 }
 
-install_lemonade_server() {
-  if [[ "$INSTALL_LEMONADE" != "1" ]]; then
-    return
-  fi
-
-  ensure_sudo || return
-
-  if [[ -n "$LEMONADE_DEB_PATH" ]]; then
-    if [[ -f "$LEMONADE_DEB_PATH" ]]; then
-      info "Installing Lemonade Server from local .deb: $LEMONADE_DEB_PATH"
-      if ! "${SUDO_CMD[@]}" apt-get install -y "$LEMONADE_DEB_PATH"; then
-        warn "Lemonade Server .deb installation failed."
-      fi
-      return
-    fi
-    warn "LEMONADE_DEB_PATH was set but file was not found: $LEMONADE_DEB_PATH"
-  fi
-
-  if have snap; then
-    info "Installing Lemonade Server snap..."
-    if ! "${SUDO_CMD[@]}" snap install lemonade-server; then
-      warn "Lemonade Server snap installation failed."
-      return
-    fi
-    "${SUDO_CMD[@]}" snap connect lemonade-server:process-control >/dev/null 2>&1 || true
-    warn "Snap Lemonade Server commonly listens on port 8000; LoTT currently defaults to http://localhost:13305."
-  else
-    warn "snap was not found and LEMONADE_DEB_PATH was not provided. Install Lemonade Server manually if needed."
-  fi
-}
-
 ensure_amd_group_membership() {
   if [[ "$AMD_PACKAGES" != "1" && "$INSTALL_ROCM" != "1" && "$INSTALL_AMD_NPU" != "1" ]]; then
     return
@@ -1187,123 +1146,6 @@ download_gemma_model() {
   [[ -f "$legacy_ptq_file" ]] && rm -f "$legacy_ptq_file" && info "Removed legacy PTQ model: $legacy_ptq_file"
 }
 
-check_lemonade() {
-  info "[3d/6] Lemonade backend check..."
-  local lemonade_bin=""
-
-  if have lemonade-server; then
-    lemonade_bin="$(command -v lemonade-server)"
-  elif have lemond; then
-    lemonade_bin="$(command -v lemond)"
-  elif have lemonade; then
-    lemonade_bin="$(command -v lemonade)"
-  fi
-
-  if [[ -n "$lemonade_bin" ]]; then
-    ok "Lemonade binary: $lemonade_bin"
-    if have lemonade; then
-      lemonade backends || warn "Lemonade backend enumeration failed."
-    fi
-  else
-    info "Lemonade was not found. llama_cpp backend can still be used."
-    info "Install Lemonade manually if you need the NPU/GPU backend on Linux."
-  fi
-
-  "$PYTHON_BIN" - <<'PY'
-import socket
-
-for port in (13305, 8000):
-    sock = socket.socket()
-    sock.settimeout(0.25)
-    try:
-        sock.connect(("127.0.0.1", port))
-    except OSError:
-        print(f"lemonade_port_{port}=closed")
-    else:
-        print(f"lemonade_port_{port}=open")
-    finally:
-        sock.close()
-PY
-}
-
-setup_lemonade_embeddable() {
-  local dest_dir="$ROOT_DIR/src-tauri/resources/lemonade"
-  local lemond_bin="$dest_dir/lemond"
-  local lemonade_cli="$dest_dir/lemonade"
-
-  # 両方そろっている場合のみスキップ。片方だけ（過去の中断ダウンロード）なら
-  # 再取得して修復する。lemond だけ見て skip すると、lemonade CLI 欠落のまま固定され
-  # アプリ側で「Lemonade CLI が見つかりません」になり続ける。
-  if [[ -x "$lemond_bin" && -x "$lemonade_cli" ]]; then
-    ok "Lemonade embeddable already present: $lemond_bin"
-    return
-  fi
-  if [[ -e "$lemond_bin" || -e "$lemonade_cli" ]]; then
-    warn "Lemonade embeddable is incomplete (previous download interrupted). Re-downloading lemond + lemonade."
-  fi
-
-  if ! have curl; then
-    warn "curl was not found. Cannot download Lemonade embeddable binary."
-    warn "Download manually: https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_EMBEDDABLE_VERSION}/lemonade-embeddable-${LEMONADE_EMBEDDABLE_VERSION}-ubuntu-x64.tar.gz"
-    warn "Extract lemond and lemonade to: $dest_dir/"
-    return
-  fi
-
-  local url="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_EMBEDDABLE_VERSION}/lemonade-embeddable-${LEMONADE_EMBEDDABLE_VERSION}-ubuntu-x64.tar.gz"
-  info "Downloading Lemonade embeddable v${LEMONADE_EMBEDDABLE_VERSION}..."
-
-  local tmp_tar tmp_dir
-  tmp_tar="$(mktemp --suffix=.tar.gz)"
-  tmp_dir="$(mktemp -d)"
-
-  # --retry で一過性のネットワーク中断（途中切断）に強くする。失敗時は部分ファイルを残さない。
-  if ! curl -L --fail --retry 3 --retry-delay 2 --retry-connrefused --progress-bar -o "$tmp_tar" "$url"; then
-    rm -f "$tmp_tar"
-    rmdir "$tmp_dir" 2>/dev/null || true
-    warn "Lemonade embeddable download failed."
-    warn "Download manually and extract lemond + lemonade to: $dest_dir/"
-    return
-  fi
-
-  # 途中で切れた tar.gz は展開で失敗する。部分ファイルを残さず、再実行を促す。
-  if ! tar -xzf "$tmp_tar" -C "$tmp_dir"; then
-    rm -f "$tmp_tar"
-    rm -rf "$tmp_dir"
-    warn "Failed to extract Lemonade embeddable archive (truncated download?)."
-    warn "Re-run scripts/setup-dev.sh to retry."
-    return
-  fi
-  rm -f "$tmp_tar"
-
-  local lemond_src lemonade_src
-  lemond_src="$(find "$tmp_dir" -maxdepth 3 -name "lemond" -not -name "*.sh" -type f | head -1)"
-  lemonade_src="$(find "$tmp_dir" -maxdepth 3 -name "lemonade" -not -name "*.sh" -type f | head -1)"
-
-  if [[ -f "$lemond_src" ]]; then
-    cp "$lemond_src" "$lemond_bin"
-    chmod +x "$lemond_bin"
-    ok "Installed: $lemond_bin"
-  else
-    warn "lemond binary not found in archive. Check archive structure manually."
-  fi
-
-  if [[ -f "$lemonade_src" ]]; then
-    cp "$lemonade_src" "$lemonade_cli"
-    chmod +x "$lemonade_cli"
-    ok "Installed: $lemonade_cli"
-  else
-    warn "lemonade CLI not found in archive."
-  fi
-
-  rm -rf "$tmp_dir"
-
-  # 取得後の最終確認。片方でも欠ければアプリ側で「Lemonade CLI が見つかりません」になるため明示する。
-  if [[ ! -x "$lemond_bin" || ! -x "$lemonade_cli" ]]; then
-    warn "Lemonade embeddable is still incomplete after download. AI proofreading GPU backend may be unavailable."
-    warn "Re-run scripts/setup-dev.sh, or download manually: $url"
-  fi
-}
-
 load_cargo_env() {
   if [[ -f "$HOME/.cargo/env" ]]; then
     # shellcheck disable=SC1090
@@ -1513,17 +1355,6 @@ check_amd_acceleration() {
     warn "FastFlowLM CLI was not found. Install the FLM .deb package before NPU LLM validation."
   fi
 
-  if have lemonade; then
-    lemonade backends || warn "lemonade backends failed."
-  elif have lemond; then
-    info "lemond (Lemonade daemon) is installed. Install the Lemonade CLI if you want 'lemonade backends'."
-  elif have lemonade-server; then
-    lemonade-server --help >/dev/null 2>&1 || true
-    info "lemonade-server is installed; install the Lemonade CLI too if you want 'lemonade backends'."
-  else
-    info "Lemonade CLI was not found."
-  fi
-
   info "CTranslate2 ROCm wheel status:"
   if "$PYTHON_BIN" -c "import ctranslate2; print('  ct2_version=', ctranslate2.__version__)" 2>/dev/null; then
     ok "ctranslate2 is installed (ROCm wheel expected for AMD GPU ASR)."
@@ -1572,7 +1403,7 @@ doctor_summary() {
   if [[ "$SKIP_LLAMA_CPP" == "1" || "$LLAMA_CPP_BACKEND" == "none" ]]; then
     info "llama_cpp check skipped by setup option."
   elif ! check_llama_cpp_import; then
-    warn "llama_cpp is not installed or import failed. LLM proofreading can still use Lemonade if it is available."
+    warn "llama_cpp is not installed or import failed. LLM proofreading can still use the downloaded llama.cpp ROCm/Vulkan/CUDA llama-server."
     if [[ "$LLAMA_CPP_BACKEND" == "hipblas" ]]; then
       warn "For AMD HIPBLAS, install ROCm compiler dependencies and rerun setup. Start with: sudo apt-get install -y libxml2 libxml2-dev"
       warn "If it still fails, check /tmp/lott-rocm-clang-check.log and the pip build output above."
@@ -1585,7 +1416,7 @@ print_development_reminders() {
   echo "開発時のリマインダー:"
   echo "- プライバシー最優先: 会話データ・音声データを外部 API に送信しない。"
   echo "- ネット接続は初回セットアップ、依存導入、モデル取得時のみ許可する。"
-  echo "- LLM 優先開発では、ローカル backend の llama_cpp または Lemonade を使う。"
+  echo "- LLM 校正は同梱 llama-server（CUDA）/ ダウンロードした llama.cpp ROCm・Vulkan（AMD）を使う。"
   echo "- AMD GPU: ctranslate2 ROCm ホイール (GitHub Releases) + ROCm PyTorch で faster-whisper が動作する。"
   echo "- AMD GPU ASR: ROCm 7.2 以降なら HSA_OVERRIDE_GFX_VERSION 不要。"
   echo "- AMD GPU でも --device cuda を渡す (HIP-CUDA 互換レイヤーのため)。"

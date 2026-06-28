@@ -153,18 +153,18 @@
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
             <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf' && !allSetupStatus()?.lemonadeBackend">
+            <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf' && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
-                [class.setup-comp-ok]="allSetupStatus()?.lemonadeBackend"
-                [class.setup-comp-missing]="!allSetupStatus()?.lemonadeBackend"
-                [class.setup-comp-downloading]="setupProgressMap()['lemonade_backend']?.status === 'downloading'">{{
-                setupProgressMap()['lemonade_backend']?.status === 'downloading' ? 'downloading' :
-                (allSetupStatus()?.lemonadeBackend || setupProgressMap()['lemonade_backend']?.status === 'done') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">LLM GPU バックエンド（{{ lemonadeInstallableGpuEntry()?.installKey || lemonadeTargetBackendKey() }}）</span>
+                [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
+                [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
+                [class.setup-comp-downloading]="setupProgressMap()['llm_backend']?.status === 'downloading'">{{
+                setupProgressMap()['llm_backend']?.status === 'downloading' ? 'downloading' :
+                (allSetupStatus()?.llmBackend || setupProgressMap()['llm_backend']?.status === 'done') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+              <span class="setup-comp-name">LLM GPU バックエンド（{{ llmInstallableGpuEntry()?.installKey || llmTargetBackendKey() }}）</span>
               <span class="setup-comp-progress"
-                [class.setup-comp-progress-error]="setupProgressMap()['lemonade_backend']?.status === 'error'"
-                [class.setup-comp-progress-done]="setupProgressMap()['lemonade_backend']?.status === 'done'"
-                *ngIf="setupProgressMap()['lemonade_backend'] as p">{{ p.message }}</span>
+                [class.setup-comp-progress-error]="setupProgressMap()['llm_backend']?.status === 'error'"
+                [class.setup-comp-progress-done]="setupProgressMap()['llm_backend']?.status === 'done'"
+                *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma GGUF -->
             <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf'">
@@ -679,7 +679,7 @@
                 </mat-select>
               </mat-form-field>
               <button *ngIf="isDevModeBuild && lemonadeBackendNotNeeded() && llmBackendMode() === 'local_gguf'"
-                mat-stroked-button (click)="resetLemonadeBackendNotNeeded()"
+                mat-stroked-button (click)="resetLlmBackendNotNeeded()"
                 style="font-size: 11px;"
                 matTooltip="[開発用] AMD GPUバックエンド「不要」の設定を解除します">
                 AMD GPU 再有効化
@@ -1006,11 +1006,11 @@
                 </div>
               </ng-container>
               <!-- <div class="section-separator"><span>LLM バックエンド</span></div> -->
-              <!-- 利用可能な engine/backend: 封印中（lemonadeHwInfo UIは未使用のため削除済み） -->
+              <!-- 利用可能な engine/backend: 封印中（llmHwInfo UIは未使用のため削除済み） -->
               <!-- iGPU/NPU割当スライダー: 封印中（lemonadeParallelEnabled UIは未使用のため削除済み） -->
               <!-- AI校正エンジンの状態/起動/停止/更新の行は廃止。エンジンは校正実行時に
                    オンデマンド起動し、ジョブ後に解放するため手動操作は不要。AMD/Editor の
-                   バックエンド導入はセットアップタブ（installLemonadeBackend）に集約。 -->
+                   バックエンド導入はセットアップタブ（installLlmBackend）に集約。 -->
             </ng-container>
           </mat-card-content>
         </mat-card>
@@ -1111,29 +1111,29 @@
               }}</span>
             <!-- AMD バックエンド未インストール時のダウンロードプロンプト -->
             <ng-container
-              *ngIf="lemonadeInstallableGpuEntry() && lemonadeStatus() !== 'not_installed' && lemonadeStatus() !== 'installing'">
-              <div class="lemonade-backend-setup" *ngIf="!lemonadeBackendInstalling()">
+              *ngIf="llmInstallableGpuEntry() && llmServerStatus() !== 'not_installed' && llmServerStatus() !== 'installing'">
+              <div class="lemonade-backend-setup" *ngIf="!llmBackendInstalling()">
                 <mat-icon class="material-symbols-outlined"
                   style="color: orange; vertical-align: middle; font-size: 18px;">warning</mat-icon>
-                <span>AI校正の実行には <strong>{{ lemonadeInstallableGpuEntry()?.installKey }}</strong>
+                <span>AI校正の実行には <strong>{{ llmInstallableGpuEntry()?.installKey }}</strong>
                   バックエンドのダウンロードが必要です。</span>
                 <span style="color: #888;">（インターネット接続が必要です）</span>
-                <button mat-stroked-button (click)="installLemonadeBackend()" style="margin-left: 8px;">
+                <button mat-stroked-button (click)="installLlmBackend()" style="margin-left: 8px;">
                   ダウンロードして設定
                 </button>
-                <button mat-stroked-button color="warn" (click)="dismissLemonadeBackendPrompt()"
+                <button mat-stroked-button color="warn" (click)="dismissLlmBackendPrompt()"
                   style="margin-left: 4px;" matTooltip="このメッセージを非表示にします。AMD GPUモードも無効になります。設定から再度有効化できます。">
                   不要
                 </button>
               </div>
-              <div *ngIf="lemonadeBackendInstalling()" class="copy-status">
-                {{ lemonadeBackendInstallMessage() }}
+              <div *ngIf="llmBackendInstalling()" class="copy-status">
+                {{ llmBackendInstallMessage() }}
               </div>
             </ng-container>
             <div
-              *ngIf="!lemonadeBackendInstalling() && lemonadeBackendInstallMessage() && !lemonadeInstallableGpuEntry()"
+              *ngIf="!llmBackendInstalling() && llmBackendInstallMessage() && !llmInstallableGpuEntry()"
               class="copy-status" style="color: green;">
-              {{ lemonadeBackendInstallMessage() }}
+              {{ llmBackendInstallMessage() }}
             </div>
           </div>
         </ng-container>

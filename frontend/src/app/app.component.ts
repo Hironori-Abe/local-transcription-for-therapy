@@ -216,7 +216,7 @@ interface ProofreadSegmentInput {
   words?: TranscriptionSegmentWord[];
 }
 
-interface LemonadeBackendEntry {
+interface LlmBackendEntry {
   label: string;
   state: 'installed' | 'installable' | 'update_required';
   category: 'gpu' | 'npu' | 'cpu';
@@ -422,7 +422,7 @@ interface AllSetupStatus {
   gemmaGgufExpectedPath: string;
   gemmaMtpGguf: boolean;
   gemmaMtpGgufExpectedPath: string;
-  lemonadeBackend: boolean;
+  llmBackend: boolean;
   pythonEnv: boolean;
   pythonEnvExpectedPath: string;
 }
@@ -572,16 +572,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedLlmParallel = signal<number>(0);
   readonly lemonadeUrl = signal<string>('http://localhost:13306');
   readonly lemonadeModel = signal<string>('gemma-4-E4B-it-qat');
-  readonly lemonadeStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'installing' | 'error'>('unknown');
-  readonly lemonadeInstallMessage = signal<string>('');
-  readonly lemonadeHwInfo = signal<LemonadeBackendEntry[] | null>(null);
-  readonly lemonadeLoadedDevice = signal<'unknown' | 'gpu' | 'cpu' | 'stopped' | 'error'>('unknown');
-  readonly lemonadeBackendInstalling = signal(false);
-  readonly lemonadeBackendInstallMessage = signal('');
+  readonly llmServerStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'installing' | 'error'>('unknown');
+  readonly llmInstallMessage = signal<string>('');
+  readonly llmHwInfo = signal<LlmBackendEntry[] | null>(null);
+  readonly llmLoadedDevice = signal<'unknown' | 'gpu' | 'cpu' | 'stopped' | 'error'>('unknown');
+  readonly llmBackendInstalling = signal(false);
+  readonly llmBackendInstallMessage = signal('');
   /** AMD GPUバックエンドが不要と明示されたとき true。AMD GPU オプションを無効化しプロンプトを非表示にする。 */
   readonly lemonadeBackendNotNeeded = signal(false);
   /** ファイルシステム上にLemonadeバックエンドバイナリが存在するか（bin/ディレクトリ非空チェック）。 */
-  readonly lemonadeGpuBackendInstalled = signal(false);
+  readonly llmGpuBackendInstalled = signal(false);
   readonly llmModelPath = signal<string>('');
   readonly lmstudioModelInput = signal<string>('');
   readonly ollamaModelInput = signal<string>('');
@@ -595,19 +595,19 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly activeOpenAiModelInput = computed(() =>
     this.llmBackendMode() === 'ollama' ? this.ollamaModelInput() : this.lmstudioModelInput()
   );
-  readonly lemonadeUiVisible = computed(() =>
+  readonly llmEngineUiVisible = computed(() =>
     // Editor 版は AI 校正機能を一切持たないため、Lemonade UI / 状態確認を常に抑止する。
-    // これにより refreshLemonadeUiState()・ngOnDestroy の stopLemonade・
-    // lemonadeInstallableGpuEntry など全参照箇所で Lemonade 挙動が発火しない。
+    // これにより refreshLlmUiState()・ngOnDestroy の stopLlm・
+    // llmInstallableGpuEntry など全参照箇所で Lemonade 挙動が発火しない。
     !this.editorOnlyBuild && this.llmBackendMode() === 'local_gguf'
   );
   // Lemonade が必要な場面でバックエンドバイナリが未インストールのとき非 null を返す。
   // GPU 検出結果に基づいて適切なバックエンドを自動選択する。
   // 「不要」（lemonadeBackendNotNeeded=true）が押されたときは null を返してプロンプトを抑制。
-  readonly lemonadeInstallableGpuEntry = computed<LemonadeBackendEntry | null>(() => {
-    if (!this.lemonadeUiVisible()) return null;
+  readonly llmInstallableGpuEntry = computed<LlmBackendEntry | null>(() => {
+    if (!this.llmEngineUiVisible()) return null;
     if (this.lemonadeBackendNotNeeded()) return null;
-    if (this.lemonadeGpuBackendInstalled()) return null;
+    if (this.llmGpuBackendInstalled()) return null;
     if (this.llmGpuMode() === 'cpu') {
       return { installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu' };
     }
@@ -621,7 +621,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return null;
   });
   // インストール済みかどうかに関わらず、GPU モードから期待されるバックエンドキーを返す
-  readonly lemonadeTargetBackendKey = computed(() => {
+  readonly llmTargetBackendKey = computed(() => {
     if (this.llmGpuMode() === 'cpu') return 'llamacpp:cpu';
     if (this.cudaAvailable()) return 'llamacpp:vulkan';
     if (this.rocmAvailable()) return 'llamacpp:rocm';
@@ -644,8 +644,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return '内蔵されたモデル（Gemma4 E4B）を使用します';
   });
-  readonly lemonadeLoadedDeviceText = computed(() => {
-    switch (this.lemonadeLoadedDevice()) {
+  readonly llmLoadedDeviceText = computed(() => {
+    switch (this.llmLoadedDevice()) {
       case 'gpu':
         return 'GPU';
       case 'cpu':
@@ -754,8 +754,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
   readonly isAiProofreadDisabled = computed(() => {
     if (this.llmBackendMode() === 'local_gguf') {
-      if (this.lemonadeStatus() === 'not_installed') return true;
-      if (this.llmGpuMode() === 'gpu' && this.lemonadeLoadedDevice() === 'cpu') return true;
+      if (this.llmServerStatus() === 'not_installed') return true;
+      if (this.llmGpuMode() === 'gpu' && this.llmLoadedDevice() === 'cpu') return true;
       return false;
     }
     return !this.activeOpenAiModelInput().trim();
@@ -763,7 +763,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly aiProofreadDisabledReason = computed(() => {
     if (!this.isAiProofreadDisabled()) return '';
     if (this.llmBackendMode() === 'local_gguf') {
-      if (this.llmGpuMode() === 'gpu' && this.lemonadeLoadedDevice() === 'cpu') {
+      if (this.llmGpuMode() === 'gpu' && this.llmLoadedDevice() === 'cpu') {
         return 'CPU 専用バックエンドが検出されました。設定タブから GPU バックエンドを再インストールしてください。';
       }
       return 'AI校正エンジンが未インストールです。設定タブからインストールしてください。';
@@ -930,8 +930,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const needsDia = this.transcriptionTabVisible() && !s.diarization;
     const needsGemma = this.llmBackendMode() === 'local_gguf' && !s.gemmaGguf;
     const needsGemmaMtp = this.llmBackendMode() === 'local_gguf' && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
-    const needsLemonadeBackend = this.llmBackendMode() === 'local_gguf' && !s.lemonadeBackend;
-    return needsPythonEnv || needsWhisper || needsDia || needsGemma || needsGemmaMtp || needsLemonadeBackend;
+    const needsLlmBackend = this.llmBackendMode() === 'local_gguf' && !s.llmBackend;
+    return needsPythonEnv || needsWhisper || needsDia || needsGemma || needsGemmaMtp || needsLlmBackend;
   });
   readonly transcriptionTabDisabled = computed(() => {
     if (!this.transcriptionTabVisible() || this.editorOnlyBuild) return false;
@@ -2474,8 +2474,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.parallelDiarUnlisten();
       this.parallelDiarUnlisten = null;
     }
-    if (this.lemonadeUiVisible()) {
-      this.stopLemonade();
+    if (this.llmEngineUiVisible()) {
+      this.stopLlm();
     }
     window.removeEventListener('scroll', this._overallProofreadScrollListener);
     if (this._overallProofreadScrollRaf !== null) {
@@ -3412,21 +3412,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     } else if (backend === 'lemonade') {
       // lemonade バックエンド: サーバー起動確認
-      await this.checkLemonadeStatus();
-      if (this.lemonadeStatus() !== 'running') {
-        const currentStatus = this.lemonadeStatus();
+      await this.checkLlmStatus();
+      if (this.llmServerStatus() !== 'running') {
+        const currentStatus = this.llmServerStatus();
         if (currentStatus === 'not_installed' || currentStatus === 'unknown') {
-          await this.checkLemonadeStatus();
+          await this.checkLlmStatus();
         }
-        if (this.lemonadeStatus() === 'not_installed') {
+        if (this.llmServerStatus() === 'not_installed') {
           this.llmProofreadStatus.set('AI校正エンジンが未インストールです。設定タブからインストールしてください。');
           return;
         }
         this.llmProofreadStatus.set('AI校正エンジンを起動中...');
-        await this.startLemonade();
-        if (this.lemonadeStatus() !== 'running') {
+        await this.startLlm();
+        if (this.llmServerStatus() !== 'running') {
           // 起動時にKVキャッシュ確保でVRAM不足になった場合は、並列処理数を下げて再試行を促す
-          if (await this.maybePromptLowerParallelOnOom(this.lemonadeLastError, () => this.runLlmProofread(autoMode, segments, backendOverride))) {
+          if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runLlmProofread(autoMode, segments, backendOverride))) {
             this.llmProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
           } else {
             this.llmProofreadStatus.set('AI校正エンジンの起動に失敗しました。');
@@ -3435,8 +3435,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
       }
       if (this.llmGpuMode() === 'gpu') {
-        await this.refreshLemonadeLoadedDevice();
-        if (this.lemonadeLoadedDevice() === 'cpu') {
+        await this.refreshLlmLoadedDevice();
+        if (this.llmLoadedDevice() === 'cpu') {
           const msg = 'CPU 専用バックエンドが検出されました。AI校正を中止しました。設定タブから GPU バックエンドを再インストールしてください。';
           this.llmProofreadStatus.set(msg);
           return;
@@ -3834,7 +3834,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.selectedLlmParallel.set(this.pendingVramOomTargetNp);
       this.persistLlmSettings();
       // 現行サーバーを停止し、次回起動時に新しい並列処理数を確実に反映させる
-      await this.stopLemonade();
+      await this.stopLlm();
       if (retry) {
         await retry();
       }
@@ -3900,12 +3900,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     if (backend === 'lemonade') {
-      await this.checkLemonadeStatus();
-      if (this.lemonadeStatus() !== 'running') {
+      await this.checkLlmStatus();
+      if (this.llmServerStatus() !== 'running') {
         this.overallProofreadStatus.set('AI校正エンジンを起動中...');
-        await this.startLemonade();
-        if (this.lemonadeStatus() !== 'running') {
-          if (await this.maybePromptLowerParallelOnOom(this.lemonadeLastError, () => this.runOverallProofread())) {
+        await this.startLlm();
+        if (this.llmServerStatus() !== 'running') {
+          if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runOverallProofread())) {
             this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
           } else {
             this.overallProofreadError.set('AI校正エンジンの起動に失敗しました。');
@@ -4699,7 +4699,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.appRef.tick();
     void this.initDefaultLlmModelPath();
     void this.initProofreadModelTier();
-    void this.refreshLemonadeUiState();
+    void this.refreshLlmUiState();
   }
 
   /**
@@ -4824,10 +4824,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.downloadGemma12b();
     }
     // 起動済みの校正エンジンは旧モデルを保持しているため停止し、次回校正時に新モデルで再起動させる。
-    if (this.lemonadeStatus() === 'running' || this.lemonadeStatus() === 'starting') {
-      await this.stopLemonade();
-      this.lemonadeStatus.set('stopped');
-      this.lemonadeLoadedDevice.set('stopped');
+    if (this.llmServerStatus() === 'running' || this.llmServerStatus() === 'starting') {
+      await this.stopLlm();
+      this.llmServerStatus.set('stopped');
+      this.llmLoadedDevice.set('stopped');
     }
   }
 
@@ -4913,24 +4913,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /**
    * Lemonade のバックエンド導入状況とサーバー状態を確認してUI表示を更新する。
    * pre-warm（起動直後のエンジン自動起動・モデル即ロード）は廃止し、遅延起動に統一した。
-   * エンジンは実際の校正実行時（runLlmProofread / runOverallProofread の startLemonade）に初めて起動する。
+   * エンジンは実際の校正実行時（runLlmProofread / runOverallProofread の startLlm）に初めて起動する。
    * これにより校正していない間は VRAM を保持しない（「自身が起動したモデルは終了後解放」の方針を、
    * そもそも校正前から保持しない形で徹底する）。
    */
-  private async refreshLemonadeUiState(): Promise<void> {
+  private async refreshLlmUiState(): Promise<void> {
     if (!this.isTauriRuntime()) return;
-    if (!this.lemonadeUiVisible()) return;
-    void this.checkLemonadeGpuBackendInstalled();
-    await this.checkLemonadeStatus();
+    if (!this.llmEngineUiVisible()) return;
+    void this.checkLlmGpuBackendInstalled();
+    await this.checkLlmStatus();
   }
 
-  async checkLemonadeGpuBackendInstalled(): Promise<void> {
+  async checkLlmGpuBackendInstalled(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const installed = await invoke<boolean>('check_lemonade_gpu_backend_installed');
-      this.lemonadeGpuBackendInstalled.set(installed);
+      const installed = await invoke<boolean>('check_llm_gpu_backend_installed');
+      this.llmGpuBackendInstalled.set(installed);
     } catch {
-      this.lemonadeGpuBackendInstalled.set(false);
+      this.llmGpuBackendInstalled.set(false);
     }
   }
 
@@ -5034,7 +5034,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   onLlmBackendModeChange(value: LlmBackendMode): void {
     this.llmBackendMode.set(value);
-    // llmGpuMode はリセットしない。lemonadeUiVisible() が llmBackendMode === 'local_gguf'
+    // llmGpuMode はリセットしない。llmEngineUiVisible() が llmBackendMode === 'local_gguf'
     // を参照するため、local_gguf 以外では Lemonade UI は非表示になり誤起動も発生しない。
     // リセットすると local_gguf に戻したとき amd_gpu 設定が失われ llama_cpp パスへ落ちる。
     this.localOpenAiAvailableModels.set([]);
@@ -5047,7 +5047,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistLlmSettings();
     if (value === 'local_gguf') {
       this.llmPromptType.set('gemma4');
-      void this.refreshLemonadeUiState();
+      void this.refreshLlmUiState();
     }
   }
 
@@ -5259,7 +5259,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onLlmGpuModeChange(value: LlmGpuMode): void {
     this.llmGpuMode.set(value);
     this.persistLlmSettings();
-    void this.refreshLemonadeUiState();
+    void this.refreshLlmUiState();
   }
 
   onLlmPromptTypeChange(value: LlmPromptType): void {
@@ -5270,24 +5270,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.applyOverallProofreadSystemPromptForSelectedModel();
   }
 
-  async checkLemonadeStatus(): Promise<void> {
+  async checkLlmStatus(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const status = await invoke<string>('get_lemonade_status');
-      this.lemonadeStatus.set(status as 'running' | 'stopped' | 'starting' | 'not_installed');
+      const status = await invoke<string>('get_llm_server_status');
+      this.llmServerStatus.set(status as 'running' | 'stopped' | 'starting' | 'not_installed');
       if (status === 'running') {
-        void this.refreshLemonadeLoadedDevice();
+        void this.refreshLlmLoadedDevice();
       } else if (status === 'stopped' || status === 'not_installed') {
-        this.lemonadeLoadedDevice.set('stopped');
+        this.llmLoadedDevice.set('stopped');
       }
     } catch {
-      this.lemonadeStatus.set('error');
-      this.lemonadeLoadedDevice.set('error');
+      this.llmServerStatus.set('error');
+      this.llmLoadedDevice.set('error');
     }
   }
 
-  /** start_lemonade_server の直近のエラーメッセージ。VRAM不足判定（OOMマーカー含む）に使う。 */
-  private lemonadeLastError = '';
+  /** start_llm_server の直近のエラーメッセージ。VRAM不足判定（OOMマーカー含む）に使う。 */
+  private llmLastError = '';
   /** VRAM不足ダイアログで「下げて再実行」が承認されたときに呼ぶ再試行コールバック。 */
   private pendingVramOomRetry: (() => Promise<void>) | null = null;
   /** VRAM不足ダイアログ承認時に設定する並列処理数（段階的: 24→20→16→12→8→4→2→1）。 */
@@ -5340,45 +5340,45 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return true;
   }
 
-  async startLemonade(silent = false): Promise<void> {
+  async startLlm(silent = false): Promise<void> {
     if (!this.isTauriRuntime()) return;
-    this.lemonadeLastError = '';
-    this.lemonadeStatus.set('starting');
+    this.llmLastError = '';
+    this.llmServerStatus.set('starting');
     try {
       const llmDevIdx = this.selectedLlmHipDeviceIndex();
       const llmPar = this.selectedLlmParallel();
       const llmCtxVal = this.llmNCtx();
-      await invoke('start_lemonade_server', {
+      await invoke('start_llm_server', {
         hipDeviceIndex: llmDevIdx >= 0 ? llmDevIdx : null,
         llmParallel: llmPar > 0 ? llmPar : null,
         llmCtx: llmCtxVal > 0 ? llmCtxVal : null
       });
-      this.lemonadeStatus.set('running');
-      await this.syncLemonadeUrl();
-      void this.fetchLemonadeSystemInfo();
-      void this.refreshLemonadeLoadedDevice();
+      this.llmServerStatus.set('running');
+      await this.syncLlmUrl();
+      void this.fetchLlmSystemInfo();
+      void this.refreshLlmLoadedDevice();
     } catch (e) {
-      this.lemonadeLastError = this.normalizeErrorMessage(e);
+      this.llmLastError = this.normalizeErrorMessage(e);
       // silent=true の自動起動は、GPUランタイムやモデルが未整備のフレッシュインストール直後に
       // 高確率で「想定内」の失敗をする。その失敗を文字起こしタブの赤字エラーに昇格させず、
       // 停止状態に戻すだけにする（手動起動・校正実行など明示操作の経路は従来どおり赤字表示）。
       if (silent) {
-        this.lemonadeStatus.set('stopped');
-        this.lemonadeLoadedDevice.set('stopped');
+        this.llmServerStatus.set('stopped');
+        this.llmLoadedDevice.set('stopped');
         console.warn('AI校正エンジンの自動起動を見送りました:', this.normalizeErrorMessage(e));
       } else {
-        this.lemonadeStatus.set('error');
-        this.lemonadeLoadedDevice.set('error');
+        this.llmServerStatus.set('error');
+        this.llmLoadedDevice.set('error');
         this.error.set(this.normalizeErrorMessage(e));
       }
     }
   }
 
   /** lemond が実際に listen しているポートを取得し、loopback URL であれば lemonadeUrl を同期する。 */
-  private async syncLemonadeUrl(): Promise<void> {
+  private async syncLlmUrl(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const port = await invoke<number>('get_lemonade_app_port');
+      const port = await invoke<number>('get_llm_server_port');
       if (port > 0) {
         const current = this.lemonadeUrl();
         // ユーザーが loopback 以外のカスタム URL を設定している場合は上書きしない
@@ -5393,91 +5393,91 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch { }
   }
 
-  async stopLemonade(): Promise<void> {
+  async stopLlm(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      await invoke('stop_lemonade_server');
-      this.lemonadeStatus.set('stopped');
-      this.lemonadeHwInfo.set(null);
-      this.lemonadeLoadedDevice.set('stopped');
+      await invoke('stop_llm_server');
+      this.llmServerStatus.set('stopped');
+      this.llmHwInfo.set(null);
+      this.llmLoadedDevice.set('stopped');
     } catch { }
   }
 
-  private async refreshLemonadeLoadedDevice(): Promise<void> {
+  private async refreshLlmLoadedDevice(): Promise<void> {
     if (!this.isTauriRuntime()) return;
-    if (this.lemonadeStatus() !== 'running') {
-      this.lemonadeLoadedDevice.set('stopped');
+    if (this.llmServerStatus() !== 'running') {
+      this.llmLoadedDevice.set('stopped');
       return;
     }
     try {
-      const device = await invoke<string>('get_lemonade_loaded_device');
+      const device = await invoke<string>('get_llm_loaded_device');
       const normalized = (device ?? '').trim().toLowerCase();
       if (normalized === 'gpu' || normalized === 'cpu' || normalized === 'stopped') {
-        this.lemonadeLoadedDevice.set(normalized);
+        this.llmLoadedDevice.set(normalized);
       } else {
-        this.lemonadeLoadedDevice.set('unknown');
+        this.llmLoadedDevice.set('unknown');
       }
     } catch {
-      this.lemonadeLoadedDevice.set('error');
+      this.llmLoadedDevice.set('error');
     }
   }
 
-  async installLemonade(): Promise<void> {
+  async installLlmEngine(): Promise<void> {
     if (!this.isTauriRuntime()) return;
-    this.lemonadeStatus.set('installing');
-    this.lemonadeInstallMessage.set('AI校正エンジンを起動中...');
+    this.llmServerStatus.set('installing');
+    this.llmInstallMessage.set('AI校正エンジンを起動中...');
     const unlisten = await listen<{ stage: string; message: string }>(
-      'lemonade-install-progress',
-      (event) => this.lemonadeInstallMessage.set(event.payload.message),
+      'llm-install-progress',
+      (event) => this.llmInstallMessage.set(event.payload.message),
     );
     try {
-      await invoke('install_lemonade');
-      this.lemonadeStatus.set('running');
-      this.lemonadeInstallMessage.set('');
-      void this.fetchLemonadeSystemInfo();
+      await invoke('install_llm_engine');
+      this.llmServerStatus.set('running');
+      this.llmInstallMessage.set('');
+      void this.fetchLlmSystemInfo();
     } catch (e) {
-      this.lemonadeStatus.set('error');
+      this.llmServerStatus.set('error');
       this.error.set(this.normalizeErrorMessage(e));
     } finally {
       unlisten();
     }
   }
 
-  async installLemonadeBackend(): Promise<void> {
-    const entry = this.lemonadeInstallableGpuEntry();
+  async installLlmBackend(): Promise<void> {
+    const entry = this.llmInstallableGpuEntry();
     if (!entry || !this.isTauriRuntime()) return;
-    this.lemonadeBackendInstalling.set(true);
-    this.lemonadeBackendInstallMessage.set(`${entry.installKey} をダウンロード中... しばらくお待ちください`);
+    this.llmBackendInstalling.set(true);
+    this.llmBackendInstallMessage.set(`${entry.installKey} をダウンロード中... しばらくお待ちください`);
     const unlisten = await listen<{ message: string }>(
-      'lemonade-backend-install-progress',
-      (ev) => this.lemonadeBackendInstallMessage.set(ev.payload.message),
+      'llm-backend-install-progress',
+      (ev) => this.llmBackendInstallMessage.set(ev.payload.message),
     );
     try {
-      await invoke('install_lemonade_backend', { backend: entry.installKey });
-      this.lemonadeBackendInstallMessage.set(`${entry.installKey} のインストールが完了しました`);
-      await this.checkLemonadeGpuBackendInstalled();
-      await this.fetchLemonadeSystemInfo();
+      await invoke('install_llm_backend', { backend: entry.installKey });
+      this.llmBackendInstallMessage.set(`${entry.installKey} のインストールが完了しました`);
+      await this.checkLlmGpuBackendInstalled();
+      await this.fetchLlmSystemInfo();
     } catch (e) {
-      this.lemonadeBackendInstallMessage.set(this.normalizeErrorMessage(e));
+      this.llmBackendInstallMessage.set(this.normalizeErrorMessage(e));
     } finally {
-      this.lemonadeBackendInstalling.set(false);
+      this.llmBackendInstalling.set(false);
       unlisten();
     }
   }
 
   /** [開発環境のみ] 「不要」設定を解除してAMD GPUモードを再度有効化する。 */
-  resetLemonadeBackendNotNeeded(): void {
+  resetLlmBackendNotNeeded(): void {
     this.lemonadeBackendNotNeeded.set(false);
     this.persistLlmSettings();
   }
 
   /** 「不要」ボタン押下時: GPU バックエンドプロンプトを永続的に非表示にする。 */
-  dismissLemonadeBackendPrompt(): void {
+  dismissLlmBackendPrompt(): void {
     this.lemonadeBackendNotNeeded.set(true);
     this.persistLlmSettings();
   }
 
-  async fetchLemonadeSystemInfo(): Promise<void> {
+  async fetchLlmSystemInfo(): Promise<void> {
     const LLM_RECIPES: Record<string, string> = {
       llamacpp: 'LlamaCPP',
       flm: 'FLM',
@@ -5493,7 +5493,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     try {
       const res = await fetch(`${this.lemonadeUrl()}/v1/system-info`);
-      if (!res.ok) { this.lemonadeHwInfo.set(null); return; }
+      if (!res.ok) { this.llmHwInfo.set(null); return; }
       const data = await res.json();
       const recipes = data?.recipes ?? {};
 
@@ -5513,7 +5513,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         return '';
       };
 
-      const entries: LemonadeBackendEntry[] = [];
+      const entries: LlmBackendEntry[] = [];
 
       for (const [recipeKey, engineName] of Object.entries(LLM_RECIPES)) {
         const recipeData = recipes[recipeKey] as any;
@@ -5540,7 +5540,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             category = isGpu ? 'gpu' : 'cpu';
           }
           const installKey = backendKey === 'default' ? recipeKey : `${recipeKey}:${backendKey}`;
-          entries.push({ label, state: state as LemonadeBackendEntry['state'], category, installKey });
+          entries.push({ label, state: state as LlmBackendEntry['state'], category, installKey });
         }
       }
 
@@ -5549,10 +5549,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         return sd !== 0 ? sd : (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
       });
       // console.log('[Lemonade] systemInfo entries:', entries.length, entries.map(e => `${e.installKey}=${e.state}`));
-      this.lemonadeHwInfo.set(entries.length > 0 ? entries : null);
+      this.llmHwInfo.set(entries.length > 0 ? entries : null);
     } catch (e) {
-      // console.warn('[Lemonade] fetchLemonadeSystemInfo error:', e);
-      this.lemonadeHwInfo.set(null);
+      // console.warn('[Lemonade] fetchLlmSystemInfo error:', e);
+      this.llmHwInfo.set(null);
     }
   }
 
@@ -5945,11 +5945,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         gemmaGgufExpectedPath: '',
         gemmaMtpGguf: true,
         gemmaMtpGgufExpectedPath: '',
-        lemonadeBackend: true,
+        llmBackend: true,
         pythonEnv: true,
         pythonEnvExpectedPath: '',
       });
-      this.lemonadeGpuBackendInstalled.set(true);
+      this.llmGpuBackendInstalled.set(true);
       this.allSetupChecked.set(true);
       this.diarizationModelChecked.set(true);
       this.diarizationModelExists.set(true);
@@ -5961,7 +5961,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const status = await invoke<AllSetupStatus>('check_all_setup_status');
       this.ngZone.run(() => {
         this.allSetupStatus.set(status);
-        this.lemonadeGpuBackendInstalled.set(status.lemonadeBackend);
+        this.llmGpuBackendInstalled.set(status.llmBackend);
         this.diarizationModelExists.set(status.diarization);
         this.diarizationModelHasConfig.set(status.diarization);
         this.diarizationModelExpectedPath.set(status.diarizationExpectedPath);
@@ -6051,7 +6051,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       });
 
       // GPU バックエンドのインストール（local_gguf モードかつ未インストールの場合）
-      if (this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.lemonadeBackend) {
+      if (this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.llmBackend) {
         // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
         // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
@@ -6064,52 +6064,52 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
         this.setupProgressMap.update(m => ({
           ...m,
-          lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
+          llm_backend: { component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
         }));
         try {
-          await this.startLemonade();
+          await this.startLlm();
         } catch (e) {
           this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'error', message: 'AI校正エンジンの準備に失敗しました: ' + this.normalizeErrorMessage(e) },
+            llm_backend: { component: 'llm_backend', status: 'error', message: 'AI校正エンジンの準備に失敗しました: ' + this.normalizeErrorMessage(e) },
           }));
           return;
         }
 
         const unlisten = await listen<{ message: string }>(
-          'lemonade-backend-install-progress',
+          'llm-backend-install-progress',
           (ev) => this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: ev.payload.message },
+            llm_backend: { component: 'llm_backend', status: 'downloading', message: ev.payload.message },
           })),
         );
         try {
           // 主バックエンド（必須）。
           this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: `${backendLabel(gpuBackends[0])} バックエンドをダウンロード中...` },
+            llm_backend: { component: 'llm_backend', status: 'downloading', message: `${backendLabel(gpuBackends[0])} バックエンドをダウンロード中...` },
           }));
-          await invoke('install_lemonade_backend', { backend: gpuBackends[0] });
+          await invoke('install_llm_backend', { backend: gpuBackends[0] });
           // フォールバック（任意。失敗しても主経路で動くので続行する）。
           for (const fb of gpuBackends.slice(1)) {
             try {
               this.setupProgressMap.update(m => ({
                 ...m,
-                lemonade_backend: { component: 'lemonade_backend', status: 'downloading', message: `${backendLabel(fb)} バックエンド（フォールバック）をダウンロード中...` },
+                llm_backend: { component: 'llm_backend', status: 'downloading', message: `${backendLabel(fb)} バックエンド（フォールバック）をダウンロード中...` },
               }));
-              await invoke('install_lemonade_backend', { backend: fb });
+              await invoke('install_llm_backend', { backend: fb });
             } catch (e) {
               console.warn(`フォールバックバックエンド ${fb} の取得に失敗しました（主経路は利用可能）:`, this.normalizeErrorMessage(e));
             }
           }
           this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'done', message: 'インストール完了' },
+            llm_backend: { component: 'llm_backend', status: 'done', message: 'インストール完了' },
           }));
         } catch (e) {
           this.setupProgressMap.update(m => ({
             ...m,
-            lemonade_backend: { component: 'lemonade_backend', status: 'error', message: this.normalizeErrorMessage(e) },
+            llm_backend: { component: 'llm_backend', status: 'error', message: this.normalizeErrorMessage(e) },
           }));
         } finally {
           unlisten();
@@ -6354,10 +6354,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               this.llmProofreadStatus.set(`校正中: ${displayCurrent} / ${displayTotal} 行`);
             }
             return;
-          } else if (stage === 'lemonade_batch_debug') {
+          } else if (stage === 'llm_batch_debug') {
             // console.log('[Lemonade][BATCH DEBUG]', payload);
             return;
-          } else if (stage === 'lemonade_batch_raw_preview') {
+          } else if (stage === 'llm_batch_raw_preview') {
             // console.warn('[Lemonade][BATCH RAW PREVIEW]', payload);
             return;
           } else if (stage === 'llm_batch_debug') {

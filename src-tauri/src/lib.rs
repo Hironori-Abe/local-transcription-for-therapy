@@ -22,11 +22,11 @@ use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-struct LemonadeServer {
+struct LlmServer {
     child: Arc<Mutex<Option<Child>>>,
     /// 実際にサーバーが listen しているポート番号。0 は未解決。
     port: Arc<AtomicU32>,
-    /// 起動中のバックエンドモード: 0=lemonade(lemond), 1=llama_server_cuda
+    /// 起動状態: 0=停止/未起動、1=自前起動した llama-server（CUDA/ROCm/Vulkan 直起動）が稼働中
     mode: Arc<AtomicU8>,
     /// CUDA llama-server 起動時に決めた並列スロット数 (-np)。
     /// 校正サイドカーの --parallel をこれと一致させ、継続バッチングの同時送信数を揃える。
@@ -98,7 +98,7 @@ fn debounce_dev_window_focus(app: AppHandle) -> bool {
 }
 
 /// アプリ固有の lemond が listen しているかを確認する。port=0 は常に false。
-fn lemonade_app_port_open(port: u16) -> bool {
+fn llm_server_port_open(port: u16) -> bool {
     if port == 0 {
         return false;
     }
@@ -111,7 +111,7 @@ fn lemonade_app_port_open(port: u16) -> bool {
 
 /// アプリ固有 lemond に割り当てるポートを決定する。
 /// 優先順: 既存 config.json のポート（空きなら再利用）→ OS が割り当てた空きポート。
-fn resolve_lemonade_port(cache_dir: &Path) -> u16 {
+fn resolve_llm_server_port(cache_dir: &Path) -> u16 {
     // 既存の config.json からポートを読み取る
     let config_path = cache_dir.join("config.json");
     if let Ok(s) = std::fs::read_to_string(&config_path) {
@@ -119,7 +119,7 @@ fn resolve_lemonade_port(cache_dir: &Path) -> u16 {
             if let Some(p) = v["port"].as_u64().filter(|&p| p > 1024 && p < 65535) {
                 let port = p as u16;
                 // そのポートが空いていれば再利用（再起動時の安定性）
-                if !lemonade_app_port_open(port) {
+                if !llm_server_port_open(port) {
                     return port;
                 }
             }
@@ -623,7 +623,7 @@ fn prepare_openai_unload_info(
 }
 
 /// アンロードリクエストを送信する（失敗しても無視）。
-fn try_unload_openai_model(unload: &OpenAiUnloadTarget, _lemonade_port: u16) {
+fn try_unload_openai_model(unload: &OpenAiUnloadTarget, _llm_port: u16) {
     let target = unload.as_http_target();
     match unload.server_type.as_str() {
         "ollama" => {
@@ -796,12 +796,12 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     None
 }
 
-/// lemond が `lemonade backends install llamacpp:vulkan` で取得した Vulkan ビルドの
+/// `download_llama_backend_cli.py --backend vulkan` で取得した Vulkan ビルドの
 /// llama-server バイナリを探す（`~/.cache/{app-id}/lemonade/bin/llamacpp/vulkan/llama-server`）。
 /// AMD で 12B + MTP を直起動するために使う。rocm-stable ビルドは古くドラフトの
 /// `gemma4-assistant` を認識できないため、MTP には新しい Vulkan ビルドを用いる。
-fn find_lemonade_vulkan_llama_server(app: &AppHandle) -> Option<String> {
-    let cache = get_lemonade_app_cache_dir(app)?;
+fn find_llm_vulkan_llama_server(app: &AppHandle) -> Option<String> {
+    let cache = get_llm_engine_cache_dir(app)?;
     let exe = std::env::consts::EXE_SUFFIX;
     let path = cache
         .join("bin")
@@ -815,10 +815,10 @@ fn find_lemonade_vulkan_llama_server(app: &AppHandle) -> Option<String> {
     }
 }
 
-/// lemond がダウンロードした ROCm ビルドの llama-server を返す（Vulkan 版の対）。
+/// `download_llama_backend_cli.py --backend rocm` で取得した ROCm ビルドの llama-server を返す（Vulkan 版の対）。
 /// AMD の 12B + MTP 高速経路で使う。
-fn find_lemonade_rocm_llama_server(app: &AppHandle) -> Option<String> {
-    let cache = get_lemonade_app_cache_dir(app)?;
+fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
+    let cache = get_llm_engine_cache_dir(app)?;
     let exe = std::env::consts::EXE_SUFFIX;
     let path = cache
         .join("bin")
@@ -1315,7 +1315,7 @@ fn assign_to_kill_on_close_job(_child: &Child) {}
 /// 「自分でVRAMにロードしたものは完了時にアンロードする」方針に合わせ、AI校正完了後に呼ぶ。
 /// 停止したら true。mode!=1（lemond 等）なら何もせず false を返す。
 fn try_stop_cuda_llama_server(app: &AppHandle) -> bool {
-    let state = app.state::<LemonadeServer>();
+    let state = app.state::<LlmServer>();
     if state.mode.load(Ordering::Relaxed) != 1 {
         return false;
     }
@@ -1325,28 +1325,28 @@ fn try_stop_cuda_llama_server(app: &AppHandle) -> bool {
             let _ = child.wait();
         }
     }
-    // ポートが閉じ、次回の start_lemonade_server で再検出・再起動される
+    // ポートが閉じ、次回の start_llm_server で再検出・再起動される
     state.mode.store(0, Ordering::Relaxed);
     true
 }
 
-/// アプリ固有の Lemonade キャッシュディレクトリを返す。
+/// LLM エンジン用のアプリ固有キャッシュディレクトリを返す（dir 名は後方互換で `lemonade`）。
 /// lemond に位置引数として渡すことで、バックエンドバイナリや config.json を
 /// アプリ固有の場所（~/.cache/{app-id}/lemonade/）に格納する。
-fn get_lemonade_app_cache_dir(app: &AppHandle) -> Option<PathBuf> {
+fn get_llm_engine_cache_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_cache_dir().ok().map(|d| d.join("lemonade"))
 }
 
 #[tauri::command]
-fn check_lemonade_gpu_backend_installed(app: AppHandle) -> bool {
+fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
     // llama-server CUDA バイナリが存在する場合もバックエンドインストール済みと見なす
     if find_bundled_llama_server_bin(&app).is_some() {
         return true;
     }
-    let Some(lemonade_dir) = get_lemonade_app_cache_dir(&app) else {
+    let Some(llm_dir) = get_llm_engine_cache_dir(&app) else {
         return false;
     };
-    let bin_dir = lemonade_dir.join("bin");
+    let bin_dir = llm_dir.join("bin");
     if !bin_dir.exists() {
         return false;
     }
@@ -1357,7 +1357,7 @@ fn check_lemonade_gpu_backend_installed(app: AppHandle) -> bool {
 
 /// アプリ固有キャッシュの config.json に解決済みポートを書き込む（次回起動での再利用用）。
 /// lemond 撤去後は直起動 llama-server のポート永続化のみに使う（他のキーは参照されない）。
-fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
+fn ensure_llm_server_port_config(cache_dir: &Path, port: u16) {
     let config_path = cache_dir.join("config.json");
     let mut config: Value = if config_path.exists() {
         std::fs::read_to_string(&config_path)
@@ -1373,10 +1373,10 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
     }
 }
 
-/// Lemonade 経路の既定校正モデル（Gemma 4 E4B QAT）。
+/// 同梱 llama-server 経路の既定校正モデル（Gemma 4 E4B QAT）。
 /// 内蔵レジストリの Gemma-4-E4B-it-GGUF は非QAT（Q4_K_M）のため、
 /// QAT 版（UD-Q4_K_XL）は user_models.json へのカスタム登録で提供する。
-const LEMONADE_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
+const LLM_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
 // AMD GPU で 12B + MTP を Vulkan llama-server 直起動する際の総コンテキスト長。
 // 8GB クラスの AMD dGPU（例: RX 7600M XT, 8176MiB）でも 12B(Q4) + MTP ドラフトが
 // auto-fit で収まる安全値（実測で 8192 は VRAM 約8.0GB/8.5GB に収まり MTP も有効）。
@@ -1388,8 +1388,8 @@ const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-E4B-it.gguf";
 const GEMMA_MTP_BF16_GGUF_FILENAME: &str = "gemma-4-E4B-it-BF16-MTP.gguf";
 
-// 上位（高精度）モデル: Gemma 4 12B QAT + MTP。NVIDIA/CUDA 同梱 llama-server 経路でのみ提供し、
-// large-v3 と同じく後からダウンロードする（AMD/Lemonade 経路には MTP が未配線のため対象外）。
+// 上位（高精度）モデル: Gemma 4 12B QAT + MTP。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan
+// フォールバックの llama-server 直起動経路で提供し、large-v3 と同じく後からダウンロードする。
 const GEMMA_12B_LLM_MODEL_DIR: &str = "gemma-4-12b-it";
 const GEMMA_12B_MAIN_GGUF_FILENAME: &str = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_12B_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-12B-it.gguf";
@@ -1553,7 +1553,7 @@ fn amd_vulkan_12b_launch(app: &AppHandle) -> Option<(String, String, Option<Stri
     if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
         return None;
     }
-    let vk_bin = find_lemonade_vulkan_llama_server(app)?;
+    let vk_bin = find_llm_vulkan_llama_server(app)?;
     let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::B12)?;
     // MTP ドラフトは任意。新しい Vulkan ビルドのみがドラフトの arch を解釈できるが、
     // ビルド世代の検出はコスト高なので、ドラフトがあれば渡し、ロードに失敗したら
@@ -1666,7 +1666,7 @@ fn amd_rocm_12b_launch(app: &AppHandle) -> Option<RocmLaunch> {
     if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
         return None;
     }
-    let rocm_bin = find_lemonade_rocm_llama_server(app)?;
+    let rocm_bin = find_llm_rocm_llama_server(app)?;
     if !rocm_build_supports_gemma4_assistant(&rocm_bin) {
         return None;
     }
@@ -1692,7 +1692,7 @@ fn amd_12b_launch_plan(app: &AppHandle) -> Option<(Option<RocmLaunch>, Option<Vu
 }
 
 /// AMD 12B 起動の共通処理（ROCm 優先 → 起動失敗時 Vulkan フォールバック）。
-/// start_lemonade_server / install_lemonade の spawn_blocking 内から呼ぶ。
+/// start_llm_server / install_llm_engine の spawn_blocking 内から呼ぶ。
 /// `success_msg` は成功時の戻り文字列（"started" / "installed_and_started"）。
 /// 成功すれば mode=1（per-job 停止・kill-on-close の対象）を保つ。
 #[allow(clippy::too_many_arguments)]
@@ -1726,7 +1726,7 @@ fn start_amd_12b_blocking(
             let mut started = false;
             for _ in 0..240 {
                 thread::sleep(Duration::from_millis(500));
-                if lemonade_app_port_open(resolved_port) {
+                if llm_server_port_open(resolved_port) {
                     started = true;
                     break;
                 }
@@ -1771,7 +1771,7 @@ fn start_amd_12b_blocking(
         }
         for _ in 0..240 {
             thread::sleep(Duration::from_millis(500));
-            if lemonade_app_port_open(resolved_port) {
+            if llm_server_port_open(resolved_port) {
                 return Ok(success_msg.to_string());
             }
             if oom_flag.load(Ordering::Relaxed) {
@@ -1807,7 +1807,7 @@ fn amd_e4b_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
     if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
         return None;
     }
-    let rocm_bin = find_lemonade_rocm_llama_server(app)?;
+    let rocm_bin = find_llm_rocm_llama_server(app)?;
     let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
     let (hip_index, gfx, _vram) = amd_gpu_priority_list().into_iter().next()?;
     if !system_rocm_tensile_has_arch(&gfx) {
@@ -1846,7 +1846,7 @@ fn try_start_amd_e4b_rocm_direct(
     // E4B はロードが速い（実測 ~3秒）が、warmup 込みで余裕を見て最大 120 秒待つ。
     for _ in 0..240 {
         thread::sleep(Duration::from_millis(500));
-        if lemonade_app_port_open(resolved_port) {
+        if llm_server_port_open(resolved_port) {
             return true;
         }
         let child_dead = child_arc
@@ -1879,7 +1879,7 @@ fn amd_e4b_vulkan_launch(app: &AppHandle) -> Option<VulkanLaunch> {
     if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
         return None;
     }
-    let vk_bin = find_lemonade_vulkan_llama_server(app)?;
+    let vk_bin = find_llm_vulkan_llama_server(app)?;
     let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
     Some((vk_bin, main_path, None, AMD_E4B_CTX_SIZE))
 }
@@ -1914,7 +1914,7 @@ fn try_start_amd_e4b_vulkan_direct(
     }
     for _ in 0..240 {
         thread::sleep(Duration::from_millis(500));
-        if lemonade_app_port_open(resolved_port) {
+        if llm_server_port_open(resolved_port) {
             return true;
         }
         let child_dead = child_arc
@@ -2019,16 +2019,16 @@ fn nvidia_devices_for_env() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
-fn get_lemonade_status(app: AppHandle, state: tauri::State<'_, LemonadeServer>) -> String {
+fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> String {
     let port = state.port.load(Ordering::Relaxed) as u16;
     let has_process = state.child.lock().map(|g| g.is_some()).unwrap_or(false);
-    if lemonade_app_port_open(port) {
+    if llm_server_port_open(port) {
         "running".to_string()
     } else if has_process {
         "starting".to_string()
     } else if find_bundled_llama_server_bin(&app).is_some()
-        || find_lemonade_rocm_llama_server(&app).is_some()
-        || find_lemonade_vulkan_llama_server(&app).is_some()
+        || find_llm_rocm_llama_server(&app).is_some()
+        || find_llm_vulkan_llama_server(&app).is_some()
     {
         // 起動可能な llama-server バイナリが存在すれば「インストール済み（停止中）」と見なす。
         // NVIDIA=同梱 CUDA llama-server、AMD=取得済み ROCm/Vulkan バックエンド。
@@ -2040,7 +2040,7 @@ fn get_lemonade_status(app: AppHandle, state: tauri::State<'_, LemonadeServer>) 
 
 /// アプリ固有 lemond が listen しているポートを返す。未解決時は 0。
 #[tauri::command]
-fn get_lemonade_app_port(state: tauri::State<'_, LemonadeServer>) -> u16 {
+fn get_llm_server_port(state: tauri::State<'_, LlmServer>) -> u16 {
     state.port.load(Ordering::Relaxed) as u16
 }
 
@@ -2049,15 +2049,15 @@ fn get_lemonade_app_port(state: tauri::State<'_, LemonadeServer>) -> u16 {
 /// フロントの VRAM 不足フォールバックが、自動(0)設定時の実効 np を知り
 /// 段階的（24→20→16→12→8→4→2→1）に下げるために使う。
 #[tauri::command]
-fn get_llm_attempted_parallel(state: tauri::State<'_, LemonadeServer>) -> u32 {
+fn get_llm_attempted_parallel(state: tauri::State<'_, LlmServer>) -> u32 {
     state.parallel.load(Ordering::Relaxed).max(1) as u32
 }
 
 // LLM バックエンドが現在ロードしているデバイスを返す: gpu / stopped
 #[tauri::command]
-fn get_lemonade_loaded_device(state: tauri::State<'_, LemonadeServer>) -> Result<String, String> {
+fn get_llm_loaded_device(state: tauri::State<'_, LlmServer>) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
-    if !lemonade_app_port_open(port) {
+    if !llm_server_port_open(port) {
         return Ok("stopped".to_string());
     }
     // 直起動の llama-server はすべて GPU 経路（CUDA / ROCm / Vulkan、mode=1）。
@@ -2099,7 +2099,7 @@ fn start_cuda_llama_blocking(
     // llama-server はモデルをロードしてから応答可能になるため、最大 60 秒待機する。
     for _ in 0..120 {
         thread::sleep(Duration::from_millis(500));
-        if lemonade_app_port_open(port) {
+        if llm_server_port_open(port) {
             return Ok(());
         }
         // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
@@ -2122,15 +2122,15 @@ fn start_cuda_llama_blocking(
 }
 
 #[tauri::command]
-async fn start_lemonade_server(
+async fn start_llm_server(
     app: AppHandle,
-    state: tauri::State<'_, LemonadeServer>,
+    state: tauri::State<'_, LlmServer>,
     hip_device_index: Option<i32>,
     llm_parallel: Option<u32>,
     llm_ctx: Option<u32>,
 ) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
-    if lemonade_app_port_open(port) {
+    if llm_server_port_open(port) {
         return Ok("already_running".to_string());
     }
 
@@ -2143,11 +2143,11 @@ async fn start_lemonade_server(
         _ => None,
     };
 
-    let resolved_port = match get_lemonade_app_cache_dir(&app) {
+    let resolved_port = match get_llm_engine_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
-            let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&p, rp);
+            let rp = resolve_llm_server_port(&p);
+            ensure_llm_server_port_config(&p, rp);
             rp
         }
         None => 13306,
@@ -2257,14 +2257,14 @@ async fn start_lemonade_server(
 /// Lemonade バックエンドバイナリをダウンロード・インストールする（初回セットアップ時・要インターネット接続）。
 /// backend: "llamacpp:rocm" / "llamacpp:vulkan" / "llamacpp:cpu" のいずれか。
 #[tauri::command]
-async fn install_lemonade_backend(
+async fn install_llm_backend(
     app: AppHandle,
     backend: String,
 ) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
     // backend 名 → (Python downloader の --backend 値, bin 配下のサブディレクトリ名)。
-    // 配置先は従来の lemonade バックエンドと同じく find_lemonade_{rocm,vulkan}_llama_server が
+    // 配置先は従来の lemonade バックエンドと同じく find_llm_{rocm,vulkan}_llama_server が
     // 解決する rocm-stable / vulkan / cpu。lemonade CLI には依存しない（上流から直接取得）。
     let (py_backend, subdir) = match backend.as_str() {
         "llamacpp:rocm" => ("rocm", "rocm-stable"),
@@ -2273,7 +2273,7 @@ async fn install_lemonade_backend(
         other => return Err(format!("未サポートのバックエンド名です: {other}")),
     };
 
-    let cache_dir = get_lemonade_app_cache_dir(&app)
+    let cache_dir = get_llm_engine_cache_dir(&app)
         .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
     let dest = cache_dir.join("bin").join("llamacpp").join(subdir);
     let script_path = resolve_download_llama_backend_script_path(&app)?;
@@ -2306,7 +2306,7 @@ async fn install_lemonade_backend(
                     continue;
                 }
                 let _ = app_clone.emit(
-                    "lemonade-backend-install-progress",
+                    "llm-backend-install-progress",
                     serde_json::json!({"message": msg}),
                 );
             }
@@ -2330,7 +2330,7 @@ async fn install_lemonade_backend(
 
 // オフライン動作専用: winget は使用しない。バンドルバイナリを起動するだけ
 #[tauri::command]
-async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer>) -> Result<String, String> {
+async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) -> Result<String, String> {
     // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
     let nvidia_list = nvidia_gpu_priority_list();
     let llama_server_bin = find_bundled_llama_server_bin(&app);
@@ -2340,11 +2340,11 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         _ => None,
     };
 
-    let resolved_port = match get_lemonade_app_cache_dir(&app) {
+    let resolved_port = match get_llm_engine_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
-            let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&p, rp);
+            let rp = resolve_llm_server_port(&p);
+            ensure_llm_server_port_config(&p, rp);
             rp
         }
         None => 13306,
@@ -2372,7 +2372,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         };
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
-                "lemonade-install-progress",
+                "llm-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
             );
             mode_arc.store(1, Ordering::Relaxed);
@@ -2398,7 +2398,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
-                "lemonade-install-progress",
+                "llm-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジン(高精度12B)を起動中..."}),
             );
             start_amd_12b_blocking(
@@ -2420,7 +2420,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         let e4b_vulkan = amd_e4b_vulkan_launch(&app);
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
-                "lemonade-install-progress",
+                "llm-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
             );
             // 1) ROCm 直起動（最速）。
@@ -2457,7 +2457,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
 }
 
 #[tauri::command]
-fn stop_lemonade_server(state: tauri::State<'_, LemonadeServer>) -> Result<(), String> {
+fn stop_llm_server(state: tauri::State<'_, LlmServer>) -> Result<(), String> {
     let mut guard = state.child.lock().map_err(|_| "mutex poisoned".to_string())?;
     if let Some(mut child) = guard.take() {
         let _ = kill_process_tree_by_pid(child.id());
@@ -2760,8 +2760,11 @@ struct LlmProofreadRequest {
     n_gpu_layers: Option<i32>,
     system_prompt: Option<String>,
     backend: Option<String>,
-    lemonade_url: Option<String>,
-    lemonade_model: Option<String>,
+    // 永続設定キー / フロント signal は lemonade のまま（後方互換）。内部フィールド名のみ llm。
+    #[serde(rename = "lemonadeUrl")]
+    llm_url: Option<String>,
+    #[serde(rename = "lemonadeModel")]
+    llm_model: Option<String>,
     openai_base_url: Option<String>,
     openai_model: Option<String>,
     n_ctx: Option<i64>,
@@ -3248,7 +3251,7 @@ struct AllSetupStatus {
     gemma_gguf_expected_path: String,
     gemma_mtp_gguf: bool,
     gemma_mtp_gguf_expected_path: String,
-    lemonade_backend: bool,
+    llm_backend: bool,
     python_env: bool,
     python_env_expected_path: String,
 }
@@ -4638,7 +4641,7 @@ fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
         (true, String::new())
     };
 
-    let lemonade_backend = check_lemonade_gpu_backend_installed(app.clone());
+    let llm_backend = check_llm_gpu_backend_installed(app.clone());
 
     let (python_env, python_env_expected_path) = check_python_venv(&app);
 
@@ -4650,7 +4653,7 @@ fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
         gemma_gguf_expected_path,
         gemma_mtp_gguf,
         gemma_mtp_gguf_expected_path,
-        lemonade_backend,
+        llm_backend,
         python_env,
         python_env_expected_path,
     })
@@ -5252,7 +5255,7 @@ fn proofread_transcription_llm_blocking_with_kind(
     task_kind: RunningTaskKind,
 ) -> Result<ProofreadTranscriptionResponse, String> {
     set_cancel_requested(task_kind, false);
-    let lemonade_port = app.state::<LemonadeServer>().port.load(Ordering::Relaxed) as u16;
+    let llm_port = app.state::<LlmServer>().port.load(Ordering::Relaxed) as u16;
 
     if request.segments.is_empty() {
         return Ok(ProofreadTranscriptionResponse {
@@ -5385,16 +5388,16 @@ fn proofread_transcription_llm_blocking_with_kind(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if is_lemonade {
-        let url = request.lemonade_url.as_deref().unwrap_or("http://localhost:13306");
-        let model = request.lemonade_model.as_deref().unwrap_or(LEMONADE_DEFAULT_MODEL);
-        cmd.arg("--lemonade-url").arg(url);
-        cmd.arg("--lemonade-model").arg(model);
+        let url = request.llm_url.as_deref().unwrap_or("http://localhost:13306");
+        let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
+        cmd.arg("--llm-url").arg(url);
+        cmd.arg("--llm-model").arg(model);
         // CUDA llama-server (mode==1) のときだけ、起動時に決めたスロット数 (-np) と同じ
         // 同時送信数で並列ディスパッチし GPU のアイドルを埋める。
-        // lemond(AMD, mode==0) は自身の並列度に従うため逐次（--parallel 既定=1）のままにする。
-        let lemo = app.state::<LemonadeServer>();
-        if lemo.mode.load(Ordering::Relaxed) == 1 {
-            let np = lemo.parallel.load(Ordering::Relaxed).max(1);
+        // mode==0（停止中）や逐次経路では --parallel を渡さず既定=1 のままにする。
+        let llm_state = app.state::<LlmServer>();
+        if llm_state.mode.load(Ordering::Relaxed) == 1 {
+            let np = llm_state.parallel.load(Ordering::Relaxed).max(1);
             cmd.arg("--parallel").arg(np.to_string());
         }
     } else if is_openai_compatible {
@@ -5500,7 +5503,7 @@ fn proofread_transcription_llm_blocking_with_kind(
             }
             // wait 失敗時もアンロードを試みる
             if let Some(ref info) = openai_unload_info {
-                try_unload_openai_model(info, lemonade_port);
+                try_unload_openai_model(info, llm_port);
                 if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
                     *guard = None;
                 }
@@ -5523,7 +5526,7 @@ fn proofread_transcription_llm_blocking_with_kind(
 
     // サイドカー終了後（成功・中止・失敗すべて）に必ずアンロードを試みる
     if let Some(ref info) = openai_unload_info {
-        try_unload_openai_model(info, lemonade_port);
+        try_unload_openai_model(info, llm_port);
         if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
             *guard = None;
         }
@@ -8508,7 +8511,7 @@ fn run_overall_proofread_blocking(
     request: LlmProofreadRequest,
 ) -> Result<OverallProofreadResponse, String> {
     set_cancel_requested(RunningTaskKind::LlmProofread, false);
-    let lemonade_port = app.state::<LemonadeServer>().port.load(Ordering::Relaxed) as u16;
+    let llm_port = app.state::<LlmServer>().port.load(Ordering::Relaxed) as u16;
 
     if request.segments.is_empty() {
         return Ok(OverallProofreadResponse {
@@ -8647,15 +8650,15 @@ fn run_overall_proofread_blocking(
         .stderr(Stdio::piped());
 
     if is_lemonade {
-        let url = request.lemonade_url.as_deref().unwrap_or("http://localhost:13306");
-        let model = request.lemonade_model.as_deref().unwrap_or(LEMONADE_DEFAULT_MODEL);
-        cmd.arg("--lemonade-url").arg(url);
-        cmd.arg("--lemonade-model").arg(model);
+        let url = request.llm_url.as_deref().unwrap_or("http://localhost:13306");
+        let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
+        cmd.arg("--llm-url").arg(url);
+        cmd.arg("--llm-model").arg(model);
         // CUDA llama-server (mode==1) のときだけ、起動時に決めたスロット数 (-np) と同じ
         // 同時送信数で並列ディスパッチし GPU のアイドルを埋める（全体校正も継続バッチング）。
-        let lemo = app.state::<LemonadeServer>();
-        if lemo.mode.load(Ordering::Relaxed) == 1 {
-            let np = lemo.parallel.load(Ordering::Relaxed).max(1);
+        let llm_state = app.state::<LlmServer>();
+        if llm_state.mode.load(Ordering::Relaxed) == 1 {
+            let np = llm_state.parallel.load(Ordering::Relaxed).max(1);
             cmd.arg("--parallel").arg(np.to_string());
         }
     } else if is_openai_compatible {
@@ -8738,7 +8741,7 @@ fn run_overall_proofread_blocking(
             clear_running_pid(RunningTaskKind::LlmProofread);
             let _ = std::fs::remove_file(&tmp_path);
             if let Some(ref info) = openai_unload_info {
-                try_unload_openai_model(info, lemonade_port);
+                try_unload_openai_model(info, llm_port);
                 if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
                     *guard = None;
                 }
@@ -8759,7 +8762,7 @@ fn run_overall_proofread_blocking(
 
     // サイドカー終了後（成功・中止・失敗すべて）に必ずアンロードを試みる
     if let Some(ref info) = openai_unload_info {
-        try_unload_openai_model(info, lemonade_port);
+        try_unload_openai_model(info, llm_port);
         if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
             *guard = None;
         }
@@ -9901,7 +9904,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(LemonadeServer {
+        .manage(LlmServer {
             child: Arc::new(Mutex::new(None)),
             port: Arc::new(AtomicU32::new(0)),
             mode: Arc::new(AtomicU8::new(0)),
@@ -9915,22 +9918,22 @@ pub fn run() {
                 if !schedule_dev_window_focus(app.handle(), &window) {
                     let _ = window.maximize();
                 }
-                let lemonade_child_arc = Arc::clone(&app.state::<LemonadeServer>().child);
-                let lemonade_port_arc = Arc::clone(&app.state::<LemonadeServer>().port);
+                let llm_child_arc = Arc::clone(&app.state::<LlmServer>().child);
+                let llm_port_arc = Arc::clone(&app.state::<LlmServer>().port);
                 let openai_unload_arc = Arc::clone(&app.state::<OpenAiUnloadState>().0);
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed = event {
-                        if let Ok(mut guard) = lemonade_child_arc.lock() {
+                        if let Ok(mut guard) = llm_child_arc.lock() {
                             if let Some(mut child) = guard.take() {
                                 let _ = kill_process_tree_by_pid(child.id());
                                 let _ = child.kill();
                             }
                         }
-                        let lemonade_port = lemonade_port_arc.load(Ordering::Relaxed) as u16;
+                        let llm_port = llm_port_arc.load(Ordering::Relaxed) as u16;
                         // アプリ終了時: ローカルOpenAI互換API経由でロードしたモデルをアンロード
                         if let Ok(mut guard) = openai_unload_arc.lock() {
                             if let Some(unload_info) = guard.take() {
-                                try_unload_openai_model(&unload_info, lemonade_port);
+                                try_unload_openai_model(&unload_info, llm_port);
                             }
                         }
                     }
@@ -9972,17 +9975,17 @@ pub fn run() {
             check_gpu_availability,
             detect_compute_env,
             get_dev_emulation_status,
-            get_lemonade_status,
-            get_lemonade_app_port,
+            get_llm_server_status,
+            get_llm_server_port,
             get_llm_attempted_parallel,
-            get_lemonade_loaded_device,
-            check_lemonade_gpu_backend_installed,
+            get_llm_loaded_device,
+            check_llm_gpu_backend_installed,
             list_local_openai_models,
             debounce_dev_window_focus,
-            start_lemonade_server,
-            stop_lemonade_server,
-            install_lemonade,
-            install_lemonade_backend,
+            start_llm_server,
+            stop_llm_server,
+            install_llm_engine,
+            install_llm_backend,
             get_audio_stream_port,
             set_audio_allowed_path,
             get_dev_demo_data_dir,

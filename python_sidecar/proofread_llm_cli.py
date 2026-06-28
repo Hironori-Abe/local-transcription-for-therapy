@@ -281,8 +281,8 @@ def parse_args() -> argparse.Namespace:
         "--backend", default="llama_cpp",
         choices=["llama_cpp", "llama_cpp_rocm", "lemonade", "openai_compatible"],
     )
-    parser.add_argument("--lemonade-url", default="http://localhost:13305")
-    parser.add_argument("--lemonade-model", default="gemma-4-E4B-it-qat")
+    parser.add_argument("--llm-url", default="http://localhost:13305")
+    parser.add_argument("--llm-model", default="gemma-4-E4B-it-qat")
     parser.add_argument("--openai-base-url", default="")
     parser.add_argument("--openai-model", default="")
     parser.add_argument("--n-ctx", type=int, default=16384)
@@ -659,7 +659,7 @@ def build_chat_messages(
     ]
 
 
-def _stream_lemonade_chat(
+def _stream_llm_chat(
     session: "Any",
     url: str,
     payload: dict,
@@ -939,7 +939,7 @@ def _proofread_segments_openai_chat(
                 emit_progress("llm_loading", f"GBNF文法の生成に失敗（制約なしで継続）: {e}")
 
         try:
-            raw_text = _stream_lemonade_chat(
+            raw_text = _stream_llm_chat(
                 session,
                 chat_url,
                 payload,
@@ -950,7 +950,7 @@ def _proofread_segments_openai_chat(
             if "grammar" in payload:
                 emit_progress("llm_loading", f"grammar 非対応のため制約なしで再試行します: {e}")
                 payload.pop("grammar", None)
-                raw_text = _stream_lemonade_chat(
+                raw_text = _stream_llm_chat(
                     session,
                     chat_url,
                     payload,
@@ -985,7 +985,7 @@ def _proofread_segments_openai_chat(
         )
         if backend_name == "lemonade":
             emit_event(
-                "lemonade_batch_debug",
+                "llm_batch_debug",
                 backend="lemonade",
                 batchIndex=batch_idx + 1,
                 totalBatches=total_batches,
@@ -1015,7 +1015,7 @@ def _proofread_segments_openai_chat(
             )
             if backend_name == "lemonade":
                 emit_event(
-                    "lemonade_batch_raw_preview",
+                    "llm_batch_raw_preview",
                     batchIndex=batch_idx + 1,
                     totalBatches=total_batches,
                     allFallback=all_fallback,
@@ -1054,8 +1054,8 @@ def _proofread_segments_openai_chat(
     return [results_map[s["id"]] for s in segments if s["id"] in results_map]
 
 
-def proofread_segments_lemonade(
-    segments: List[Dict], lemonade_url: str, lemonade_model: str,
+def proofread_segments_llm(
+    segments: List[Dict], llm_url: str, llm_model: str,
     max_batch: int = MAX_BATCH_SEGMENTS_LEMONADE,
 ) -> List[Dict]:
     # chat_template_kwargs で thinking モードを無効化する。
@@ -1063,8 +1063,8 @@ def proofread_segments_lemonade(
     # このパラメータを渡しても無害。
     return _proofread_segments_openai_chat(
         segments=segments,
-        base_url=lemonade_url,
-        model=lemonade_model,
+        base_url=llm_url,
+        model=llm_model,
         provider_label="AI校正エンジン",
         backend_name="lemonade",
         max_batch_segments=max(1, max_batch),
@@ -1292,7 +1292,7 @@ def main() -> int:
             return 1
 
         if args.backend == "lemonade":
-            items = proofread_segments_lemonade(segments, args.lemonade_url, args.lemonade_model, max_batch=args.max_batch)
+            items = proofread_segments_llm(segments, args.llm_url, args.llm_model, max_batch=args.max_batch)
         elif args.backend == "openai_compatible":
             items = proofread_segments_openai_compatible(segments, args.openai_base_url, args.openai_model, max_batch=args.max_batch)
         elif args.backend == "llama_cpp_rocm":

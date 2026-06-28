@@ -1804,7 +1804,9 @@ $segment-cols: 96px 84px 88px 1fr;
 
 .overall-proofread-card {
   width: min(1400px, 96vw);
-  height: clamp(620px, 80vh, 860px);
+  // 内容に応じて縦が伸縮し、ビューポート比でキャップする（固定 px の床/天井を撤去）。
+  // 提案が少なければ小さく、多ければ 85vh で頭打ちにして item-list 側がスクロールする。
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
   border-radius: 12px;
@@ -1843,7 +1845,8 @@ $segment-cols: 96px 84px 88px 1fr;
 }
 
 .overall-proofread-content {
-  flex: 1 1 0;
+  // flex-basis を auto にして、カードが内容高さで縮むようにする（max-height で頭打ち）。
+  flex: 1 1 auto;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1876,7 +1879,7 @@ $segment-cols: 96px 84px 88px 1fr;
 }
 
 .overall-proofread-result-wrap {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1908,7 +1911,8 @@ $segment-cols: 96px 84px 88px 1fr;
 }
 
 .overall-proofread-item-list {
-  flex: 1 1 0;
+  // 内容で伸び、カードが max-height に達したらここが縮んでスクロールする。
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
   display: flex;

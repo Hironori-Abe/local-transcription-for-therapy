@@ -31,8 +31,8 @@ usage() {
 Usage: scripts/setup-dev.sh [options]
 
 Options:
-  -y, --yes              Install apt packages without prompting.
-  --skip-apt             Skip Ubuntu/Debian system package installation.
+  -y, --yes              Install packages without prompting (apt / pacman).
+  --skip-apt             Skip system package installation (apt on Ubuntu, pacman on CachyOS/Arch).
   --skip-gemma           Skip Gemma GGUF model download.
   --skip-llama-cpp       Skip llama-cpp-python installation.
   --skip-rust            Skip Rustup/Cargo installation and check.
@@ -270,14 +270,74 @@ apt_has_package() {
   apt-cache show "$1" >/dev/null 2>&1
 }
 
+_install_pacman_system_packages() {
+  if ! confirm_default_yes "Install/update CachyOS/Arch system packages for Tauri, Python builds, and llama-cpp-python?"; then
+    info "Skipped pacman system package installation."
+    return
+  fi
+
+  ensure_sudo || return
+
+  # Ubuntu パッケージとの対応:
+  #   build-essential → base-devel  |  libwebkit2gtk-4.1-dev → webkit2gtk-4.1
+  #   libgtk-3-dev    → gtk3        |  librsvg2-dev          → librsvg
+  #   libssl-dev      → openssl     |  libxdo-dev            → xdotool
+  #   libopenblas-dev → openblas    |  ninja-build           → ninja
+  #   pkg-config      → pkgconf     |  gpg                   → gnupg
+  # Arch では -dev サフィックスなし・ヘッダーは本体パッケージに含まれる
+  local packages=(
+    base-devel
+    cmake
+    curl
+    ffmpeg
+    file
+    gnupg
+    gtk3
+    libayatana-appindicator
+    libxml2
+    librsvg
+    ninja
+    openblas
+    openssl
+    pkgconf
+    python
+    unzip
+    webkit2gtk-4.1
+    wget
+    xdotool
+  )
+
+  if [[ "$AMD_PACKAGES" == "1" ]]; then
+    packages+=(
+      clinfo
+      libdrm
+      mesa
+      numactl
+      pciutils
+      vulkan-headers
+      vulkan-icd-loader
+      vulkan-tools
+    )
+  fi
+
+  info "Installing pacman packages..."
+  if ! "${SUDO_CMD[@]}" pacman -S --needed --noconfirm "${packages[@]}"; then
+    warn "pacman package installation failed. Some native builds or Tauri dev may fail."
+  fi
+}
+
 install_system_packages() {
   if [[ "$SKIP_APT" == "1" ]]; then
-    info "Skipping apt system package installation."
+    info "Skipping system package installation."
     return
   fi
 
   if ! have apt-get; then
-    warn "apt-get was not found. Install Tauri/Linux system dependencies manually."
+    if have pacman; then
+      _install_pacman_system_packages
+      return
+    fi
+    warn "apt-get / pacman was not found. Install Tauri/Linux system dependencies manually."
     return
   fi
 
@@ -1171,9 +1231,15 @@ setup_lemonade_embeddable() {
   local lemond_bin="$dest_dir/lemond"
   local lemonade_cli="$dest_dir/lemonade"
 
-  if [[ -x "$lemond_bin" ]]; then
+  # 両方そろっている場合のみスキップ。片方だけ（過去の中断ダウンロード）なら
+  # 再取得して修復する。lemond だけ見て skip すると、lemonade CLI 欠落のまま固定され
+  # アプリ側で「Lemonade CLI が見つかりません」になり続ける。
+  if [[ -x "$lemond_bin" && -x "$lemonade_cli" ]]; then
     ok "Lemonade embeddable already present: $lemond_bin"
     return
+  fi
+  if [[ -e "$lemond_bin" || -e "$lemonade_cli" ]]; then
+    warn "Lemonade embeddable is incomplete (previous download interrupted). Re-downloading lemond + lemonade."
   fi
 
   if ! have curl; then
@@ -1190,7 +1256,8 @@ setup_lemonade_embeddable() {
   tmp_tar="$(mktemp --suffix=.tar.gz)"
   tmp_dir="$(mktemp -d)"
 
-  if ! curl -L --fail --progress-bar -o "$tmp_tar" "$url"; then
+  # --retry で一過性のネットワーク中断（途中切断）に強くする。失敗時は部分ファイルを残さない。
+  if ! curl -L --fail --retry 3 --retry-delay 2 --retry-connrefused --progress-bar -o "$tmp_tar" "$url"; then
     rm -f "$tmp_tar"
     rmdir "$tmp_dir" 2>/dev/null || true
     warn "Lemonade embeddable download failed."
@@ -1198,10 +1265,12 @@ setup_lemonade_embeddable() {
     return
   fi
 
+  # 途中で切れた tar.gz は展開で失敗する。部分ファイルを残さず、再実行を促す。
   if ! tar -xzf "$tmp_tar" -C "$tmp_dir"; then
     rm -f "$tmp_tar"
     rm -rf "$tmp_dir"
-    warn "Failed to extract Lemonade embeddable archive."
+    warn "Failed to extract Lemonade embeddable archive (truncated download?)."
+    warn "Re-run scripts/setup-dev.sh to retry."
     return
   fi
   rm -f "$tmp_tar"
@@ -1227,6 +1296,12 @@ setup_lemonade_embeddable() {
   fi
 
   rm -rf "$tmp_dir"
+
+  # 取得後の最終確認。片方でも欠ければアプリ側で「Lemonade CLI が見つかりません」になるため明示する。
+  if [[ ! -x "$lemond_bin" || ! -x "$lemonade_cli" ]]; then
+    warn "Lemonade embeddable is still incomplete after download. AI proofreading GPU backend may be unavailable."
+    warn "Re-run scripts/setup-dev.sh, or download manually: $url"
+  fi
 }
 
 load_cargo_env() {

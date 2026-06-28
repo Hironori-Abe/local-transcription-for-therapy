@@ -1448,9 +1448,35 @@ fn check_lemonade_gpu_backend_installed(app: AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// lemond の llamacpp バックエンドを ROCm に固定してよいかを判定する。
+/// 既定の `backend: "auto"` は AMD iGPU + dGPU 構成で Vulkan を選びがちで、一部の Mesa/RADV
+/// ではマルチGPU初期化でハングする（実測: CachyOS kernel 7.1.1 で E4B が "Loading model" の
+/// まま無限ループ → 校正タイムアウト）。動く ROCm があるなら rocm に固定して速い経路を使う。
+/// 条件: 同梱 rocm バックエンドが存在 ∧ AMD GPU 検出 ∧ システム ROCm にその GPU arch の
+/// rocBLAS Tensile がある（推論時の rocBLAS クラッシュを起動前に排除）。満たさなければ false
+/// （= auto のまま。挙動不変）。デバイス選択は従来どおり HIP_VISIBLE_DEVICES が担う。
+/// Linux 以外では常に false（system ROCm は /opt/rocm 前提）。NVIDIA は lemond 非経由のため、
+/// この値が config に書かれても使われない（CUDA llama-server 直起動経路）。
+#[cfg(target_os = "linux")]
+fn lemonade_should_force_rocm(app: &AppHandle) -> bool {
+    if find_lemonade_rocm_llama_server(app).is_none() {
+        return false;
+    }
+    // VRAM 最大の GPU（通常 dGPU）の arch を見て system ROCm に Tensile があるか確認する。
+    match amd_gpu_priority_list().into_iter().next() {
+        Some((_idx, gfx, _vram)) => system_rocm_tensile_has_arch(&gfx),
+        None => false,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lemonade_should_force_rocm(_app: &AppHandle) -> bool {
+    false
+}
+
 /// アプリ固有キャッシュの config.json に解決済みポートを書き込む。
 /// lemond は起動時にこの値を読み取るため、システムスナップ (13305) と分離される。
-fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
+fn ensure_lemonade_app_port_config(app: &AppHandle, cache_dir: &Path, port: u16) {
     let config_path = cache_dir.join("config.json");
     let mut config: Value = if config_path.exists() {
         std::fs::read_to_string(&config_path)
@@ -1476,6 +1502,15 @@ fn ensure_lemonade_app_port_config(cache_dir: &Path, port: u16) {
     }
     if let Some(obj) = config["llamacpp"].as_object_mut() {
         obj.insert("prefer_system".to_string(), serde_json::json!(false));
+        // backend: 既定 auto は AMD マルチGPU で Vulkan を選び、RADV でハング/低速になることがある。
+        // 動く ROCm がある AMD/Linux 機では rocm に固定する。それ以外は auto のまま（無影響）。
+        // 毎起動で再適用するため、GPU 構成が変わって ROCm 不可になれば auto へ戻る。
+        let backend = if lemonade_should_force_rocm(app) {
+            "rocm"
+        } else {
+            "auto"
+        };
+        obj.insert("backend".to_string(), serde_json::json!(backend));
     }
     if let Ok(json) = serde_json::to_string_pretty(&config) {
         let _ = std::fs::write(&config_path, json);
@@ -2374,7 +2409,7 @@ async fn start_lemonade_server(
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&p, rp);
+            ensure_lemonade_app_port_config(&app, &p, rp);
             ensure_lemonade_default_model_registered(&p);
             (Some(p.to_string_lossy().into_owned()), rp)
         }
@@ -2551,7 +2586,7 @@ async fn install_lemonade(app: AppHandle, state: tauri::State<'_, LemonadeServer
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
             let rp = resolve_lemonade_port(&p);
-            ensure_lemonade_app_port_config(&p, rp);
+            ensure_lemonade_app_port_config(&app, &p, rp);
             ensure_lemonade_default_model_registered(&p);
             (Some(p.to_string_lossy().into_owned()), rp)
         }

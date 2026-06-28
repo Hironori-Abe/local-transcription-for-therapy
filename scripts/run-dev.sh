@@ -33,6 +33,18 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# rustup でインストールされた cargo は ~/.cargo/bin にあるが、setup-dev.sh を
+# 実行した直後の（あるいは新規に開いた）シェルでは PATH に乗っていないことがある。
+# ここで env を読み込むことで、setup-dev.sh → run-dev.sh を 1 シェルで完結できる。
+load_cargo_env() {
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.cargo/env"
+  elif [[ -d "$HOME/.cargo/bin" ]]; then
+    export PATH="$HOME/.cargo/bin${PATH:+:$PATH}"
+  fi
+}
+
 sanitize_ld_library_path() {
   if [[ -z "${LD_LIBRARY_PATH:-}" ]]; then
     return
@@ -119,7 +131,8 @@ if [[ -z "${DIARIZATION_PYTHON_BIN:-}" ]]; then
 fi
 
 have npm || die "npm was not found. Please run scripts/setup-dev.sh first."
-have cargo || die "cargo was not found. Install Rustup/Cargo, then rerun this script."
+load_cargo_env
+have cargo || die "cargo was not found. Run scripts/setup-dev.sh first, or 'source \$HOME/.cargo/env'."
 if [[ "$PYTHON_BIN" == */* && ! -x "$PYTHON_BIN" ]]; then
   die "Python executable was not found or is not executable: $PYTHON_BIN"
 fi

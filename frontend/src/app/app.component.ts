@@ -525,6 +525,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly running = signal<boolean>(false);
   readonly runningStatus = signal<string>('');
   readonly runningProgress = signal<number>(0);
+  // ユーザーに見せる平滑化済み進捗。runningProgress（バックエンドからの離散値）を
+  // アンカーにしつつ、イベント間を経過時間ベースで滑らかに進める（表示専用・処理性能には無影響）。
+  readonly displayProgress = signal<number>(0);
   readonly runningStepCurrent = signal<number>(0);
   readonly runningStepTotal = signal<number>(0);
   readonly runningComputeType = signal<string>('');
@@ -779,7 +782,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.progressSnackbarVisible()) return '';
     const parts: string[] = [];
     if (this.running()) {
-      const pct = this.runningProgress();
+      const pct = Math.round(this.displayProgress());
       if (this.diarizationPhaseActive()) {
         parts.push('文字起こし：完了');
         parts.push(`話者分離：${this.diarizationStage() || '起動中'}`);
@@ -889,6 +892,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedAudioFileSizeBytes = signal<number | null>(null);
   readonly estimatedMinMinutes = signal<number | null>(null);
   readonly estimatedAvgMinutes = signal<number | null>(null);
+  // 平滑化進捗の駆動に使う、丸め前の概算所要時間（秒）。推定が成立しないときは null。
+  readonly estimatedAvgSeconds = signal<number | null>(null);
   readonly estimatingTime = signal<boolean>(false);
   readonly estimateSampleCount = signal<number>(0);
   readonly estimateReady = signal<boolean>(false);
@@ -1277,6 +1282,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   ];
   readonly speakerCountOptions: ReadonlyArray<number> = [1, 2, 3, 4, 5];
   private runningTickerId: ReturnType<typeof setInterval> | null = null;
+  // 表示用の進捗を滑らかに進めるためのティッカー（500ms）と、現在実行中の概算所要時間（秒）。
+  private smoothProgressTickerId: ReturnType<typeof setInterval> | null = null;
+  private activeRunEstimatedSeconds: number | null = null;
   private proofreadTickerId: ReturnType<typeof setInterval> | null = null;
   private diarizationTickerId: ReturnType<typeof setInterval> | null = null;
   private llmProofreadTickerId: ReturnType<typeof setInterval> | null = null;
@@ -1899,6 +1907,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.estimatedAudioSeconds.set(null);
       this.estimatedMinMinutes.set(null);
       this.estimatedAvgMinutes.set(null);
+      this.estimatedAvgSeconds.set(null);
     } finally {
       this.estimatingTime.set(false);
     }
@@ -1915,6 +1924,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.estimatedAudioSeconds.set(null);
       this.estimatedMinMinutes.set(null);
       this.estimatedAvgMinutes.set(null);
+      this.estimatedAvgSeconds.set(null);
     } finally {
       URL.revokeObjectURL(objectUrl);
       this.estimatingTime.set(false);
@@ -1928,6 +1938,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.estimateReady.set(false);
       this.estimatedMinMinutes.set(null);
       this.estimatedAvgMinutes.set(null);
+      this.estimatedAvgSeconds.set(null);
       return;
     }
 
@@ -1939,6 +1950,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.estimateReady.set(false);
       this.estimatedMinMinutes.set(null);
       this.estimatedAvgMinutes.set(null);
+      this.estimatedAvgSeconds.set(null);
       return;
     }
 
@@ -1947,6 +1959,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.estimateReady.set(true);
     this.estimatedMinMinutes.set(this.secondsToEstimatedMinutes(durationSeconds * minRtf));
     this.estimatedAvgMinutes.set(this.secondsToEstimatedMinutes(durationSeconds * avgRtf));
+    const avgSeconds = durationSeconds * avgRtf;
+    this.estimatedAvgSeconds.set(Number.isFinite(avgSeconds) && avgSeconds > 0 ? avgSeconds : null);
   }
 
   private secondsToEstimatedMinutes(seconds: number): number {
@@ -2462,6 +2476,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   ngOnDestroy(): void {
     this.stopRunningTicker();
+    this.stopSmoothProgress();
     this.stopProofreadTicker();
     this.stopDiarizationTicker();
     this.stopSegmentPlayback();
@@ -2919,6 +2934,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.runningStatus.set('実行準備中...');
     this.transcriptionCanceling.set(false);
     this.runningProgress.set(0);
+    this.displayProgress.set(0);
     this.runningStepCurrent.set(0);
     this.runningStepTotal.set(this.getProgressStageOrder().length);
     this.runningComputeType.set('');
@@ -2956,6 +2972,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.resultSource.set(null);
     await this.ensureProgressListener();
     this.startRunningTicker();
+    this.startSmoothProgress();
     const shouldAutoProofread = this.continueProofreadAfterTranscription();
     let autoEntityCheckAfterTranscription = false;
 
@@ -3057,9 +3074,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
       }
       this.stopRunningTicker();
+      this.stopSmoothProgress();
       this.running.set(false);
       this.runningStatus.set('');
       this.runningProgress.set(0);
+      this.displayProgress.set(0);
       this.runningStepCurrent.set(0);
       this.runningStepTotal.set(0);
       this.runningComputeType.set('');
@@ -6245,6 +6264,50 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       clearInterval(this.runningTickerId);
       this.runningTickerId = null;
     }
+  }
+
+  // 表示用の進捗を 1000ms ごとに滑らかに前進させる（表示専用。Python/Rust 側の処理には一切触れない）。
+  // - バックエンドからの離散イベント（runningProgress）を「後退しない」アンカーとして尊重する
+  // - 概算所要時間が分かるときは 経過時間/概算 で滑らかに進める（イベントが疎でも止まって見えない）
+  // - 概算が無いときは上限に向けて減速トリックルし、常に少しずつ動かす
+  private startSmoothProgress(): void {
+    this.stopSmoothProgress();
+    this.displayProgress.set(0);
+    this.activeRunEstimatedSeconds = this.estimatedAvgSeconds();
+    this.smoothProgressTickerId = setInterval(() => this.updateSmoothProgress(), 1000);
+  }
+
+  private stopSmoothProgress(): void {
+    if (this.smoothProgressTickerId !== null) {
+      clearInterval(this.smoothProgressTickerId);
+      this.smoothProgressTickerId = null;
+    }
+  }
+
+  private updateSmoothProgress(): void {
+    if (!this.running()) {
+      return;
+    }
+    const real = this.runningProgress();
+    const shown = this.displayProgress();
+    // バックエンド値より後退させない。
+    let target = Math.max(shown, real);
+    const est = this.activeRunEstimatedSeconds;
+    if (est && est > 0) {
+      // 経過時間ベースの推定進捗。実完了イベントで前進する余地を残して 95% で頭打ちにする。
+      const timePct = Math.min(95, (this.runningSeconds() / est) * 100);
+      if (timePct > target) {
+        target = timePct;
+      }
+    } else if (target < 90) {
+      // 概算が無い初回時などのフォールバック：上限へ向けて減速しながら必ず少し動かす。
+      target = target + (90 - target) * 0.025;
+    }
+    // 実際に完了するまで 100% は出さない。
+    if (real < 100) {
+      target = Math.min(target, 99);
+    }
+    this.displayProgress.set(target);
   }
 
   private startProofreadTicker(): void {

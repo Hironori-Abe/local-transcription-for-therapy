@@ -58,6 +58,13 @@
 - `python_sidecar/models/`: local model placement
 - `scripts/`: setup/build/run scripts
 
+## README Localization Policy
+
+- `README.md` は日本語のメイン画面として扱い、内容の単一の基準にする。
+- 英語版は `README.en.md` に置く。英語版は補助的なサブページであり、ルートの既定 README を英語に置き換えない。
+- `README.md` のユーザー向け説明、見出し、手順、画像参照、リンク、要件、プライバシー方針を変更した場合は、同じ変更単位で `README.en.md` も意味が一致するように更新する。
+- README の画像を追加・変更した場合は、両 README の相対パスが有効で、リポジトリ閲覧画面で表示できることを確認する。
+
 ## Setup and Run (Windows)
 
 推奨フロー:
@@ -324,6 +331,7 @@ Tauri build override 方針:
 - 変更は小さく段階的に実施し、検証可能な単位で提出する
 - ユーザー可視仕様の変更時は影響範囲を明示する
 - セキュリティ/プライバシーに関わる変更は必ず明記する
+- コミットメッセージに AI ツール名の `Co-authored-by` / `Co-Authored-By` trailer（例: Claude など）を追加しない。GitHub 上で共同編集者表示になるため、必要な場合でも明示合意を取る。
 
 ## Out of Scope (Unless Explicitly Requested)
 

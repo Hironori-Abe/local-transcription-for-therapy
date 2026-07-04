@@ -1,10 +1,13 @@
 # Local Transcription for Therapy (LoTT)
 
+**日本語** | [English](README.en.md)
+
 臨床心理・カウンセリング会話のための、ローカル完結の日本語文字起こし・逐語録作成を補助するデスクトップアプリケーションです。
 文字起こし・話者分離・文章校正を、会話データを PC の外へ送ることなく実行できます。
 アプリケーションが全自動で完璧な逐語録を作ることを目指してはおらず、アプリケーションはおおまかな下書きを作ります。それを人間が会話（音声ファイル）を振り返りながら逐語録を完成させることを想定しています。
 
-![メイン画面](docs/screenshots/main-window.png)
+![操作画面](docs/screenshots/main-window.png)
+![編集画面](docs/screenshots/transcript-ui.png)
 
 ## 特徴
 
@@ -38,9 +41,9 @@
 ## 動作環境（Full CUDA 版）
 
 - Windows 10 / 11 64bit
-- NVIDIA GPU（RTX 推奨）+ CUDA Toolkit 12.x + cuDNN 9.x
+- NVIDIA GPU（RTX 推奨）+ CUDA Toolkit 12.x（13以上は不可） + cuDNN 9.x
 - **VRAM 8GB 以上（最低要件）**
-- インストーラー約 400MB + モデルダウンロード分の空き容量
+- インストーラー約 1GB 前後 + モデルダウンロード分の空き容量
 
 > **CPU のみでの動作は想定していません。** 文字起こし・話者分離・LLM 校正はいずれも GPU（CUDA / ROCm）での実行を前提としており、対応 GPU が無い環境では正常に動作しません。
 
@@ -58,15 +61,14 @@
 ## 使い方
 
 1. 音声ファイルを選択して文字起こしを実行
-2. 結果表で内容・話者表示名を編集（話者ラベル既定値: `SPEAKER_00 → Th`、`SPEAKER_01 → Cl` など）
-3. 必要に応じて校正（名前チェック・句読点補正・LLM 校正）を実行
-4. Word / Excel / JSON 形式で保存
+2. 音声ファイルを聞きながら、結果の会話内容・話者を編集（話者ラベル既定値: `SPEAKER_00 → Th`、`SPEAKER_01 → Cl` など）
+3. Word / Excel / JSON 形式で保存
 
 ## 技術スタック
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper / Diarization: pyannote.audio
-- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ Lemonade / llama.cpp / ローカル OpenAI 互換 API（loopback 限定）
+- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
 
 ## ドキュメント
 

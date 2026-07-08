@@ -441,6 +441,18 @@ interface EditorVoiceInputResponse {
   candidates: string[];
 }
 
+interface EditorVoiceInputContextLine {
+  rowNumber?: number;
+  speaker?: string | null;
+  text: string;
+}
+
+interface EditorVoiceInputContext {
+  previous?: EditorVoiceInputContextLine | null;
+  current?: EditorVoiceInputContextLine | null;
+  next?: EditorVoiceInputContextLine | null;
+}
+
 interface DeleteModelsResponse {
   deleted: string[];
   notFound: string[];
@@ -7866,8 +7878,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.voiceInputStatus.set('候補を生成中...');
     this.voiceInputError.set('');
     try {
+      const context = this.buildVoiceInputContext(segmentId);
       const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
-        request: { wavBase64, maxCandidates: 5 },
+        request: { wavBase64, maxCandidates: 5, ...(context ? { context } : {}) },
       });
       const candidates = (response.candidates ?? [])
         .map((candidate) => String(candidate).trim())
@@ -7888,6 +7901,41 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } finally {
       this.voiceInputProcessingSegmentId.set(null);
     }
+  }
+
+  private buildVoiceInputContext(segmentId: number): EditorVoiceInputContext | null {
+    const rows = this.segmentRows;
+    const index = rows.findIndex((segment) => segment.id === segmentId);
+    const currentSegment = index >= 0
+      ? rows[index]
+      : this.result()?.segments.find((segment) => segment.id === segmentId) ?? null;
+    if (!currentSegment) {
+      return null;
+    }
+
+    const editedMap = this.editedSegmentTextMap();
+    const rowNumberMap = this.segmentRowNumberMap();
+    const toContextLine = (
+      segment: TranscriptionSegment | null | undefined,
+      fallbackIndex: number | null
+    ): EditorVoiceInputContextLine | null => {
+      if (!segment) {
+        return null;
+      }
+      const speaker = this.displaySpeaker(this.getAssignedSpeakerKey(segment)).trim();
+      const rowNumber = rowNumberMap[segment.id] ?? (fallbackIndex !== null ? fallbackIndex + 1 : undefined);
+      return {
+        ...(typeof rowNumber === 'number' && Number.isFinite(rowNumber) ? { rowNumber } : {}),
+        speaker: speaker.length > 0 && speaker !== '-' ? speaker : null,
+        text: this.getEditableTextFromMap(segment, editedMap),
+      };
+    };
+
+    return {
+      previous: index > 0 ? toContextLine(rows[index - 1], index - 1) : null,
+      current: toContextLine(currentSegment, index >= 0 ? index : null),
+      next: index >= 0 && index < rows.length - 1 ? toContextLine(rows[index + 1], index + 1) : null,
+    };
   }
 
   private cleanupVoiceInputRecording(clearStatus: boolean): void {

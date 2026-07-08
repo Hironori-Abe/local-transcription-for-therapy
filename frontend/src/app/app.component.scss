@@ -1749,6 +1749,14 @@ $segment-cols: 96px 84px 88px 1fr;
   background: #f7fbf8;
 }
 
+.voice-input-candidate-hint {
+  flex: 1 0 100%;
+  margin: 2px 2px 0;
+  color: #546e7a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .voice-input-candidate-btn {
   appearance: none;
   display: inline-flex;

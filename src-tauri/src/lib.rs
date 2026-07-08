@@ -1461,9 +1461,9 @@ const GEMMA_E4B_MMPROJ_APPROX_BYTES: u64 = 992_000_000;
 const LLAMA_CPP_DEFAULT_BUILD: &str = "b9631";
 const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 120_000_000;
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
-const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 5;
+const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
 const EDITOR_VOICE_INPUT_CTX_SIZE: &str = "8192";
-const EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS: usize = 600;
+const EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS: usize = 400;
 
 // 上位（高精度）モデル: Gemma 4 12B QAT + MTP。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan
 // フォールバックの llama-server 直起動経路で提供し、large-v3 と同じく後からダウンロードする。
@@ -2839,17 +2839,21 @@ fn extract_editor_voice_candidates(response: &Value, max_candidates: usize) -> V
     parse_editor_voice_candidates_text(&content, max_candidates)
 }
 
-fn compact_editor_voice_context_text(text: &str) -> String {
+fn compact_editor_voice_context_text_with_limit(text: &str, max_chars: usize) -> String {
     let compacted = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut result = String::new();
     for (idx, ch) in compacted.chars().enumerate() {
-        if idx >= EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS {
+        if idx >= max_chars {
             result.push_str("...");
             return result;
         }
         result.push(ch);
     }
     result
+}
+
+fn compact_editor_voice_context_text(text: &str) -> String {
+    compact_editor_voice_context_text_with_limit(text, EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS)
 }
 
 fn format_editor_voice_context_line(
@@ -2927,7 +2931,7 @@ fn generate_editor_voice_input_candidates_blocking(
         return Err("音声入力はEditor版専用です。".to_string());
     }
     if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
-        return Err("音声入力が長すぎます。最大10秒まで録音してください。".to_string());
+        return Err("音声入力が長すぎます。最大15秒まで録音してください。".to_string());
     }
     let max_candidates = request
         .max_candidates
@@ -2951,7 +2955,7 @@ fn generate_editor_voice_input_candidates_blocking(
         let system_prompt = read_text_file_content(&system_prompt_path)?;
         let context_section = build_editor_voice_context_section(request.context.as_ref());
         let user_prompt = format!(
-            "音声を日本語として聞き取り、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。JSON文字列配列だけで返してください。{context_section}"
+            "音声を日本語として聞き取り、音声の聞こえを最優先して、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
         );
         let body = serde_json::json!({
             "model": LLM_DEFAULT_MODEL,

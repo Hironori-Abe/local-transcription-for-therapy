@@ -619,7 +619,7 @@
                     [value]="editorVoiceInputInstallPercent() ?? 0"></mat-progress-bar>
                 </div>
                 <p class="reader-hint voice-input-pack-note">
-                  音声入力は最大10秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
+                  音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
                 <p class="reader-hint voice-input-pack-note"
                   *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed">
@@ -1520,6 +1520,10 @@
                       (click)="dismissVoiceInputCandidates(segment.id)">
                       <mat-icon class="material-symbols-outlined">close</mat-icon>
                     </button>
+                    <div class="voice-input-candidate-hint"
+                      *ngIf="shouldShowVoiceInputShortCandidateHint(voicePanel.candidates)">
+                      短い単語だけだと候補が不安定になることがあります。可能なら前後を含む短い文で話すと精度が上がります。
+                    </div>
                   </div>
                   <button mat-mini-fab type="button" class="segment-insert-btn segment-insert-btn-copy" tabindex="-1"
                     [disabled]="isProofreadLocked" (click)="insertSegmentRelative(segment.id, 'below')"

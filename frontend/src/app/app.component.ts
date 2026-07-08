@@ -1361,6 +1361,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private voiceInputSampleRate = 0;
   private voiceInputAutoStopTimer: ReturnType<typeof setTimeout> | null = null;
   private voiceInputSelection: { segmentId: number; start: number; end: number } | null = null;
+  private readonly voiceInputMaxRecordingSeconds = 15;
   private previewAudio: HTMLAudioElement | null = null;
   private lastLoadedAudioSrc: string | null = null;
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
@@ -7763,6 +7764,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.voiceInputProcessingSegmentId() === segmentId;
   }
 
+  shouldShowVoiceInputShortCandidateHint(candidates: ReadonlyArray<string> | null | undefined): boolean {
+    const items = (candidates ?? []).map((candidate) => String(candidate).trim()).filter((candidate) => candidate.length > 0);
+    if (items.length === 0) {
+      return false;
+    }
+    return items.every((candidate) => Array.from(candidate).length <= 4);
+  }
+
   async toggleVoiceInputForSegment(
     segmentId: number,
     textInputEl: HTMLInputElement | HTMLTextAreaElement
@@ -7843,12 +7852,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputSourceNode = source;
       this.voiceInputProcessorNode = processor;
       this.voiceInputRecordingSegmentId.set(segmentId);
-      this.voiceInputStatus.set('録音中... 10秒で自動停止します');
+      this.voiceInputStatus.set(`録音中... ${this.voiceInputMaxRecordingSeconds}秒で自動停止します`);
       this.voiceInputAutoStopTimer = setTimeout(() => {
         if (this.voiceInputRecordingSegmentId() === segmentId) {
           void this.finishVoiceInputRecording(segmentId);
         }
-      }, 10_000);
+      }, this.voiceInputMaxRecordingSeconds * 1000);
     } catch (error) {
       this.cleanupVoiceInputRecording(false);
       this.voiceInputError.set(this.normalizeVoiceInputErrorMessage(error));
@@ -7868,7 +7877,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputError.set('録音が短すぎます。');
       return;
     }
-    const maxSourceSamples = Math.floor(sourceRate * 10);
+    const maxSourceSamples = Math.floor(sourceRate * this.voiceInputMaxRecordingSeconds);
     const clipped = merged.length > maxSourceSamples ? merged.slice(0, maxSourceSamples) : merged;
     const resampled = this.resamplePcmTo16k(clipped, sourceRate);
     const wav = this.encodePcm16Wav(resampled, 16000);
@@ -7880,12 +7889,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       const context = this.buildVoiceInputContext(segmentId);
       const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
-        request: { wavBase64, maxCandidates: 5, ...(context ? { context } : {}) },
+        request: { wavBase64, maxCandidates: 3, ...(context ? { context } : {}) },
       });
       const candidates = (response.candidates ?? [])
         .map((candidate) => String(candidate).trim())
         .filter((candidate) => candidate.length > 0)
-        .slice(0, 5);
+        .slice(0, 3);
       if (candidates.length === 0) {
         this.voiceInputError.set('候補を生成できませんでした。');
         this.voiceInputCandidates.set(null);

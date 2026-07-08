@@ -5266,22 +5266,54 @@ fn llama_cpu_backend_url(asset: &str) -> String {
     )
 }
 
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 fn spawn_file_download(url: &str, dest_file: &Path) -> Result<Child, String> {
     if cfg!(target_os = "windows") {
-        let mut cmd = Command::new("powershell");
-        apply_windows_no_window(&mut cmd);
-        cmd.arg("-NoProfile")
-            .arg("-NonInteractive")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg("$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri $args[0] -OutFile $args[1] -UseBasicParsing")
-            .arg(url)
-            .arg(dest_file);
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        return cmd
-            .spawn()
-            .map_err(|e| format!("ダウンロード処理の起動に失敗しました: {e}"));
+        let mut curl = Command::new("curl.exe");
+        apply_windows_no_window(&mut curl);
+        curl.args([
+            "-fL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "5",
+            "--silent",
+            "--show-error",
+            "-o",
+        ])
+        .arg(dest_file)
+        .arg(url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+        match curl.spawn() {
+            Ok(child) => return Ok(child),
+            Err(curl_err) => {
+                let out_file = dest_file.to_string_lossy();
+                let script = format!(
+                    "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri {} -OutFile {} -UseBasicParsing",
+                    powershell_single_quoted(url),
+                    powershell_single_quoted(out_file.as_ref())
+                );
+                let mut cmd = Command::new("powershell");
+                apply_windows_no_window(&mut cmd);
+                cmd.arg("-NoProfile")
+                    .arg("-NonInteractive")
+                    .arg("-ExecutionPolicy")
+                    .arg("Bypass")
+                    .arg("-Command")
+                    .arg(script)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                return cmd.spawn().map_err(|powershell_err| {
+                    format!(
+                        "ダウンロード処理の起動に失敗しました: curl={curl_err}; powershell={powershell_err}"
+                    )
+                });
+            }
+        }
     }
 
     let mut curl = Command::new("curl");
@@ -5481,19 +5513,47 @@ fn flatten_extracted_llama_dir(extract_dir: &Path, dest: &Path) -> Result<(), St
     Ok(())
 }
 
-fn ensure_executable(path: &Path) {
+fn ensure_executable(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
+        if let Ok(meta) = fs::metadata(_path) {
             let mode = meta.permissions().mode();
             if mode & 0o100 == 0 {
                 let mut perms = meta.permissions();
                 perms.set_mode(mode | 0o755);
-                let _ = fs::set_permissions(path, perms);
+                let _ = fs::set_permissions(_path, perms);
             }
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn expand_zip_with_powershell(archive: &Path, dest: &Path) -> Result<(), String> {
+    let archive_s = archive.to_string_lossy();
+    let dest_s = dest.to_string_lossy();
+    let script = format!(
+        "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath {} -DestinationPath {} -Force",
+        powershell_single_quoted(archive_s.as_ref()),
+        powershell_single_quoted(dest_s.as_ref())
+    );
+    let mut cmd = Command::new("powershell");
+    apply_windows_no_window(&mut cmd);
+    let status = cmd
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(script)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("PowerShell Expand-Archive の起動に失敗しました: {e}"))?;
+    if !status.success() {
+        return Err("PowerShell Expand-Archive による CPU バックエンドの展開に失敗しました。".to_string());
+    }
+    Ok(())
 }
 
 fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), String> {
@@ -5562,7 +5622,17 @@ fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), 
         result?;
     }
     let exe = std::env::consts::EXE_SUFFIX;
-    ensure_executable(&dest.join(format!("llama-server{exe}")));
+    let server = dest.join(format!("llama-server{exe}"));
+    #[cfg(target_os = "windows")]
+    if archive
+        .file_name()
+        .map(|n| n.to_string_lossy().ends_with(".zip"))
+        .unwrap_or(false)
+        && !server.exists()
+    {
+        expand_zip_with_powershell(archive, dest)?;
+    }
+    ensure_executable(&server);
     Ok(())
 }
 

@@ -619,7 +619,11 @@
                     [value]="editorVoiceInputInstallPercent() ?? 0"></mat-progress-bar>
                 </div>
                 <p class="reader-hint voice-input-pack-note">
-                  録音は最大10秒です。長く話すほど候補生成に時間がかかります。音声・会話データはローカルで処理します。
+                  音声入力は最大10秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
+                </p>
+                <p class="reader-hint voice-input-pack-note"
+                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed">
+                  未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンドを合わせて約5.0 GiBをダウンロードします。
                 </p>
                 <p class="copy-status error-text" *ngIf="editorVoiceInputPackProgressMap()['_error'] as e">{{ e.message }}</p>
                 <div *ngIf="editorVoiceInputPackDeleteResult() as r" class="dev-delete-result">

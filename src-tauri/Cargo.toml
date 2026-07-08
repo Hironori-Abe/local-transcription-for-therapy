@@ -29,6 +29,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

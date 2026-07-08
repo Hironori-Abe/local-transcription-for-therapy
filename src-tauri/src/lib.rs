@@ -489,6 +489,56 @@ fn local_openai_http_post_json_with_response(
         .map_err(|e| format!("JSON 解析に失敗しました: {e}"))
 }
 
+fn local_openai_http_get_status_body(
+    target: &LocalOpenAiHttpTarget,
+    path: &str,
+    timeout: Duration,
+) -> Result<(u16, String, Vec<u8>), String> {
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let addr = (target.host.as_str(), target.port)
+        .to_socket_addrs()
+        .map_err(|e| format!("アドレス解決に失敗: {e}"))?
+        .next()
+        .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+        .map_err(|e| format!("接続に失敗: {e}"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        target.authority
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("リクエスト送信に失敗: {e}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|e| format!("レスポンス取得に失敗: {e}"))?;
+    let header_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "HTTP レスポンスが不正です。".to_string())?;
+    let header_bytes = &response[..header_end];
+    let body_bytes = &response[header_end + 4..];
+    let headers = String::from_utf8_lossy(header_bytes);
+    let status_line = headers.lines().next().unwrap_or("").to_string();
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let body_decoded = if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+        decode_chunked_http_body(body_bytes)?
+    } else {
+        body_bytes.to_vec()
+    };
+    Ok((status_code, status_line, body_decoded))
+}
+
 /// LM Studio に /api/v1/models/load でモデルをロードする。
 /// 戻り値: Ok((instance_id, newly_loaded))
 ///   newly_loaded = load_time_seconds > 0 → 今回新たにロードした
@@ -824,6 +874,23 @@ fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
         .join("bin")
         .join("llamacpp")
         .join("rocm-stable")
+        .join(format!("llama-server{exe}"));
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// `download_llama_backend_cli.py --backend cpu` 相当の配置先から CPU 版 llama-server を返す。
+/// Editor 版の短時間音声入力はこの CPU バックエンドだけを使う。
+fn find_llm_cpu_llama_server(app: &AppHandle) -> Option<String> {
+    let cache = get_llm_engine_cache_dir(app)?;
+    let exe = std::env::consts::EXE_SUFFIX;
+    let path = cache
+        .join("bin")
+        .join("llamacpp")
+        .join("cpu")
         .join(format!("llama-server{exe}"));
     if path.exists() {
         Some(path.to_string_lossy().into_owned())
@@ -1387,6 +1454,14 @@ const GEMMA_LLM_MODEL_DIR: &str = "gemma-4-e4b-it";
 const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-E4B-it.gguf";
 const GEMMA_MTP_BF16_GGUF_FILENAME: &str = "gemma-4-E4B-it-BF16-MTP.gguf";
+const GEMMA_MMPROJ_GGUF_FILENAME: &str = "mmproj-BF16.gguf";
+const GEMMA_E4B_HF_REPO: &str = "unsloth/gemma-4-E4B-it-qat-GGUF";
+const GEMMA_E4B_MAIN_APPROX_BYTES: u64 = 4_215_693_760;
+const GEMMA_E4B_MMPROJ_APPROX_BYTES: u64 = 992_000_000;
+const LLAMA_CPP_DEFAULT_BUILD: &str = "b9631";
+const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 120_000_000;
+const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
+const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 5;
 
 // 上位（高精度）モデル: Gemma 4 12B QAT + MTP。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan
 // フォールバックの llama-server 直起動経路で提供し、large-v3 と同じく後からダウンロードする。
@@ -1524,6 +1599,28 @@ fn resolve_gemma_mtp_path_for_tier(app: &AppHandle, tier: GemmaTier) -> Option<S
     }
     if let Some(dir) = gemma_release_model_dir(app, tier) {
         if let Some(p) = find_existing_gemma_mtp_gguf(&dir, tier) {
+            return Some(p.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+fn gemma_mmproj_gguf_path(dir: &Path) -> PathBuf {
+    dir.join(GEMMA_MMPROJ_GGUF_FILENAME)
+}
+
+fn resolve_gemma_e4b_mmproj_path(app: &AppHandle) -> Option<String> {
+    if cfg!(debug_assertions) {
+        for dir in gemma_debug_model_dir_candidates(GemmaTier::E4b) {
+            let p = gemma_mmproj_gguf_path(&dir);
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Some(dir) = gemma_release_model_dir(app, GemmaTier::E4b) {
+        let p = gemma_mmproj_gguf_path(&dir);
+        if p.exists() {
             return Some(p.to_string_lossy().to_string());
         }
     }
@@ -2029,6 +2126,7 @@ fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> 
     } else if find_bundled_llama_server_bin(&app).is_some()
         || find_llm_rocm_llama_server(&app).is_some()
         || find_llm_vulkan_llama_server(&app).is_some()
+        || find_llm_cpu_llama_server(&app).is_some()
     {
         // 起動可能な llama-server バイナリが存在すれば「インストール済み（停止中）」と見なす。
         // NVIDIA=同梱 CUDA llama-server、AMD=取得済み ROCm/Vulkan バックエンド。
@@ -2464,6 +2562,393 @@ fn stop_llm_server(state: tauri::State<'_, LlmServer>) -> Result<(), String> {
         let _ = child.kill();
     }
     Ok(())
+}
+
+fn try_start_llama_server_cpu_audio(
+    bin_path: &str,
+    model_path: &str,
+    mmproj_path: &str,
+    port: u16,
+) -> Result<Child, String> {
+    let bin = PathBuf::from(bin_path);
+    ensure_executable(&bin);
+    let mut cmd = Command::new(bin_path);
+    apply_windows_no_window(&mut cmd);
+    if let Some(bin_dir) = bin.parent() {
+        if bin_dir.exists() {
+            #[cfg(target_os = "windows")]
+            let sep = ";";
+            #[cfg(not(target_os = "windows"))]
+            let sep = ":";
+            let current_path = env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}{sep}{current_path}", bin_dir.display()));
+            #[cfg(not(target_os = "windows"))]
+            {
+                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+                cmd.env(
+                    "LD_LIBRARY_PATH",
+                    format!("{}{sep}{current_ld}", bin_dir.display()),
+                );
+            }
+        }
+    }
+    let port_s = port.to_string();
+    cmd.arg("-m")
+        .arg(model_path)
+        .arg("--mmproj")
+        .arg(mmproj_path)
+        .arg("--device")
+        .arg("none")
+        .arg("-ngl")
+        .arg("0")
+        .arg("--no-mmproj-offload")
+        .arg("--ctx-size")
+        .arg("4096")
+        .arg("-np")
+        .arg("1")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(&port_s)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn()
+        .map(|child| {
+            assign_to_kill_on_close_job(&child);
+            child
+        })
+        .map_err(|e| format!("音声入力エンジンの起動に失敗しました: {e}"))
+}
+
+fn editor_voice_input_server_ready(port: u16) -> bool {
+    let target = LocalOpenAiHttpTarget {
+        host: "127.0.0.1".to_string(),
+        authority: format!("127.0.0.1:{port}"),
+        port,
+        path_prefix: String::new(),
+    };
+    match local_openai_http_get_status_body(&target, "/health", Duration::from_secs(2)) {
+        Ok((code, _, _)) if (200..300).contains(&code) => true,
+        Ok((404, _, _)) => local_openai_http_get_json(&target, "/v1/models", Duration::from_secs(2)).is_ok(),
+        Ok(_) | Err(_) => false,
+    }
+}
+
+fn local_openai_http_post_json_with_loading_retry(
+    target: &LocalOpenAiHttpTarget,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let mut last_error = String::new();
+    for attempt in 0..30 {
+        match local_openai_http_post_json_with_response(target, path, body, timeout) {
+            Ok(value) => return Ok(value),
+            Err(error) if error.contains("503") && error.to_ascii_lowercase().contains("loading") => {
+                last_error = error;
+                thread::sleep(Duration::from_secs(1));
+            }
+            Err(error) => return Err(error),
+        }
+        if attempt == 29 {
+            break;
+        }
+    }
+    Err(if last_error.is_empty() {
+        "音声入力エンジンのモデルロードが完了しませんでした。".to_string()
+    } else {
+        format!("音声入力エンジンのモデルロードが完了しませんでした: {last_error}")
+    })
+}
+
+fn start_editor_voice_input_server_blocking(
+    app: &AppHandle,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    port_arc: &Arc<AtomicU32>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+) -> Result<u16, String> {
+    let status = check_editor_voice_input_pack_status_impl(app);
+    if !status.installed {
+        return Err("音声入力パックが未導入です。設定タブから導入してください。".to_string());
+    }
+    let bin = find_llm_cpu_llama_server(app)
+        .ok_or_else(|| "llama.cpp CPU バックエンドが見つかりません。".to_string())?;
+    let model_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)
+        .ok_or_else(|| "Gemma 4 E4B GGUF が見つかりません。".to_string())?;
+    let mmproj_path = resolve_gemma_e4b_mmproj_path(app)
+        .ok_or_else(|| "Gemma 4 E4B mmproj が見つかりません。".to_string())?;
+
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    mode_arc.store(0, Ordering::Relaxed);
+
+    let resolved_port = match get_llm_engine_cache_dir(app) {
+        Some(p) => {
+            let _ = fs::create_dir_all(&p);
+            let rp = resolve_llm_server_port(&p);
+            ensure_llm_server_port_config(&p, rp);
+            rp
+        }
+        None => 13306,
+    };
+    port_arc.store(resolved_port as u32, Ordering::Relaxed);
+    mode_arc.store(1, Ordering::Relaxed);
+    parallel_arc.store(1, Ordering::Relaxed);
+    let child = try_start_llama_server_cpu_audio(&bin, &model_path, &mmproj_path, resolved_port)?;
+    *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
+
+    for _ in 0..240 {
+        thread::sleep(Duration::from_millis(500));
+        if editor_voice_input_server_ready(resolved_port) {
+            return Ok(resolved_port);
+        }
+        let child_dead = child_arc
+            .lock()
+            .ok()
+            .and_then(|mut g| {
+                g.as_mut()
+                    .map(|c| c.try_wait().map(|s| s.is_some()).unwrap_or(false))
+            })
+            .unwrap_or(false);
+        if child_dead {
+            break;
+        }
+    }
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    mode_arc.store(0, Ordering::Relaxed);
+    Err("音声入力エンジンの起動タイムアウト（120秒）".to_string())
+}
+
+fn parse_editor_voice_candidates_text(raw: &str, max_candidates: usize) -> Vec<String> {
+    let mut text = raw.trim().to_string();
+    if text.starts_with("```") {
+        text = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let json_candidate = if text.trim_start().starts_with('[') {
+        text.trim().to_string()
+    } else if let (Some(start), Some(end)) = (text.find('['), text.rfind(']')) {
+        if start < end {
+            text[start..=end].to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let mut candidates: Vec<String> = Vec::new();
+    if !json_candidate.is_empty() {
+        if let Ok(value) = serde_json::from_str::<Value>(&json_candidate) {
+            if let Some(items) = value.as_array() {
+                for item in items {
+                    let candidate = item
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| {
+                            item.get("text")
+                                .or_else(|| item.get("candidate"))
+                                .or_else(|| item.get("content"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        });
+                    if let Some(candidate) = candidate {
+                        let trimmed = candidate.trim();
+                        if !trimmed.is_empty() {
+                            candidates.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        candidates = text
+            .lines()
+            .map(|line| {
+                line.trim()
+                    .trim_start_matches(|c: char| {
+                        c.is_ascii_digit()
+                            || c == '.'
+                            || c == '-'
+                            || c == '・'
+                            || c == '*'
+                            || c == ' '
+                    })
+                    .trim()
+                    .trim_matches('"')
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect();
+    }
+
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.clone()))
+        .take(max_candidates)
+        .collect()
+}
+
+fn extract_editor_voice_candidates(response: &Value, max_candidates: usize) -> Vec<String> {
+    let content_value = response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| {
+            message
+                .get("content")
+                .filter(|v| !v.is_null())
+                .or_else(|| message.get("reasoning_content"))
+        });
+    let content = match content_value {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .or_else(|| part.get("content"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    parse_editor_voice_candidates_text(&content, max_candidates)
+}
+
+fn generate_editor_voice_input_candidates_blocking(
+    app: AppHandle,
+    request: EditorVoiceInputRequest,
+    child_arc: Arc<Mutex<Option<Child>>>,
+    port_arc: Arc<AtomicU32>,
+    mode_arc: Arc<AtomicU8>,
+    parallel_arc: Arc<AtomicU8>,
+) -> Result<EditorVoiceInputResponse, String> {
+    if !editor_voice_input_allowed(&app) {
+        return Err("音声入力はEditor版専用です。".to_string());
+    }
+    if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
+        return Err("音声入力が長すぎます。最大10秒まで録音してください。".to_string());
+    }
+    let max_candidates = request
+        .max_candidates
+        .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
+        .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
+    let result = (|| {
+        let port = start_editor_voice_input_server_blocking(
+            &app,
+            &child_arc,
+            &port_arc,
+            &mode_arc,
+            &parallel_arc,
+        )?;
+        let target = LocalOpenAiHttpTarget {
+            host: "127.0.0.1".to_string(),
+            authority: format!("127.0.0.1:{port}"),
+            port,
+            path_prefix: String::new(),
+        };
+        let system_prompt_path = resolve_editor_voice_input_system_prompt_path(&app)?;
+        let system_prompt = read_text_file_content(&system_prompt_path)?;
+        let user_prompt = format!(
+            "音声を日本語として聞き取り、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。JSON文字列配列だけで返してください。"
+        );
+        let body = serde_json::json!({
+            "model": LLM_DEFAULT_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_prompt
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": request.wav_base64,
+                                "format": "wav"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "chat_template_kwargs": { "enable_thinking": false },
+            "temperature": 0.35,
+            "max_tokens": 240,
+            "stream": false
+        })
+        .to_string();
+        let response = local_openai_http_post_json_with_loading_retry(
+            &target,
+            "/v1/chat/completions",
+            &body,
+            Duration::from_secs(180),
+        )?;
+        let candidates = extract_editor_voice_candidates(&response, max_candidates);
+        if candidates.is_empty() {
+            return Err("音声入力候補を生成できませんでした。".to_string());
+        }
+        Ok(EditorVoiceInputResponse { candidates })
+    })();
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    mode_arc.store(0, Ordering::Relaxed);
+    result
+}
+
+#[tauri::command]
+async fn generate_editor_voice_input_candidates(
+    app: AppHandle,
+    state: tauri::State<'_, LlmServer>,
+    request: EditorVoiceInputRequest,
+) -> Result<EditorVoiceInputResponse, String> {
+    let child_arc = Arc::clone(&state.child);
+    let port_arc = Arc::clone(&state.port);
+    let mode_arc = Arc::clone(&state.mode);
+    let parallel_arc = Arc::clone(&state.parallel);
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_editor_voice_input_candidates_blocking(
+            app,
+            request,
+            child_arc,
+            port_arc,
+            mode_arc,
+            parallel_arc,
+        )
+    })
+    .await
+    .map_err(|e| format!("音声入力候補生成タスクエラー: {e}"))?
 }
 
 static TRANSCRIPTION_PID: AtomicU32 = AtomicU32::new(0);
@@ -3254,6 +3739,40 @@ struct AllSetupStatus {
     llm_backend: bool,
     python_env: bool,
     python_env_expected_path: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EditorVoiceInputPackStatus {
+    installed: bool,
+    cpu_backend: bool,
+    cpu_backend_expected_path: String,
+    gemma_gguf: bool,
+    gemma_gguf_expected_path: String,
+    mmproj_gguf: bool,
+    mmproj_gguf_expected_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorVoiceInputPackDeleteResponse {
+    deleted: Vec<String>,
+    not_found: Vec<String>,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorVoiceInputRequest {
+    wav_base64: String,
+    #[serde(default)]
+    max_candidates: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorVoiceInputResponse {
+    candidates: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -4615,6 +5134,638 @@ fn get_gemma_mtp_gguf_info(app: &AppHandle) -> (bool, String) {
     }
     let expected = dir.join(GEMMA_MTP_GGUF_FILENAME);
     (false, expected.to_string_lossy().to_string())
+}
+
+fn path_is_nonempty_file(path: &Path, min_bytes: u64) -> bool {
+    path.is_file()
+        && path
+            .metadata()
+            .map(|m| m.len() >= min_bytes)
+            .unwrap_or(false)
+}
+
+fn get_gemma_mmproj_gguf_info(app: &AppHandle) -> (bool, String) {
+    if cfg!(debug_assertions) {
+        for dir in gemma_debug_model_dir_candidates(GemmaTier::E4b) {
+            let p = gemma_mmproj_gguf_path(&dir);
+            if path_is_nonempty_file(&p, 1024 * 1024) {
+                return (true, p.to_string_lossy().to_string());
+            }
+        }
+        let expected = gemma_mmproj_gguf_path(&gemma_debug_model_dir_candidates(GemmaTier::E4b)[0]);
+        return (false, expected.to_string_lossy().to_string());
+    }
+
+    let dir = gemma_release_model_dir(app, GemmaTier::E4b)
+        .unwrap_or_else(|| gemma_llm_relative_dir(GemmaTier::E4b));
+    let p = gemma_mmproj_gguf_path(&dir);
+    (path_is_nonempty_file(&p, 1024 * 1024), p.to_string_lossy().to_string())
+}
+
+fn get_editor_voice_cpu_backend_info(app: &AppHandle) -> (bool, String) {
+    if let Some(path) = find_llm_cpu_llama_server(app) {
+        return (true, path);
+    }
+    let exe = std::env::consts::EXE_SUFFIX;
+    let expected = get_llm_engine_cache_dir(app)
+        .unwrap_or_else(|| PathBuf::from("lemonade"))
+        .join("bin")
+        .join("llamacpp")
+        .join("cpu")
+        .join(format!("llama-server{exe}"));
+    (false, expected.to_string_lossy().to_string())
+}
+
+fn editor_voice_cpu_backend_dir(app: &AppHandle) -> PathBuf {
+    get_llm_engine_cache_dir(app)
+        .unwrap_or_else(|| PathBuf::from("lemonade"))
+        .join("bin")
+        .join("llamacpp")
+        .join("cpu")
+}
+
+fn editor_voice_mmproj_candidate_paths(app: &AppHandle) -> Vec<PathBuf> {
+    if cfg!(debug_assertions) {
+        return gemma_debug_model_dir_candidates(GemmaTier::E4b)
+            .into_iter()
+            .map(|dir| gemma_mmproj_gguf_path(&dir))
+            .collect();
+    }
+
+    let dir = gemma_release_model_dir(app, GemmaTier::E4b)
+        .unwrap_or_else(|| gemma_llm_relative_dir(GemmaTier::E4b));
+    vec![gemma_mmproj_gguf_path(&dir)]
+}
+
+fn editor_voice_input_allowed(app: &AppHandle) -> bool {
+    app.config().identifier.contains("editor")
+}
+
+fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInputPackStatus {
+    let (cpu_backend, cpu_backend_expected_path) = get_editor_voice_cpu_backend_info(app);
+    let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
+    let (mmproj_gguf, mmproj_gguf_expected_path) = get_gemma_mmproj_gguf_info(app);
+    EditorVoiceInputPackStatus {
+        installed: cpu_backend && gemma_gguf && mmproj_gguf,
+        cpu_backend,
+        cpu_backend_expected_path,
+        gemma_gguf,
+        gemma_gguf_expected_path,
+        mmproj_gguf,
+        mmproj_gguf_expected_path,
+    }
+}
+
+#[tauri::command]
+fn check_editor_voice_input_pack_status(app: AppHandle) -> Result<EditorVoiceInputPackStatus, String> {
+    if !editor_voice_input_allowed(&app) {
+        return Err("音声入力パックはEditor版専用です。".to_string());
+    }
+    Ok(check_editor_voice_input_pack_status_impl(&app))
+}
+
+fn emit_voice_input_pack_progress(
+    app: &AppHandle,
+    component: &str,
+    status: &str,
+    message: &str,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+) {
+    let _ = app.emit(
+        "voice-input-pack-progress",
+        SetupProgressPayload {
+            component: component.to_string(),
+            status: status.to_string(),
+            message: message.to_string(),
+            downloaded_bytes,
+            total_bytes,
+        },
+    );
+}
+
+fn editor_voice_hf_resolve_url(filename: &str) -> String {
+    format!(
+        "https://huggingface.co/{GEMMA_E4B_HF_REPO}/resolve/main/{filename}?download=true"
+    )
+}
+
+fn llama_cpu_backend_asset_name() -> Result<String, String> {
+    if cfg!(target_os = "windows") {
+        Ok(format!("llama-{LLAMA_CPP_DEFAULT_BUILD}-bin-win-cpu-x64.zip"))
+    } else if cfg!(target_os = "linux") {
+        Ok(format!("llama-{LLAMA_CPP_DEFAULT_BUILD}-bin-ubuntu-x64.tar.gz"))
+    } else {
+        Err("このOSのCPU版 llama.cpp バックエンド取得は未対応です。".to_string())
+    }
+}
+
+fn llama_cpu_backend_url(asset: &str) -> String {
+    format!(
+        "https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_DEFAULT_BUILD}/{asset}"
+    )
+}
+
+fn spawn_file_download(url: &str, dest_file: &Path) -> Result<Child, String> {
+    if cfg!(target_os = "windows") {
+        let mut cmd = Command::new("powershell");
+        apply_windows_no_window(&mut cmd);
+        cmd.arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg("$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri $args[0] -OutFile $args[1] -UseBasicParsing")
+            .arg(url)
+            .arg(dest_file);
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        return cmd
+            .spawn()
+            .map_err(|e| format!("ダウンロード処理の起動に失敗しました: {e}"));
+    }
+
+    let mut curl = Command::new("curl");
+    apply_windows_no_window(&mut curl);
+    curl.args([
+        "-fL",
+        "--retry",
+        "3",
+        "--retry-delay",
+        "5",
+        "--silent",
+        "--show-error",
+        "-o",
+    ])
+    .arg(dest_file)
+    .arg(url)
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    match curl.spawn() {
+        Ok(child) => Ok(child),
+        Err(curl_err) => {
+            let mut wget = Command::new("wget");
+            apply_windows_no_window(&mut wget);
+            wget.arg("-O")
+                .arg(dest_file)
+                .arg(url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            wget.spawn().map_err(|wget_err| {
+                format!("curl/wget の起動に失敗しました: curl={curl_err}; wget={wget_err}")
+            })
+        }
+    }
+}
+
+fn download_file_with_progress_blocking(
+    app: &AppHandle,
+    component: &str,
+    label: &str,
+    url: &str,
+    dest_file: &Path,
+    total_bytes: Option<u64>,
+    min_existing_bytes: u64,
+) -> Result<(), String> {
+    if path_is_nonempty_file(dest_file, min_existing_bytes) {
+        emit_voice_input_pack_progress(app, component, "skipped", "インストール済みです", None, total_bytes);
+        return Ok(());
+    }
+    if let Some(parent) = dest_file.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("保存先ディレクトリを作成できませんでした: {e}"))?;
+    }
+    let file_name = dest_file
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "保存先ファイル名が不正です。".to_string())?;
+    let temp_file = dest_file.with_file_name(format!("{file_name}.part"));
+    let _ = fs::remove_file(&temp_file);
+
+    emit_voice_input_pack_progress(
+        app,
+        component,
+        "downloading",
+        &format!("{label} をダウンロード中..."),
+        Some(0),
+        total_bytes,
+    );
+    let mut child = spawn_file_download(url, &temp_file)?;
+    let mut last_emitted = 0_u64;
+    loop {
+        match child
+            .try_wait()
+            .map_err(|e| format!("ダウンロード処理の確認に失敗しました: {e}"))?
+        {
+            Some(status) => {
+                if !status.success() {
+                    let _ = fs::remove_file(&temp_file);
+                    return Err(format!(
+                        "{label} のダウンロードに失敗しました。インターネット接続を確認してください。"
+                    ));
+                }
+                break;
+            }
+            None => {
+                let downloaded = temp_file.metadata().map(|m| m.len()).unwrap_or(0);
+                if downloaded >= last_emitted + 5 * 1024 * 1024 || (downloaded > 0 && last_emitted == 0) {
+                    last_emitted = downloaded;
+                    emit_voice_input_pack_progress(
+                        app,
+                        component,
+                        "downloading",
+                        &format!("{label} をダウンロード中..."),
+                        Some(downloaded),
+                        total_bytes,
+                    );
+                }
+                thread::sleep(Duration::from_millis(800));
+            }
+        }
+    }
+
+    let downloaded = temp_file
+        .metadata()
+        .map(|m| m.len())
+        .map_err(|_| format!("{label} のダウンロード結果が見つかりません。"))?;
+    if downloaded < min_existing_bytes {
+        let _ = fs::remove_file(&temp_file);
+        return Err(format!("{label} のダウンロード結果が小さすぎます。"));
+    }
+    if dest_file.exists() {
+        fs::remove_file(dest_file)
+            .map_err(|e| format!("既存ファイルを置き換えられませんでした: {e}"))?;
+    }
+    fs::rename(&temp_file, dest_file)
+        .map_err(|e| format!("ダウンロード済みファイルを配置できませんでした: {e}"))?;
+    emit_voice_input_pack_progress(
+        app,
+        component,
+        "downloading",
+        &format!("{label} を配置中..."),
+        Some(downloaded),
+        total_bytes,
+    );
+    Ok(())
+}
+
+fn strip_llama_archive_root(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    let first = components.next();
+    if let Some(std::path::Component::Normal(name)) = first {
+        if name.to_string_lossy().starts_with("llama-") {
+            return components.as_path().to_path_buf();
+        }
+    }
+    path.to_path_buf()
+}
+
+fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("ディレクトリを作成できませんでした: {}: {e}", dest.display()))?;
+    for entry in fs::read_dir(src)
+        .map_err(|e| format!("ディレクトリを読めませんでした: {}: {e}", src.display()))?
+    {
+        let entry = entry.map_err(|e| format!("ディレクトリエントリを読めませんでした: {e}"))?;
+        let target = dest.join(entry.file_name());
+        let path = entry.path();
+        if path.is_dir() {
+            copy_dir_recursively(&path, &target)?;
+        } else {
+            if target.exists() {
+                fs::remove_file(&target)
+                    .map_err(|e| format!("既存ファイルを置き換えられませんでした: {e}"))?;
+            }
+            fs::copy(&path, &target)
+                .map_err(|e| format!("ファイルをコピーできませんでした: {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn flatten_extracted_llama_dir(extract_dir: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("展開先ディレクトリを作成できませんでした: {e}"))?;
+    let root = fs::read_dir(extract_dir)
+        .ok()
+        .and_then(|entries| {
+            entries.flatten().map(|e| e.path()).find(|p| {
+                p.is_dir()
+                    && p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().starts_with("llama-"))
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or_else(|| extract_dir.to_path_buf());
+    for entry in fs::read_dir(&root)
+        .map_err(|e| format!("展開ディレクトリを読めませんでした: {e}"))?
+    {
+        let entry = entry.map_err(|e| format!("展開ファイルを読めませんでした: {e}"))?;
+        let path = entry.path();
+        let target = dest.join(entry.file_name());
+        if path.is_dir() {
+            if target.exists() {
+                fs::remove_dir_all(&target)
+                    .map_err(|e| format!("既存ディレクトリを置き換えられませんでした: {e}"))?;
+            }
+            copy_dir_recursively(&path, &target)?;
+        } else {
+            if target.exists() {
+                fs::remove_file(&target)
+                    .map_err(|e| format!("既存ファイルを置き換えられませんでした: {e}"))?;
+            }
+            fs::copy(&path, &target)
+                .map_err(|e| format!("ファイルを配置できませんでした: {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o100 == 0 {
+                let mut perms = meta.permissions();
+                perms.set_mode(mode | 0o755);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+    }
+}
+
+fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), String> {
+    if archive
+        .file_name()
+        .map(|n| n.to_string_lossy().ends_with(".zip"))
+        .unwrap_or(false)
+    {
+        fs::create_dir_all(dest)
+            .map_err(|e| format!("展開先ディレクトリを作成できませんでした: {e}"))?;
+        let file = fs::File::open(archive)
+            .map_err(|e| format!("バックエンドアーカイブを開けませんでした: {e}"))?;
+        let mut zip = zip::ZipArchive::new(file)
+            .map_err(|e| format!("バックエンドアーカイブを読めませんでした: {e}"))?;
+        for i in 0..zip.len() {
+            let mut file = zip
+                .by_index(i)
+                .map_err(|e| format!("バックエンドアーカイブの展開に失敗しました: {e}"))?;
+            let Some(enclosed) = file.enclosed_name().map(|p| p.to_path_buf()) else {
+                continue;
+            };
+            let rel = strip_llama_archive_root(&enclosed);
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let out_path = dest.join(rel);
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&out_path)
+                    .map_err(|e| format!("展開先ディレクトリを作成できませんでした: {e}"))?;
+            } else {
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| format!("展開先ディレクトリを作成できませんでした: {e}"))?;
+                }
+                let mut out = fs::File::create(&out_path)
+                    .map_err(|e| format!("展開ファイルを作成できませんでした: {e}"))?;
+                std::io::copy(&mut file, &mut out)
+                    .map_err(|e| format!("展開ファイルを書き込めませんでした: {e}"))?;
+            }
+        }
+    } else {
+        let extract_dir = archive.with_file_name("llama_cpu_extract_tmp");
+        if extract_dir.exists() {
+            fs::remove_dir_all(&extract_dir)
+                .map_err(|e| format!("一時展開ディレクトリを削除できませんでした: {e}"))?;
+        }
+        fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("一時展開ディレクトリを作成できませんでした: {e}"))?;
+        let mut tar = Command::new("tar");
+        apply_windows_no_window(&mut tar);
+        let status = tar
+            .arg("-xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(&extract_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("tar の起動に失敗しました: {e}"))?;
+        if !status.success() {
+            let _ = fs::remove_dir_all(&extract_dir);
+            return Err("CPU バックエンドの展開に失敗しました。".to_string());
+        }
+        let result = flatten_extracted_llama_dir(&extract_dir, dest);
+        let _ = fs::remove_dir_all(&extract_dir);
+        result?;
+    }
+    let exe = std::env::consts::EXE_SUFFIX;
+    ensure_executable(&dest.join(format!("llama-server{exe}")));
+    Ok(())
+}
+
+fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), String> {
+    if find_llm_cpu_llama_server(app).is_some() {
+        emit_voice_input_pack_progress(
+            app,
+            "voice_cpu_backend",
+            "skipped",
+            "インストール済みです",
+            None,
+            Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
+        );
+        return Ok(());
+    }
+    let cache = get_llm_engine_cache_dir(app)
+        .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
+    let dest = cache.join("bin").join("llamacpp").join("cpu");
+    let downloads = cache.join("downloads");
+    let asset = llama_cpu_backend_asset_name()?;
+    let archive = downloads.join(&asset);
+    let url = llama_cpu_backend_url(&asset);
+    download_file_with_progress_blocking(
+        app,
+        "voice_cpu_backend",
+        "llama.cpp CPU バックエンド",
+        &url,
+        &archive,
+        Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
+        1024 * 1024,
+    )?;
+    emit_voice_input_pack_progress(
+        app,
+        "voice_cpu_backend",
+        "downloading",
+        "llama.cpp CPU バックエンドを展開中...",
+        None,
+        Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
+    );
+    extract_llama_cpu_backend_archive(&archive, &dest)?;
+    if find_llm_cpu_llama_server(app).is_none() {
+        return Err("展開後に llama-server が見つかりませんでした。".to_string());
+    }
+    emit_voice_input_pack_progress(
+        app,
+        "voice_cpu_backend",
+        "done",
+        "インストール完了",
+        Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
+        Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
+    );
+    Ok(())
+}
+
+fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, String> {
+    if !editor_voice_input_allowed(&app) {
+        return Err("音声入力パックはEditor版専用です。".to_string());
+    }
+    install_editor_voice_cpu_backend_blocking(&app)?;
+
+    let model_dir = if cfg!(debug_assertions) {
+        gemma_debug_model_dir_candidates(GemmaTier::E4b)[0].clone()
+    } else {
+        gemma_release_model_dir(&app, GemmaTier::E4b)
+            .ok_or_else(|| "モデル保存先を解決できませんでした。".to_string())?
+    };
+    fs::create_dir_all(&model_dir)
+        .map_err(|e| format!("モデル保存先を作成できませんでした: {e}"))?;
+
+    let main_path = gemma_main_gguf_path(&model_dir, GemmaTier::E4b);
+    download_file_with_progress_blocking(
+        &app,
+        "voice_gemma_gguf",
+        "Gemma 4 E4B QAT GGUF",
+        &editor_voice_hf_resolve_url(GEMMA_MAIN_GGUF_FILENAME),
+        &main_path,
+        Some(GEMMA_E4B_MAIN_APPROX_BYTES),
+        1024 * 1024,
+    )?;
+    emit_voice_input_pack_progress(
+        &app,
+        "voice_gemma_gguf",
+        "done",
+        "インストール完了",
+        Some(GEMMA_E4B_MAIN_APPROX_BYTES),
+        Some(GEMMA_E4B_MAIN_APPROX_BYTES),
+    );
+
+    let mmproj_path = gemma_mmproj_gguf_path(&model_dir);
+    download_file_with_progress_blocking(
+        &app,
+        "voice_mmproj_gguf",
+        "Gemma 4 E4B 音声入力 mmproj",
+        &editor_voice_hf_resolve_url(GEMMA_MMPROJ_GGUF_FILENAME),
+        &mmproj_path,
+        Some(GEMMA_E4B_MMPROJ_APPROX_BYTES),
+        1024 * 1024,
+    )?;
+    emit_voice_input_pack_progress(
+        &app,
+        "voice_mmproj_gguf",
+        "done",
+        "インストール完了",
+        Some(GEMMA_E4B_MMPROJ_APPROX_BYTES),
+        Some(GEMMA_E4B_MMPROJ_APPROX_BYTES),
+    );
+
+    Ok(check_editor_voice_input_pack_status_impl(&app).installed)
+}
+
+#[tauri::command]
+async fn install_editor_voice_input_pack(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || install_editor_voice_input_pack_blocking(app))
+        .await
+        .map_err(|e| format!("音声入力パックの導入タスクエラー: {e}"))?
+}
+
+fn delete_dir_recording(
+    path: &Path,
+    deleted: &mut Vec<String>,
+    not_found: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    if path.exists() {
+        match fs::remove_dir_all(path) {
+            Ok(_) => deleted.push(path.to_string_lossy().into_owned()),
+            Err(e) => errors.push(format!("{}: {e}", path.display())),
+        }
+    } else {
+        not_found.push(path.to_string_lossy().into_owned());
+    }
+}
+
+fn delete_file_recording(
+    path: &Path,
+    deleted: &mut Vec<String>,
+    not_found: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    if path.exists() {
+        match fs::remove_file(path) {
+            Ok(_) => deleted.push(path.to_string_lossy().into_owned()),
+            Err(e) => errors.push(format!("{}: {e}", path.display())),
+        }
+    } else {
+        not_found.push(path.to_string_lossy().into_owned());
+    }
+}
+
+#[tauri::command]
+fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDeleteResponse {
+    if !cfg!(debug_assertions) {
+        return EditorVoiceInputPackDeleteResponse {
+            deleted: vec![],
+            not_found: vec![],
+            errors: vec!["dev ビルドでのみ使用できます".to_string()],
+        };
+    }
+    if !editor_voice_input_allowed(&app) {
+        return EditorVoiceInputPackDeleteResponse {
+            deleted: vec![],
+            not_found: vec![],
+            errors: vec!["音声入力パック削除はEditor版専用です。".to_string()],
+        };
+    }
+
+    let mut deleted = Vec::new();
+    let mut not_found = Vec::new();
+    let mut errors = Vec::new();
+
+    let cpu_dir = editor_voice_cpu_backend_dir(&app);
+    delete_dir_recording(&cpu_dir, &mut deleted, &mut not_found, &mut errors);
+
+    if let Some(cache) = get_llm_engine_cache_dir(&app) {
+        if let Ok(asset) = llama_cpu_backend_asset_name() {
+            let archive = cache.join("downloads").join(asset);
+            delete_file_recording(&archive, &mut deleted, &mut not_found, &mut errors);
+            delete_file_recording(
+                &archive.with_file_name(format!(
+                    "{}.part",
+                    archive.file_name().unwrap_or_default().to_string_lossy()
+                )),
+                &mut deleted,
+                &mut not_found,
+                &mut errors,
+            );
+        }
+    }
+
+    for mmproj in editor_voice_mmproj_candidate_paths(&app) {
+        delete_file_recording(&mmproj, &mut deleted, &mut not_found, &mut errors);
+        delete_file_recording(
+            &mmproj.with_file_name(format!(
+                "{}.part",
+                mmproj.file_name().unwrap_or_default().to_string_lossy()
+            )),
+            &mut deleted,
+            &mut not_found,
+            &mut errors,
+        );
+    }
+
+    EditorVoiceInputPackDeleteResponse { deleted, not_found, errors }
 }
 
 #[tauri::command]
@@ -9668,6 +10819,61 @@ fn resolve_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, Stri
     ))
 }
 
+fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let prompt_relative = PathBuf::from("python_sidecar")
+        .join("prompt_templates")
+        .join("voice_input")
+        .join("gemma4_e4b_candidates_system.txt");
+
+    if cfg!(debug_assertions) {
+        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(&prompt_relative);
+        if manifest_dev_path.exists() {
+            return Ok(manifest_dev_path);
+        }
+
+        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
+        let dev_path = cwd.join(&prompt_relative);
+        if dev_path.exists() {
+            return Ok(dev_path);
+        }
+    }
+
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
+    let bundled_candidates = vec![
+        resource_dir.join(&prompt_relative),
+        resource_dir.join("_up_").join(&prompt_relative),
+        resource_dir
+            .join("prompt_templates")
+            .join("voice_input")
+            .join("gemma4_e4b_candidates_system.txt"),
+        resource_dir
+            .join("_up_")
+            .join("prompt_templates")
+            .join("voice_input")
+            .join("gemma4_e4b_candidates_system.txt"),
+    ];
+
+    for candidate in &bundled_candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    Err(format!(
+        "音声入力プロンプトが見つかりません: {}",
+        bundled_candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<String>>()
+            .join(" / ")
+    ))
+}
+
 fn resolve_default_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
     let prompt_relative = PathBuf::from("python_sidecar")
         .join("prompt_templates")
@@ -9915,6 +11121,23 @@ pub fn run() {
         .manage(OpenAiUnloadState::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = window.with_webview(|webview| {
+                        use webkit2gtk::{
+                            glib::ObjectExt, PermissionRequestExt, UserMediaPermissionRequest,
+                            WebViewExt,
+                        };
+                        webview.inner().connect_permission_request(|_, request| {
+                            if request.is::<UserMediaPermissionRequest>() {
+                                request.allow();
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    });
+                }
                 if !schedule_dev_window_focus(app.handle(), &window) {
                     let _ = window.maximize();
                 }
@@ -9986,6 +11209,10 @@ pub fn run() {
             stop_llm_server,
             install_llm_engine,
             install_llm_backend,
+            check_editor_voice_input_pack_status,
+            install_editor_voice_input_pack,
+            dev_delete_editor_voice_input_pack,
+            generate_editor_voice_input_candidates,
             get_audio_stream_port,
             set_audio_allowed_path,
             get_dev_demo_data_dir,

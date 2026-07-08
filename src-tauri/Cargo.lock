@@ -2083,6 +2083,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "webkit2gtk",
  "windows-sys 0.59.0",
  "zip",
 ]

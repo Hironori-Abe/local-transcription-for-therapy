@@ -427,6 +427,26 @@ interface AllSetupStatus {
   pythonEnvExpectedPath: string;
 }
 
+interface EditorVoiceInputPackStatus {
+  installed: boolean;
+  cpuBackend: boolean;
+  cpuBackendExpectedPath: string;
+  gemmaGguf: boolean;
+  gemmaGgufExpectedPath: string;
+  mmprojGguf: boolean;
+  mmprojGgufExpectedPath: string;
+}
+
+interface EditorVoiceInputResponse {
+  candidates: string[];
+}
+
+interface DeleteModelsResponse {
+  deleted: string[];
+  notFound: string[];
+  errors: string[];
+}
+
 interface SetupProgressEvent {
   component: string;
   status: 'downloading' | 'done' | 'error' | 'skipped';
@@ -919,12 +939,38 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly diarizationModelExpectedPath = signal<string>('');
   readonly diarizationModelChecking = signal<boolean>(false);
   readonly diarizationSetupVisible = signal<boolean>(false);
+  readonly voiceInputRecordingSegmentId = signal<number | null>(null);
+  readonly voiceInputProcessingSegmentId = signal<number | null>(null);
+  readonly voiceInputFeedbackSegmentId = signal<number | null>(null);
+  readonly voiceInputCandidates = signal<{ segmentId: number; candidates: string[] } | null>(null);
+  readonly voiceInputStatus = signal<string>('');
+  readonly voiceInputError = signal<string>('');
 
   // 統合セットアップ
   readonly allSetupStatus = signal<AllSetupStatus | null>(null);
   readonly allSetupChecked = signal<boolean>(false);
   readonly setupRunning = signal<boolean>(false);
   readonly setupProgressMap = signal<Record<string, SetupProgressEvent>>({});
+  readonly editorVoiceInputPackStatus = signal<EditorVoiceInputPackStatus | null>(null);
+  readonly editorVoiceInputPackChecked = signal<boolean>(false);
+  readonly editorVoiceInputPackInstalling = signal<boolean>(false);
+  readonly editorVoiceInputPackDeleting = signal<boolean>(false);
+  readonly editorVoiceInputPackDeleteResult = signal<DeleteModelsResponse | null>(null);
+  readonly editorVoiceInputPackProgressMap = signal<Record<string, SetupProgressEvent>>({});
+  readonly editorVoiceInputAvailable = computed(() =>
+    this.editorOnlyBuild && this.editorVoiceInputPackStatus()?.installed === true
+  );
+  readonly editorVoiceInputDevControlsVisible = computed(
+    () => this.editorOnlyBuild && this.isDevModeBuild && this.isTauriRuntime()
+  );
+  readonly editorVoiceInputInstallPercent = computed(() => {
+    const values = Object.values(this.editorVoiceInputPackProgressMap());
+    const totals = values.filter((p) => Number.isFinite(p.totalBytes) && Number(p.totalBytes) > 0);
+    if (totals.length === 0) return null;
+    const downloaded = totals.reduce((sum, p) => sum + Math.max(0, Number(p.downloadedBytes ?? 0)), 0);
+    const total = totals.reduce((sum, p) => sum + Math.max(0, Number(p.totalBytes ?? 0)), 0);
+    return total > 0 ? Math.max(0, Math.min(100, (downloaded / total) * 100)) : null;
+  });
   readonly needsFullSetup = computed(() => {
     if (this.editorOnlyBuild || !this.isTauriRuntime()) return false;
     if (!this.allSetupChecked()) return false;
@@ -1294,6 +1340,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private progressSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
   private progressUnlisten: UnlistenFn | null = null;
   private parallelDiarUnlisten: UnlistenFn | null = null;
+  private voiceInputPackProgressUnlisten: UnlistenFn | null = null;
+  private voiceInputAudioContext: AudioContext | null = null;
+  private voiceInputMediaStream: MediaStream | null = null;
+  private voiceInputSourceNode: MediaStreamAudioSourceNode | null = null;
+  private voiceInputProcessorNode: ScriptProcessorNode | null = null;
+  private voiceInputChunks: Float32Array[] = [];
+  private voiceInputSampleRate = 0;
+  private voiceInputAutoStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private voiceInputSelection: { segmentId: number; start: number; end: number } | null = null;
   private previewAudio: HTMLAudioElement | null = null;
   private lastLoadedAudioSrc: string | null = null;
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
@@ -2489,6 +2544,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.parallelDiarUnlisten();
       this.parallelDiarUnlisten = null;
     }
+    if (this.voiceInputPackProgressUnlisten) {
+      this.voiceInputPackProgressUnlisten();
+      this.voiceInputPackProgressUnlisten = null;
+    }
+    this.cleanupVoiceInputRecording(false);
     if (this.llmEngineUiVisible()) {
       this.stopLlm();
     }
@@ -4702,6 +4762,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.checkTranscriptionRuntimeSupport();
     void this.ensureSetupProgressListener();
     await this.checkAllSetupStatus();
+    await this.checkEditorVoiceInputPackStatus();
     // ここ以降は直前までの await で実行コンテキストが Angular ゾーン外に出ている。
     // 画面表示を左右する signal（タブ表示を gate する runtimeCheckDone と
     // activeTabIndex）の更新を ngZone.run で包み、確定済みの値で変更検知を
@@ -5954,6 +6015,110 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
+  async checkEditorVoiceInputPackStatus(): Promise<void> {
+    if (!this.editorOnlyBuild) {
+      this.editorVoiceInputPackStatus.set(null);
+      this.editorVoiceInputPackChecked.set(true);
+      return;
+    }
+    if (!this.isTauriRuntime()) {
+      this.editorVoiceInputPackStatus.set({
+        installed: false,
+        cpuBackend: false,
+        cpuBackendExpectedPath: '',
+        gemmaGguf: false,
+        gemmaGgufExpectedPath: '',
+        mmprojGguf: false,
+        mmprojGgufExpectedPath: '',
+      });
+      this.editorVoiceInputPackChecked.set(true);
+      return;
+    }
+    try {
+      const status = await invoke<EditorVoiceInputPackStatus>('check_editor_voice_input_pack_status');
+      this.ngZone.run(() => {
+        this.editorVoiceInputPackStatus.set(status);
+        this.editorVoiceInputPackChecked.set(true);
+      });
+    } catch {
+      this.ngZone.run(() => {
+        this.editorVoiceInputPackStatus.set(null);
+        this.editorVoiceInputPackChecked.set(true);
+      });
+    }
+  }
+
+  private async ensureEditorVoiceInputPackProgressListener(): Promise<void> {
+    if (!this.isTauriRuntime() || this.voiceInputPackProgressUnlisten) return;
+    this.voiceInputPackProgressUnlisten = await listen<SetupProgressEvent>('voice-input-pack-progress', (event) => {
+      const p = event.payload;
+      this.editorVoiceInputPackProgressMap.update((m) => ({ ...m, [p.component]: p }));
+    });
+  }
+
+  async installEditorVoiceInputPack(): Promise<void> {
+    if (!this.editorOnlyBuild || this.editorVoiceInputPackInstalling()) return;
+    this.editorVoiceInputPackInstalling.set(true);
+    this.editorVoiceInputPackDeleteResult.set(null);
+    this.editorVoiceInputPackProgressMap.set({});
+    this.voiceInputError.set('');
+    try {
+      await this.ensureEditorVoiceInputPackProgressListener();
+      const installed = await invoke<boolean>('install_editor_voice_input_pack');
+      if (!installed) {
+        this.editorVoiceInputPackProgressMap.update((m) => ({
+          ...m,
+          _error: { component: '_error', status: 'error', message: '音声入力パックの導入が完了しませんでした。' },
+        }));
+      }
+    } catch (error) {
+      this.editorVoiceInputPackProgressMap.update((m) => ({
+        ...m,
+        _error: { component: '_error', status: 'error', message: this.normalizeErrorMessage(error) },
+      }));
+    } finally {
+      this.editorVoiceInputPackInstalling.set(false);
+      await this.checkEditorVoiceInputPackStatus();
+    }
+  }
+
+  async devDeleteEditorVoiceInputPack(): Promise<void> {
+    if (!this.editorVoiceInputDevControlsVisible() || this.editorVoiceInputPackDeleting()) return;
+    const ok = window.confirm('llama.cpp CPU バックエンドと mmproj を削除します。Gemma 4 E4B 本体GGUFは削除しません。');
+    if (!ok) return;
+    this.editorVoiceInputPackDeleting.set(true);
+    this.editorVoiceInputPackDeleteResult.set(null);
+    this.editorVoiceInputPackProgressMap.set({});
+    this.voiceInputError.set('');
+    try {
+      const result = await invoke<DeleteModelsResponse>('dev_delete_editor_voice_input_pack');
+      this.editorVoiceInputPackDeleteResult.set(result);
+    } catch (error) {
+      this.editorVoiceInputPackDeleteResult.set({
+        deleted: [],
+        notFound: [],
+        errors: [this.normalizeErrorMessage(error)],
+      });
+    } finally {
+      this.editorVoiceInputPackDeleting.set(false);
+      await this.checkEditorVoiceInputPackStatus();
+    }
+  }
+
+  editorVoiceInputPackComponentProgress(component: string): SetupProgressEvent | null {
+    return this.editorVoiceInputPackProgressMap()[component] ?? null;
+  }
+
+  editorVoiceInputPackComponentPercent(component: string): number | null {
+    const progress = this.editorVoiceInputPackComponentProgress(component);
+    if (!progress || !Number.isFinite(progress.totalBytes) || Number(progress.totalBytes) <= 0) {
+      return null;
+    }
+    const downloaded = Math.max(0, Number(progress.downloadedBytes ?? 0));
+    const total = Math.max(1, Number(progress.totalBytes));
+    return Math.max(0, Math.min(100, (downloaded / total) * 100));
+  }
+
   async checkAllSetupStatus(): Promise<void> {
     if (!this.isTauriRuntime()) {
       this.allSetupStatus.set({
@@ -6202,6 +6367,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.activeTabIndex.set(index);
     if (index === this.getSettingsTabIndex()) {
       void this.loadLlmModels();
+      void this.checkEditorVoiceInputPackStatus();
     }
     requestAnimationFrame(this._refreshSegmentTableInView);
   }
@@ -7574,6 +7740,333 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       textInputEl.focus({ preventScroll: true });
       const endPos = updatedText.length;
       textInputEl.setSelectionRange(endPos, endPos);
+    }, 0);
+  }
+
+  isVoiceInputRecording(segmentId: number): boolean {
+    return this.voiceInputRecordingSegmentId() === segmentId;
+  }
+
+  isVoiceInputProcessing(segmentId: number): boolean {
+    return this.voiceInputProcessingSegmentId() === segmentId;
+  }
+
+  async toggleVoiceInputForSegment(
+    segmentId: number,
+    textInputEl: HTMLInputElement | HTMLTextAreaElement
+  ): Promise<void> {
+    if (!this.editorVoiceInputAvailable() || this.isVoiceInputProcessing(segmentId)) {
+      return;
+    }
+    if (this.isVoiceInputRecording(segmentId)) {
+      await this.finishVoiceInputRecording(segmentId);
+      return;
+    }
+    if (this.voiceInputRecordingSegmentId() !== null) {
+      this.cleanupVoiceInputRecording(false);
+    }
+    await this.startVoiceInputRecording(segmentId, textInputEl);
+  }
+
+  onVoiceInputPointerDown(
+    event: PointerEvent,
+    segmentId: number,
+    textInputEl: HTMLInputElement | HTMLTextAreaElement
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    void this.toggleVoiceInputForSegment(segmentId, textInputEl);
+  }
+
+  private async startVoiceInputRecording(
+    segmentId: number,
+    textInputEl: HTMLInputElement | HTMLTextAreaElement
+  ): Promise<void> {
+    this.voiceInputError.set('');
+    this.voiceInputStatus.set('');
+    this.voiceInputFeedbackSegmentId.set(segmentId);
+    this.voiceInputCandidates.set(null);
+    const nav = navigator as Navigator;
+    if (!nav.mediaDevices?.getUserMedia) {
+      this.voiceInputError.set('この環境ではマイク録音を開始できません。');
+      return;
+    }
+    const selectionStart = Number.isFinite(textInputEl.selectionStart) ? Number(textInputEl.selectionStart) : textInputEl.value.length;
+    const selectionEnd = Number.isFinite(textInputEl.selectionEnd) ? Number(textInputEl.selectionEnd) : selectionStart;
+    this.voiceInputSelection = { segmentId, start: selectionStart, end: selectionEnd };
+
+    try {
+      const stream = await nav.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) {
+        stream.getTracks().forEach((track) => track.stop());
+        this.voiceInputError.set('この環境では音声処理を開始できません。');
+        return;
+      }
+      const audioContext = new AudioContextCtor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      this.voiceInputChunks = [];
+      this.voiceInputSampleRate = audioContext.sampleRate;
+      processor.onaudioprocess = (event: AudioProcessingEvent) => {
+        if (this.voiceInputRecordingSegmentId() !== segmentId) {
+          return;
+        }
+        const input = event.inputBuffer.getChannelData(0);
+        this.voiceInputChunks.push(new Float32Array(input));
+        const output = event.outputBuffer.getChannelData(0);
+        output.fill(0);
+      };
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      this.voiceInputAudioContext = audioContext;
+      this.voiceInputMediaStream = stream;
+      this.voiceInputSourceNode = source;
+      this.voiceInputProcessorNode = processor;
+      this.voiceInputRecordingSegmentId.set(segmentId);
+      this.voiceInputStatus.set('録音中... 10秒で自動停止します');
+      this.voiceInputAutoStopTimer = setTimeout(() => {
+        if (this.voiceInputRecordingSegmentId() === segmentId) {
+          void this.finishVoiceInputRecording(segmentId);
+        }
+      }, 10_000);
+    } catch (error) {
+      this.cleanupVoiceInputRecording(false);
+      this.voiceInputError.set(this.normalizeVoiceInputErrorMessage(error));
+    }
+  }
+
+  private async finishVoiceInputRecording(segmentId: number): Promise<void> {
+    if (this.voiceInputRecordingSegmentId() !== segmentId) {
+      return;
+    }
+    const chunks = this.voiceInputChunks.map((chunk) => new Float32Array(chunk));
+    const sourceRate = this.voiceInputSampleRate || 48000;
+    this.cleanupVoiceInputRecording(false);
+    const merged = this.mergeVoiceInputChunks(chunks);
+    if (merged.length < sourceRate * 0.15) {
+      this.voiceInputStatus.set('');
+      this.voiceInputError.set('録音が短すぎます。');
+      return;
+    }
+    const maxSourceSamples = Math.floor(sourceRate * 10);
+    const clipped = merged.length > maxSourceSamples ? merged.slice(0, maxSourceSamples) : merged;
+    const resampled = this.resamplePcmTo16k(clipped, sourceRate);
+    const wav = this.encodePcm16Wav(resampled, 16000);
+    const wavBase64 = this.arrayBufferToBase64(wav);
+    this.voiceInputProcessingSegmentId.set(segmentId);
+    this.voiceInputFeedbackSegmentId.set(segmentId);
+    this.voiceInputStatus.set('候補を生成中...');
+    this.voiceInputError.set('');
+    try {
+      const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
+        request: { wavBase64, maxCandidates: 5 },
+      });
+      const candidates = (response.candidates ?? [])
+        .map((candidate) => String(candidate).trim())
+        .filter((candidate) => candidate.length > 0)
+        .slice(0, 5);
+      if (candidates.length === 0) {
+        this.voiceInputError.set('候補を生成できませんでした。');
+        this.voiceInputCandidates.set(null);
+      } else {
+        this.voiceInputCandidates.set({ segmentId, candidates });
+        this.voiceInputStatus.set('');
+        this.voiceInputFeedbackSegmentId.set(segmentId);
+      }
+    } catch (error) {
+      this.voiceInputCandidates.set(null);
+      this.voiceInputStatus.set('');
+      this.voiceInputError.set(this.normalizeVoiceInputErrorMessage(error));
+    } finally {
+      this.voiceInputProcessingSegmentId.set(null);
+    }
+  }
+
+  private cleanupVoiceInputRecording(clearStatus: boolean): void {
+    if (this.voiceInputAutoStopTimer !== null) {
+      clearTimeout(this.voiceInputAutoStopTimer);
+      this.voiceInputAutoStopTimer = null;
+    }
+    if (this.voiceInputProcessorNode) {
+      this.voiceInputProcessorNode.onaudioprocess = null;
+      try {
+        this.voiceInputProcessorNode.disconnect();
+      } catch {
+        // ignore
+      }
+      this.voiceInputProcessorNode = null;
+    }
+    if (this.voiceInputSourceNode) {
+      try {
+        this.voiceInputSourceNode.disconnect();
+      } catch {
+        // ignore
+      }
+      this.voiceInputSourceNode = null;
+    }
+    if (this.voiceInputMediaStream) {
+      this.voiceInputMediaStream.getTracks().forEach((track) => track.stop());
+      this.voiceInputMediaStream = null;
+    }
+    if (this.voiceInputAudioContext) {
+      void this.voiceInputAudioContext.close().catch(() => {});
+      this.voiceInputAudioContext = null;
+    }
+    this.voiceInputRecordingSegmentId.set(null);
+    this.voiceInputChunks = [];
+    this.voiceInputSampleRate = 0;
+    if (clearStatus) {
+      this.voiceInputStatus.set('');
+      this.voiceInputError.set('');
+      this.voiceInputFeedbackSegmentId.set(null);
+    }
+  }
+
+  private mergeVoiceInputChunks(chunks: ReadonlyArray<Float32Array>): Float32Array {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return merged;
+  }
+
+  private resamplePcmTo16k(input: Float32Array, inputSampleRate: number): Float32Array {
+    const outputSampleRate = 16000;
+    if (inputSampleRate === outputSampleRate) {
+      return input;
+    }
+    const ratio = inputSampleRate / outputSampleRate;
+    const outputLength = Math.max(1, Math.floor(input.length / ratio));
+    const output = new Float32Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      const sourceIndex = i * ratio;
+      const left = Math.floor(sourceIndex);
+      const right = Math.min(input.length - 1, left + 1);
+      const frac = sourceIndex - left;
+      output[i] = input[left] * (1 - frac) + input[right] * frac;
+    }
+    return output;
+  }
+
+  private encodePcm16Wav(samples: Float32Array, sampleRate: number): ArrayBuffer {
+    const bytesPerSample = 2;
+    const dataSize = samples.length * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    this.writeAscii(view, 0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    this.writeAscii(view, 8, 'WAVE');
+    this.writeAscii(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * bytesPerSample, true);
+    view.setUint16(32, bytesPerSample, true);
+    view.setUint16(34, 16, true);
+    this.writeAscii(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+    let offset = 44;
+    for (const sample of samples) {
+      const clamped = Math.max(-1, Math.min(1, sample));
+      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+      offset += 2;
+    }
+    return buffer;
+  }
+
+  private writeAscii(view: DataView, offset: number, value: string): void {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  }
+
+  private arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
+
+  private normalizeVoiceInputErrorMessage(error: unknown): string {
+    const message = this.normalizeErrorMessage(error);
+    const lower = message.toLowerCase();
+    if (
+      lower.includes('notallowederror') ||
+      lower.includes('not allowed') ||
+      lower.includes('permission') ||
+      lower.includes('denied')
+    ) {
+      return 'マイク入力が許可されませんでした。OSまたはWebViewのマイク権限を許可してから再試行してください。';
+    }
+    if (lower.includes('notfounderror') || lower.includes('device not found')) {
+      return '利用可能なマイクが見つかりません。';
+    }
+    return message;
+  }
+
+  insertVoiceInputCandidate(
+    segmentId: number,
+    candidate: string,
+    textInputEl: HTMLInputElement | HTMLTextAreaElement
+  ): void {
+    this.insertTextAtSegmentCursor(segmentId, candidate, textInputEl);
+    this.voiceInputCandidates.set(null);
+    this.voiceInputStatus.set('');
+    this.voiceInputError.set('');
+    this.voiceInputFeedbackSegmentId.set(null);
+  }
+
+  dismissVoiceInputCandidates(segmentId: number): void {
+    if (this.voiceInputCandidates()?.segmentId === segmentId) {
+      this.voiceInputCandidates.set(null);
+      this.voiceInputFeedbackSegmentId.set(null);
+    }
+  }
+
+  private insertTextAtSegmentCursor(
+    segmentId: number,
+    text: string,
+    textInputEl?: HTMLInputElement | HTMLTextAreaElement
+  ): void {
+    const current = this.editedSegmentTextMap();
+    const base = typeof current[segmentId] === 'string'
+      ? current[segmentId]
+      : (this.result()?.segments.find((s) => s.id === segmentId)?.text ?? '');
+    const storedSelection = this.voiceInputSelection?.segmentId === segmentId ? this.voiceInputSelection : null;
+    const isFocused = !!textInputEl && document.activeElement === textInputEl;
+    const selectionStart = isFocused && typeof textInputEl?.selectionStart === 'number'
+      ? textInputEl.selectionStart
+      : storedSelection?.start ?? base.length;
+    const selectionEnd = isFocused && typeof textInputEl?.selectionEnd === 'number'
+      ? textInputEl.selectionEnd
+      : storedSelection?.end ?? selectionStart;
+    const safeStart = Math.max(0, Math.min(base.length, selectionStart));
+    const safeEnd = Math.max(safeStart, Math.min(base.length, selectionEnd));
+    const updatedText = `${base.slice(0, safeStart)}${text}${base.slice(safeEnd)}`;
+    const next = { ...current, [segmentId]: updatedText };
+    this.editedSegmentTextMap.set(next);
+    this.clearProofreadMetadataIfTextDiverged(segmentId, updatedText);
+    const nextPos = Math.max(0, Math.min(updatedText.length, safeStart + text.length));
+    setTimeout(() => {
+      if (!textInputEl) return;
+      textInputEl.focus({ preventScroll: true });
+      textInputEl.setSelectionRange(nextPos, nextPos);
     }, 0);
   }
 

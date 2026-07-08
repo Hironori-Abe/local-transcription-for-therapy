@@ -566,6 +566,102 @@
 
             <div class="section-separator"><span>名前・地名チェック</span></div>
             <ng-container [ngTemplateOutlet]="locationSelectionTpl"></ng-container>
+
+            <ng-container *ngIf="editorOnlyBuild">
+              <div class="section-separator"><span>音声入力パック</span></div>
+              <div class="voice-input-pack-panel">
+                <div class="setup-component-list voice-input-pack-list">
+                  <div class="setup-component-row">
+                    <mat-icon class="setup-comp-icon material-symbols-outlined"
+                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.cpuBackend"
+                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.cpuBackend"
+                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'downloading'">{{
+                      editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'downloading' ? 'downloading' :
+                      editorVoiceInputPackStatus()?.cpuBackend ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+                    <span class="setup-comp-name">llama.cpp CPU バックエンド</span>
+                    <span class="setup-comp-progress"
+                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'error'"
+                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'skipped'"
+                      *ngIf="editorVoiceInputPackComponentProgress('voice_cpu_backend') as p">{{ p.message }}</span>
+                  </div>
+                  <div class="setup-component-row">
+                    <mat-icon class="setup-comp-icon material-symbols-outlined"
+                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.gemmaGguf"
+                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.gemmaGguf"
+                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'downloading'">{{
+                      editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'downloading' ? 'downloading' :
+                      editorVoiceInputPackStatus()?.gemmaGguf ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+                    <span class="setup-comp-name">Gemma 4 E4B QAT GGUF</span>
+                    <span class="setup-comp-size">約 4.0 GiB</span>
+                    <span class="setup-comp-progress"
+                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'error'"
+                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'skipped'"
+                      *ngIf="editorVoiceInputPackComponentProgress('voice_gemma_gguf') as p">{{ p.message }}</span>
+                  </div>
+                  <div class="setup-component-row">
+                    <mat-icon class="setup-comp-icon material-symbols-outlined"
+                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.mmprojGguf"
+                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.mmprojGguf"
+                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'downloading'">{{
+                      editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'downloading' ? 'downloading' :
+                      editorVoiceInputPackStatus()?.mmprojGguf ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+                    <span class="setup-comp-name">Gemma 4 E4B 音声入力 mmproj</span>
+                    <span class="setup-comp-size">約 946 MiB</span>
+                    <span class="setup-comp-progress"
+                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'error'"
+                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'skipped'"
+                      *ngIf="editorVoiceInputPackComponentProgress('voice_mmproj_gguf') as p">{{ p.message }}</span>
+                  </div>
+                </div>
+                <div *ngIf="editorVoiceInputPackInstalling()" class="voice-input-pack-progress">
+                  <mat-progress-bar
+                    [mode]="editorVoiceInputInstallPercent() === null ? 'indeterminate' : 'determinate'"
+                    [value]="editorVoiceInputInstallPercent() ?? 0"></mat-progress-bar>
+                </div>
+                <p class="reader-hint voice-input-pack-note">
+                  録音は最大10秒です。長く話すほど候補生成に時間がかかります。音声・会話データはローカルで処理します。
+                </p>
+                <p class="copy-status error-text" *ngIf="editorVoiceInputPackProgressMap()['_error'] as e">{{ e.message }}</p>
+                <div *ngIf="editorVoiceInputPackDeleteResult() as r" class="dev-delete-result">
+                  <div *ngIf="r.deleted.length > 0">
+                    <span class="dev-delete-label dev-delete-deleted">削除済み:</span>
+                    <ul class="dev-delete-list">
+                      <li *ngFor="let p of r.deleted">{{ p }}</li>
+                    </ul>
+                  </div>
+                  <div *ngIf="r.errors.length > 0">
+                    <span class="dev-delete-label dev-delete-error">エラー:</span>
+                    <ul class="dev-delete-list">
+                      <li *ngFor="let p of r.errors">{{ p }}</li>
+                    </ul>
+                  </div>
+                  <p *ngIf="r.deleted.length === 0 && r.errors.length === 0" class="dev-delete-none">
+                    削除対象が見つかりませんでした
+                  </p>
+                </div>
+                <div class="actions-row">
+                  <button mat-flat-button color="primary"
+                    [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting() || editorVoiceInputPackStatus()?.installed"
+                    (click)="installEditorVoiceInputPack()">
+                    <mat-icon class="material-symbols-outlined">download</mat-icon>
+                    {{ editorVoiceInputPackStatus()?.installed ? '導入済み' : (editorVoiceInputPackInstalling() ? '導入中...' : '音声入力パックをダウンロード') }}
+                  </button>
+                  <button mat-stroked-button [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
+                    (click)="checkEditorVoiceInputPackStatus()">
+                    <mat-icon class="material-symbols-outlined">refresh</mat-icon>
+                    再チェック
+                  </button>
+                  <button *ngIf="editorVoiceInputDevControlsVisible()" mat-stroked-button color="warn"
+                    [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
+                    (click)="devDeleteEditorVoiceInputPack()">
+                    <mat-icon class="material-symbols-outlined">delete</mat-icon>
+                    CPU/mmprojを削除
+                  </button>
+                  <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
+                </div>
+              </div>
+            </ng-container>
+
             <ng-container *ngIf="!editorOnlyBuild">
               <div class="section-separator"><span>文字起こし・話者分離</span></div>
               <div class="actions-row settings-llm-row compute-env-row">
@@ -1370,6 +1466,16 @@
                     } @else if (llmStatus === 'done') {
                     <span matPrefix class="llm-status-icon llm-status-done" title="AI校正完了">check_circle</span>
                     }
+                    <button *ngIf="editorVoiceInputAvailable()" matPrefix mat-icon-button type="button"
+                      class="segment-voice-input-btn" tabindex="-1"
+                      [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
+                      (pointerdown)="onVoiceInputPointerDown($event, segment.id, segmentTextInput)"
+                      [matTooltip]="isVoiceInputRecording(segment.id) ? '録音を停止' : '音声入力'"
+                      [attr.aria-label]="isVoiceInputRecording(segment.id) ? '録音を停止' : '音声入力'">
+                      <mat-icon class="material-symbols-outlined">
+                        {{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : (isVoiceInputRecording(segment.id) ? 'stop' : 'mic') }}
+                      </mat-icon>
+                    </button>
                     <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
                       cdkAutosizeMaxRows="12" class="segment-content-input"
                       [value]="getEditableTextFromMap(segment, editedSegmentTextMap())"
@@ -1388,6 +1494,29 @@
                       (mousedown)="$event.preventDefault()"
                       (click)="appendPunctuationToSegment(segment.id, editPeriodChar(), segmentTextInput)">+{{ editPeriodChar() }}</button>
                   </mat-form-field>
+                  <div class="voice-input-inline-status"
+                    *ngIf="voiceInputFeedbackSegmentId() === segment.id && voiceInputStatus()">
+                    <mat-spinner *ngIf="voiceInputProcessingSegmentId() === segment.id" diameter="16" strokeWidth="2"></mat-spinner>
+                    <span>{{ voiceInputStatus() }}</span>
+                  </div>
+                  <div class="voice-input-inline-error" *ngIf="voiceInputFeedbackSegmentId() === segment.id && voiceInputError()">
+                    {{ voiceInputError() }}
+                  </div>
+                  <div class="voice-input-candidate-panel"
+                    *ngIf="voiceInputCandidates()?.segmentId === segment.id && voiceInputCandidates() as voicePanel">
+                    <button type="button" class="voice-input-candidate-btn"
+                      *ngFor="let candidate of voicePanel.candidates"
+                      (mousedown)="$event.preventDefault()"
+                      (click)="insertVoiceInputCandidate(segment.id, candidate, segmentTextInput)">
+                      {{ candidate }}
+                    </button>
+                    <button type="button" class="voice-input-candidate-dismiss"
+                      aria-label="音声入力候補を閉じる" matTooltip="閉じる"
+                      (mousedown)="$event.preventDefault()"
+                      (click)="dismissVoiceInputCandidates(segment.id)">
+                      <mat-icon class="material-symbols-outlined">close</mat-icon>
+                    </button>
+                  </div>
                   <button mat-mini-fab type="button" class="segment-insert-btn segment-insert-btn-copy" tabindex="-1"
                     [disabled]="isProofreadLocked" (click)="insertSegmentRelative(segment.id, 'below')"
                     aria-label="この行の下に追加" matTooltip="上の文をコピーします">

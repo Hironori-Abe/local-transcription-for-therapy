@@ -119,7 +119,7 @@ else
   npm --prefix frontend run start -- \
     --host "$FRONTEND_HOST" \
     --port "$FRONTEND_PORT" \
-    --build-target offline-transcriber:build:editor &
+    --build-target offline-transcriber:build:development,editor &
   FRONTEND_PID="$!"
   FRONTEND_STARTED=1
 

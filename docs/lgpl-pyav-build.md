@@ -290,7 +290,7 @@ Windows では以下の検証スクリプトを使う。これはパッケージ
 - `python.exe -m pip show av imageio-ffmpeg` は `Package(s) not found`。
 - `site-packages` に `av/`、`av.libs/`、`imageio_ffmpeg/` は存在しない。
 - `av-*.dist-info` / `imageio_ffmpeg*` / `imageio-ffmpeg*` の残骸も 0 件。
-- インストール先 resources には `ffmpeg/`、`lemonade/`、`llama-server/`、`proofread/`、`python312/` が配置されている。
+- インストール先 resources には `ffmpeg/`、`llama-server/`、`proofread/`、`python312/` が配置されている（Lemonade/lemond は現在の配布物には同梱しない）。
 - `resources/ffmpeg/` には `ffmpeg.exe`、`LICENSE.txt`、`FFMPEG_BUILD_INFO.txt`、`README.md` が配置されている。
 - インストール先 `ffmpeg.exe -version` でも `--enable-gpl` なし、`--disable-libx264` / `--disable-libx265` / `--disable-libxvid` を確認済み。
 

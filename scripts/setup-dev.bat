@@ -231,46 +231,7 @@ if exist "%GEMMA_MTP_FILE%" (
 )
 echo.
 
-echo [3c/6] Lemonade embeddable binary (for src-tauri\resources)...
-set "LEMONADE_VERSION=10.8.0"
-set "LEMONADE_EMBED_URL=https://github.com/lemonade-sdk/lemonade/releases/download/v%LEMONADE_VERSION%/lemonade-embeddable-%LEMONADE_VERSION%-windows-x64.zip"
-set "LEMONADE_DEST=src-tauri\resources\lemonade"
-set "LEMONADE_TMP=%TEMP%\lemonade-embeddable"
-if exist "%LEMONADE_DEST%\lemond.exe" (
-  echo [OK] Lemonade embeddable already present: %LEMONADE_DEST%\lemond.exe
-  goto :lemonade_embed_done
-)
-if exist "%LEMONADE_DEST%\lemonade-server.exe" (
-  echo [OK] Lemonade embeddable already present: %LEMONADE_DEST%\lemonade-server.exe
-  goto :lemonade_embed_done
-)
-if exist "%LEMONADE_DEST%\lemonade.exe" (
-  echo [OK] Lemonade embeddable already present: %LEMONADE_DEST%\lemonade.exe
-  goto :lemonade_embed_done
-)
-echo [INFO] Downloading Lemonade embeddable v%LEMONADE_VERSION%...
-if not exist "%LEMONADE_DEST%" mkdir "%LEMONADE_DEST%"
-if exist "%LEMONADE_TMP%" rmdir /s /q "%LEMONADE_TMP%" >nul 2>&1
-if exist "%LEMONADE_TMP%.zip" del /q "%LEMONADE_TMP%.zip" >nul 2>&1
-powershell -NoProfile -NonInteractive -Command ^
-  "try { Invoke-WebRequest -Uri '%LEMONADE_EMBED_URL%' -OutFile '%LEMONADE_TMP%.zip' -UseBasicParsing; Expand-Archive -Path '%LEMONADE_TMP%.zip' -DestinationPath '%LEMONADE_TMP%' -Force; $exe = Get-ChildItem -Path '%LEMONADE_TMP%' -Recurse -Include 'lemonade-server.exe','lemond.exe','lemonade.exe' | Select-Object -First 1; if ($exe) { $src = Join-Path $exe.Directory.FullName '*'; Copy-Item -Path $src -Destination '%LEMONADE_DEST%' -Recurse -Force; Write-Host 'OK' } else { Write-Host 'EXE_NOT_FOUND'; exit 1 } } catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit 1 }" ^
-  > "%TEMP%\lemonade_dl_result.tmp" 2>&1
-if errorlevel 1 (
-  if exist "%TEMP%\lemonade_dl_result.tmp" type "%TEMP%\lemonade_dl_result.tmp"
-  echo [WARN] Lemonade embeddable download failed.
-  echo        Download manually and place it under %LEMONADE_DEST%\:
-  echo        %LEMONADE_EMBED_URL%
-  set "HAS_WARN=1"
-) else (
-  echo [OK] Lemonade embeddable placed: %LEMONADE_DEST%
-)
-if exist "%LEMONADE_TMP%" rmdir /s /q "%LEMONADE_TMP%" >nul 2>&1
-if exist "%LEMONADE_TMP%.zip" del /q "%LEMONADE_TMP%.zip" >nul 2>&1
-if exist "%TEMP%\lemonade_dl_result.tmp" del /q "%TEMP%\lemonade_dl_result.tmp" >nul 2>&1
-:lemonade_embed_done
-echo.
-
-echo [3d/6] llama-server CUDA binary (for NVIDIA GPU LLM inference)...
+echo [3c/6] llama-server CUDA binary (for NVIDIA GPU LLM inference)...
 if /I not "%TORCH_BACKEND%"=="cuda" (
   echo [INFO] Skipping llama-server CUDA download for %TORCH_BACKEND% backend.
   goto :llama_server_done
@@ -459,14 +420,7 @@ if errorlevel 1 (
   echo [WARN] ctranslate2 CUDA summary failed.
   set "HAS_WARN=1"
 )
-set "LEMONADE_EMBED=0"
-if exist "src-tauri\resources\lemonade\lemond.exe" set "LEMONADE_EMBED=1"
-if exist "src-tauri\resources\lemonade\lemonade-server.exe" set "LEMONADE_EMBED=1"
-if "%LEMONADE_EMBED%"=="1" (
-  echo [OK] Lemonade embeddable: present
-) else (
-  echo [INFO] Lemonade embeddable: not present
-)
+echo [INFO] LLM backend: llama.cpp llama-server direct launch ^(no Lemonade/lemond^).
 where xrt-smi >nul 2>&1
 if not errorlevel 1 (
   echo [INFO] AMD NPU xrt-smi status:
@@ -497,7 +451,7 @@ echo Options:
 echo   --torch-backend VALUE   GPU backend: cuda, rocm, or cpu. Default: cuda.
 echo   --amd                   Shortcut for --torch-backend rocm (EXPERIMENTAL on Windows).
 echo   --cpu-torch             Shortcut for --torch-backend cpu.
-echo   -y, --yes               Non-interactive: use defaults, install Lemonade.
+echo   -y, --yes               Non-interactive: use defaults.
 echo   -h, --help              Show this help.
 echo.
 echo Environment:

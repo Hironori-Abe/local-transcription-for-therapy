@@ -150,7 +150,7 @@ if [[ "$EMULATION_MODE" == "no_cuda" ]]; then
 elif [[ "${LOTT_TORCH_BACKEND:-}" == "rocm" ]]; then
   info "ROCm/PyTorch preflight:"
   if ! "$PYTHON_BIN" -c "import torch; print('torch=', torch.__version__); print('torch_hip=', getattr(torch.version, 'hip', None)); print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_device_count=', torch.cuda.device_count())"; then
-    warn "ROCm PyTorch preflight failed. LLM-only development may still work with Lemonade or llama_cpp."
+    warn "ROCm PyTorch preflight failed. LLM-only development can still use the downloaded llama.cpp ROCm/Vulkan llama-server."
   fi
 elif [[ "${LOTT_TORCH_BACKEND:-}" == "cpu" ]]; then
   info "CPU PyTorch backend requested. Skipping CUDA preflight."
@@ -168,43 +168,7 @@ if [[ "$EMULATION_MODE" == "missing_community1" ]]; then
 fi
 info "Emulation state saved: $EMULATION_STATE_FILE"
 
-if have lemonade-server; then
-  ok "Lemonade available: $(command -v lemonade-server)"
-elif have lemond; then
-  ok "Lemonade available (lemond): $(command -v lemond)"
-elif have lemonade; then
-  ok "Lemonade available: $(command -v lemonade)"
-else
-  info "Lemonade not found. LLM backend will use llama_cpp only."
-fi
-
-# Lemonade ポート確認と AMD GPU 向けヒント
-if have lemonade; then
-  _lemon_port_open=0
-  if "$PYTHON_BIN" -c "import socket; s=socket.socket(); s.settimeout(0.3); s.connect(('127.0.0.1',13305)); s.close()" 2>/dev/null; then
-    _lemon_port_open=1
-    ok "Lemonade port 13305: open"
-  else
-    info "Lemonade port 13305: closed. Tauri will start lemond if bundled binary is found."
-  fi
-  if [[ "$_lemon_port_open" == "1" ]] && [[ "${LOTT_TORCH_BACKEND:-}" == "rocm" || -n "${HIP_VISIBLE_DEVICES:-}" ]]; then
-    info "AMD GPU 環境: Lemonade で llamacpp:vulkan を使用するには次のコマンドを一度実行してください:"
-    info "  lemonade load Gemma-4-E4B-it-GGUF --llamacpp vulkan --ctx-size 16384 --save-options"
-  fi
-fi
-
-# lemond が残っていると Cargo が resources/lemonade/lemond を上書きできず "Text file busy" になる
-LEMOND_BIN="$ROOT_DIR/src-tauri/resources/lemonade/lemond"
-if pgrep -x lemond >/dev/null 2>&1; then
-  info "Killing stale lemond process(es) before build..."
-  pkill -x lemond >/dev/null 2>&1 || true
-  sleep 0.5
-fi
-if [[ -f "$LEMOND_BIN" ]] && fuser "$LEMOND_BIN" >/dev/null 2>&1; then
-  info "lemond binary is still locked. Sending SIGKILL..."
-  fuser -k "$LEMOND_BIN" >/dev/null 2>&1 || true
-  sleep 0.5
-fi
+info "LLM backend: bundled/downloaded llama.cpp llama-server direct launch (no Lemonade/lemond)."
 
 if [[ ! -d "$ROOT_DIR/python_sidecar/models/pyannote-speaker-diarization-community-1" ]]; then
   info "Diarization model directory not found."

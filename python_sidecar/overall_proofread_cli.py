@@ -19,7 +19,8 @@ BATCH_MAX_SEGMENTS = 20
 _PROMPT_TEMPLATES_DIR = Path(__file__).parent / "prompt_templates" / "proofread"
 _PROMPT_TYPE = "gemma4"
 _SYSTEM_PROMPT_OVERRIDE_FILE: Optional[Path] = None
-# 同時送信数（継続バッチング）。lemonade(CUDA) 経路のみ。openai 互換は外部サーバー負荷回避で 1 固定。
+# 同時送信数（継続バッチング）。内蔵 llama-server 経路（backend 名は後方互換で lemonade）のみ。
+# openai 互換は外部サーバー負荷回避で 1 固定。
 _OVERALL_PARALLEL: int = 1
 # emit の stderr 書き込みをワーカースレッド間で直列化し、行の混線を防ぐ。
 _EMIT_LOCK = threading.Lock()
@@ -233,7 +234,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-prompt-path", default=None)
     parser.add_argument(
         "--parallel", type=int, default=1,
-        help="lemonade経路で同時送信するバッチ数（継続バッチング）。サーバーの -np 以下にする",
+        help="内蔵 llama-server 経路で同時送信するバッチ数（継続バッチング）。サーバーの -np 以下にする",
     )
     return parser.parse_args()
 
@@ -613,7 +614,7 @@ def _run_openai_chat_batches(
     def _fetch_models_data():
         # コールドスタート時、サーバーはモデルの GPU ロード / 初回 CUDA カーネル JIT が
         # 終わるまで /v1/models に 503 を返す（ポートは先に開くため「起動済み」に見える）。
-        # require_model_list=True のローカル lemonade/gemma 経路では、ロード完了まで
+        # require_model_list=True のローカル内蔵 llama-server 経路では、ロード完了まで
         # 503 / 接続失敗をリトライする。外部サーバー（require_model_list=False）は従来どおり即時判定。
         deadline = time.monotonic() + (180.0 if require_model_list else 0.0)
         attempt = 0

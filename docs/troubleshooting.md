@@ -59,7 +59,7 @@ where.exe cudnn64_9.dll
 ## AMD: 高精度(12B)校正が ROCm にならず Vulkan（やや遅い）で動く
 
 - 12B 校正は AMD で **ROCm 優先 → 失敗時 Vulkan フォールバック**です。ROCm 経路（約35〜37 tok/s）が選ばれず Vulkan（約28〜29 tok/s）になる主因は次のいずれか。
-  - **ROCm ビルドが古い**: ROCm ビルドが b9585 未満（例 b9247）だとドラフト arch `gemma4-assistant` を読めません。セットアップタブから ROCm バックエンド（`download_llama_backend_cli.py --backend rocm`、既定 b9631）を再取得してください（`~/.cache/{app-id}/lemonade/bin/llamacpp/rocm-stable/` に展開されます）。
+  - **ROCm ビルドが古い**: ROCm ビルドが b9585 未満（例 b9247）だとドラフト arch `gemma4-assistant` を読めません。セットアップタブから ROCm バックエンド（`download_llama_backend_cli.py --backend rocm`、既定 b9631）を再取得してください（`~/.cache/{app-id}/lemonade/bin/llamacpp/rocm-stable/` に展開されます。`lemonade` は後方互換のキャッシュディレクトリ名で、Lemonade 本体は使いません）。
   - **対象 GPU arch の rocBLAS が無い**: ROCm 直起動は rocBLAS を system ROCm（`/opt/rocm*/lib/rocblas/library/*<gfx>*`）から解決します。dGPU の arch（例 gfx1102）の Tensile が無いと起動前ゲート（`system_rocm_tensile_has_arch`）で弾かれ Vulkan になります。system ROCm を導入してください（DL ビルド同梱の therock は iGPU arch 専用のことがあり dGPU には使えません）。
 - いずれも該当しなければ Vulkan で安全に動作します（機能差はなく速度のみ）。
 - 関連クラッシュ痕跡: ROCm を therock 経由で起動すると `rocBLAS error: Cannot read ... TensileLibrary.dat ... for GPU arch : gfx1102` が出ます。本アプリは therock を `LD_LIBRARY_PATH` に載せないことでこれを回避しています。

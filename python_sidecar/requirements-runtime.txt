@@ -31,8 +31,9 @@ numpy>=2.2.2,<3
 contourpy>=1.2.1
 pyannote.audio==4.0.0
 
-# LLM proofreading
-# NOTE: llama-cpp-python must be installed separately with CUDA flags:
+# Optional legacy/direct Python LLM backend
+# NOTE: app-default LLM proofreading uses bundled/downloaded llama.cpp llama-server.
+# Install llama-cpp-python only when explicitly testing the direct Python backend:
 #   set CMAKE_ARGS=-DGGML_CUDA=on
 #   pip install llama-cpp-python --no-cache-dir
 # Do NOT add it as a plain pip requirement here.

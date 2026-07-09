@@ -135,7 +135,7 @@ echo.
 
 :: --- Lemonade is NOT bundled in the NVIDIA build ---
 :: NVIDIA 版は AI 校正に同梱 llama-server (CUDA) を直接起動するため Lemonade を同梱しない。
-:: Lemonade を使うのは AMD 版のみ（別ビルドフロー）。
+:: AMD 版も後から取得した ROCm/Vulkan llama-server を直接起動するため Lemonade は使わない。
 
 :: --- Download LGPL FFmpeg CLI ---
 echo [INFO] Ensuring LGPL FFmpeg CLI...

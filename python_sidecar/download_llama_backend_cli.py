@@ -14,7 +14,7 @@ Usage:
     python download_llama_backend_cli.py --backend rocm|vulkan|cpu --dest <dir> [--build b9631]
 
 Extracts the archive's top-level `llama-b<N>/` contents (llama-server + lib*.so/.dll) directly
-into <dest>, so find_lemonade_rocm/vulkan_llama_server resolve them unchanged. Prints
+into <dest>, so the legacy-cache resolver can find the ROCm/Vulkan llama-server unchanged. Prints
 human-readable progress lines to stdout (relayed to the UI by the Rust caller).
 """
 

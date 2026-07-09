@@ -14,7 +14,7 @@ VENV_DIR="${LOTT_VENV_DIR:-.venv312}"
 TORCH_BACKEND_EXPLICIT=0
 if [[ -n "${LOTT_TORCH_BACKEND:-}" ]]; then TORCH_BACKEND_EXPLICIT=1; fi
 TORCH_BACKEND="${LOTT_TORCH_BACKEND:-cuda}"
-LLAMA_CPP_BACKEND="${LOTT_LLAMA_CPP_BACKEND:-auto}"
+LLAMA_CPP_BACKEND="${LOTT_LLAMA_CPP_BACKEND:-none}"
 AMD_PACKAGES=0
 INSTALL_ROCM=0
 INSTALL_AMD_NPU=0
@@ -31,19 +31,19 @@ Options:
   -y, --yes              Install packages without prompting (apt / pacman).
   --skip-apt             Skip system package installation (apt on Ubuntu, pacman on CachyOS/Arch).
   --skip-gemma           Skip Gemma GGUF model download.
-  --skip-llama-cpp       Skip llama-cpp-python installation.
+  --skip-llama-cpp       Skip optional llama-cpp-python installation.
   --skip-rust            Skip Rustup/Cargo installation and check.
   --only-rust            Only install/check Rustup/Cargo, then exit.
   --cpu-torch            Install the default PyTorch wheels instead of CUDA 12.8 wheels.
   --amd                  Prepare for AMD validation: ROCm PyTorch, Vulkan/OpenCL diagnostics,
-                         and AMD runtime env checks. llama_cpp is skipped by default; AI
-                         proofreading uses the llama.cpp ROCm/Vulkan llama-server downloaded
+                         and AMD runtime env checks. App-default AI proofreading uses
+                         the llama.cpp ROCm/Vulkan llama-server downloaded
                          from the in-app setup tab. Use --llama-cpp-backend=hipblas or
-                         --llama-cpp-backend=vulkan to build llama_cpp explicitly.
+                         --llama-cpp-backend=vulkan to build the optional llama_cpp backend.
   --torch-backend VALUE  Python torch backend: cuda, rocm, or cpu. Default: cuda.
   --llama-cpp-backend VALUE
                          llama-cpp-python backend: cuda, hipblas, vulkan, openblas, or none.
-                         Default: auto, derived from --torch-backend.
+                         Default: none. Use auto to derive it from --torch-backend.
   --install-rocm         Register the AMD ROCm apt repo and install ROCm/HIP/ML packages.
   --install-amd-npu      Install AMD XDNA NPU packages available through Ubuntu/PPA,
                          then check XRT/FastFlowLM readiness.
@@ -261,7 +261,7 @@ apt_has_package() {
 }
 
 _install_pacman_system_packages() {
-  if ! confirm_default_yes "Install/update CachyOS/Arch system packages for Tauri, Python builds, and llama-cpp-python?"; then
+    if ! confirm_default_yes "Install/update CachyOS/Arch system packages for Tauri, Python, and optional native package builds?"; then
     info "Skipped pacman system package installation."
     return
   fi
@@ -331,7 +331,7 @@ install_system_packages() {
     return
   fi
 
-  if ! confirm_default_yes "Install/update Ubuntu system packages for Tauri, Python builds, and llama-cpp-python?"; then
+  if ! confirm_default_yes "Install/update Ubuntu system packages for Tauri, Python, and optional native package builds?"; then
     info "Skipped apt system package installation."
     return
   fi
@@ -623,11 +623,11 @@ install_amd_npu_packages() {
   codename="$(ubuntu_codename)"
   if [[ "$codename" == "noble" || "$codename" == "questing" ]]; then
     if have add-apt-repository; then
-      info "Adding Lemonade stable PPA for AMD XDNA NPU packages..."
+      info "Adding AMD XDNA NPU package PPA (ppa:lemonade-team/stable)..."
       if ! "${SUDO_CMD[@]}" add-apt-repository -y ppa:lemonade-team/stable; then
-        warn "Failed to add Lemonade stable PPA. AMD NPU packages may need manual installation."
+        warn "Failed to add AMD XDNA NPU package PPA. AMD NPU packages may need manual installation."
       else
-        "${SUDO_CMD[@]}" apt-get update || warn "apt-get update failed after adding Lemonade PPA."
+        "${SUDO_CMD[@]}" apt-get update || warn "apt-get update failed after adding AMD XDNA NPU package PPA."
       fi
     else
       warn "add-apt-repository was not found. Run setup without --skip-apt or install software-properties-common."
@@ -1032,7 +1032,7 @@ install_llama_cpp() {
     return
   fi
 
-  info "[3b/6] llama-cpp-python ($LLAMA_CPP_BACKEND source build for LLM proofreading)..."
+  info "[3b/6] Optional llama-cpp-python backend ($LLAMA_CPP_BACKEND source build)..."
   info "This may take 10-20 minutes on first install."
 
   local old_cmake_args="${CMAKE_ARGS-}"
@@ -1082,7 +1082,8 @@ install_llama_cpp() {
   fi
 
   if ! "$PYTHON_BIN" -m pip install llama-cpp-python --no-cache-dir; then
-    warn "llama-cpp-python is not installed. LLM proofreading will be unavailable."
+    warn "llama-cpp-python is not installed. The optional direct Python LLM backend will be unavailable."
+    warn "The app can still use bundled/downloaded llama.cpp llama-server."
   fi
 
   if [[ -n "$old_cmake_args" ]]; then

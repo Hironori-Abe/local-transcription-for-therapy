@@ -7,8 +7,6 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-LEMONADE_VERSION="10.8.0"
-LEMONADE_DEST="src-tauri/resources/lemonade"
 CONFIG_NVIDIA="tauri.build.nvidia-ubuntu.override.json"
 CONFIG_AMD="tauri.build.amd-ubuntu.override.json"
 BUILD_CONFIG="$CONFIG_NVIDIA"
@@ -70,40 +68,7 @@ if [[ ! -f "licenses/THIRD_PARTY_FULL.txt" ]]; then
 fi
 echo ""
 
-# --- Lemonade Linux バイナリのダウンロード ---
-LEMONADE_URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-embeddable-${LEMONADE_VERSION}-ubuntu-x64.tar.gz"
-
-if [[ -f "$LEMONADE_DEST/lemond" || -f "$LEMONADE_DEST/lemonade-server" || -f "$LEMONADE_DEST/lemonade" ]]; then
-  echo "[INFO] Lemonade バイナリは既に存在します: $LEMONADE_DEST"
-else
-  echo "[INFO] Lemonade ${LEMONADE_VERSION} (Linux) をダウンロード中..."
-  mkdir -p "$LEMONADE_DEST"
-
-  TMP_DIR=$(mktemp -d)
-  trap 'rm -rf "$TMP_DIR"' EXIT
-
-  if ! curl -fL --retry 3 --retry-delay 5 \
-       -o "$TMP_DIR/lemonade.tar.gz" "$LEMONADE_URL"; then
-    echo "[WARN] Lemonade のダウンロードに失敗しました。"
-    echo "       手動でインストールしてください: https://github.com/lemonade-sdk/lemonade/releases"
-  else
-    tar -xzf "$TMP_DIR/lemonade.tar.gz" -C "$TMP_DIR"
-
-    # lemond / lemonade-server / lemonade いずれかを探してコピー
-    BIN_DIR=""
-    while IFS= read -r -d '' exe; do
-      BIN_DIR="$(dirname "$exe")"
-      break
-    done < <(find "$TMP_DIR" \( -name 'lemond' -o -name 'lemonade-server' -o -name 'lemonade' \) -print0 2>/dev/null)
-
-    if [[ -n "$BIN_DIR" ]]; then
-      cp -r "$BIN_DIR/." "$LEMONADE_DEST/"
-      echo "[OK] Lemonade バイナリを展開しました: $LEMONADE_DEST"
-    else
-      echo "[WARN] アーカイブ内に Lemonade バイナリが見つかりませんでした。"
-    fi
-  fi
-fi
+echo "[INFO] LLM 校正は llama.cpp llama-server を直接起動します。Lemonade/lemond は同梱しません。"
 echo ""
 
 # --- .deb ビルド ---

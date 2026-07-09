@@ -16,7 +16,7 @@ echo === Rebuild Unified Runtime Venv ===
 echo.
 
 if exist "%MAIN_VENV%" (
-  echo [1/7] Removing existing %MAIN_VENV% ...
+  echo [1/9] Removing existing %MAIN_VENV% ...
   rmdir /S /Q "%MAIN_VENV%"
   if exist "%MAIN_VENV%" (
     echo [ERROR] Failed to remove %MAIN_VENV%.
@@ -24,11 +24,11 @@ if exist "%MAIN_VENV%" (
     goto :fail
   )
 ) else (
-  echo [1/7] %MAIN_VENV% not found. Skip removal.
+  echo [1/9] %MAIN_VENV% not found. Skip removal.
 )
 
 if exist "%OLD_DIAR_VENV%" (
-  echo [2/7] Removing legacy %OLD_DIAR_VENV% ...
+  echo [2/9] Removing legacy %OLD_DIAR_VENV% ...
   rmdir /S /Q "%OLD_DIAR_VENV%"
   if exist "%OLD_DIAR_VENV%" (
     echo [ERROR] Failed to remove %OLD_DIAR_VENV%.
@@ -36,10 +36,10 @@ if exist "%OLD_DIAR_VENV%" (
     goto :fail
   )
 ) else (
-  echo [2/7] %OLD_DIAR_VENV% not found. Skip removal.
+  echo [2/9] %OLD_DIAR_VENV% not found. Skip removal.
 )
 
-echo [3/7] Creating %MAIN_VENV% with Python 3.12 ...
+echo [3/9] Creating %MAIN_VENV% with Python 3.12 ...
 %PY_BOOTSTRAP% -3.12 -m venv %MAIN_VENV%
 if errorlevel 1 (
   echo [WARN] Python 3.12 launcher not found. Retrying with default launcher...
@@ -48,11 +48,11 @@ if errorlevel 1 (
 )
 
 set "PYTHON_BIN=%cd%\%MAIN_VENV%\Scripts\python.exe"
-echo [4/7] Upgrading pip tooling ...
+echo [4/9] Upgrading pip tooling ...
 call "%PYTHON_BIN%" -m pip install --upgrade "pip<26" "setuptools<81" wheel
 if errorlevel 1 goto :fail
 
-echo [5/7] Installing torch stack first (reduces resolver complexity) ...
+echo [5/9] Installing torch stack first (reduces resolver complexity) ...
 call "%PYTHON_BIN%" -m pip uninstall -y torch torchaudio torchvision torchcodec >nul 2>&1
 call "%PYTHON_BIN%" -m pip install --upgrade --force-reinstall --prefer-binary --index-url https://download.pytorch.org/whl/cu128 "torch==2.10.0" "torchaudio==2.10.0"
 if errorlevel 1 (
@@ -61,7 +61,7 @@ if errorlevel 1 (
   goto :fail
 )
 
-echo [6/8] Installing runtime dependencies in stages ...
+echo [6/9] Installing runtime dependencies in stages ...
 call "%PYTHON_BIN%" -m pip uninstall -y av imageio-ffmpeg >nul 2>&1
 call "%PYTHON_BIN%" -m pip install --prefer-binary --no-deps faster-whisper==1.2.1
 if errorlevel 1 goto :fail
@@ -72,15 +72,8 @@ call "%PYTHON_BIN%" -m pip install --prefer-binary --only-binary=contourpy -r "%
 if errorlevel 1 goto :fail
 del "%REQ_TMP%" >nul 2>&1
 
-echo [7/8] llama-cpp-python (CUDA source build for LLM proofreading) ...
-echo       This may take 10-20 minutes.
-set "CMAKE_ARGS=-DGGML_CUDA=on"
-call "%PYTHON_BIN%" -m pip install llama-cpp-python --no-cache-dir
-set "CMAKE_ARGS="
-call "%PYTHON_BIN%" -c "import llama_cpp; ok=llama_cpp.llama_supports_gpu_offload(); print('llama_cpp GPU:', ok)"
-if errorlevel 1 (
-  echo [WARN] llama-cpp-python install failed. LLM proofreading will be unavailable.
-)
+echo [7/9] Skipping llama-cpp-python source build.
+echo       LLM proofreading uses bundled/downloaded llama.cpp llama-server direct launch.
 
 echo [8/9] Downloading Gemma4 E4B GGUF model (for LLM proofreading)...
 set "GEMMA_DIR=%cd%\python_sidecar\models\llm\gemma-4-e4b-it"
@@ -115,29 +108,7 @@ if exist "%GEMMA_MTP_FILE%" (
   )
 )
 
-echo [Lemonade] Checking NPU/GPU LLM backend (optional)...
-set "LEMONADE_BIN="
-where lemonade-server >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%i in ('where lemonade-server') do set "LEMONADE_BIN=%%i"
-  goto :lemonade_rebuild_done
-)
-where lemonade >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%i in ('where lemonade') do set "LEMONADE_BIN=%%i"
-  goto :lemonade_rebuild_done
-)
-if exist "C:\Program Files\Lemonade\lemonade-server.exe" (
-  set "LEMONADE_BIN=C:\Program Files\Lemonade\lemonade-server.exe"
-  goto :lemonade_rebuild_done
-)
-:lemonade_rebuild_done
-if defined LEMONADE_BIN (
-  echo [OK] Lemonade: %LEMONADE_BIN%
-) else (
-  echo [INFO] Lemonade not found. llama_cpp backend is still available.
-  echo        Install Lemonade: winget install lemonade-sdk.lemonade
-)
+echo [LLM] llama.cpp llama-server direct launch is used; Lemonade/lemond is not required.
 
 echo [9/9] Validating runtime imports ...
 call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, torch, torchaudio; print('torch=', torch.__version__); print('torchaudio=', torchaudio.__version__); print('cuda=', torch.cuda.is_available())"

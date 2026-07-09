@@ -54,7 +54,7 @@ echo   [4] Gemma GGUF model  (LLM proofreading)
 echo       %LOCALAPPDATA%\net.gakkousya.lott\models\llm\  ^(v0.3+^)
 echo       %INSTDIR%\python_sidecar\models\llm\  ^(legacy resource_dir^)
 echo.
-echo   [5] Lemonade backend cache  (llama-server binaries etc.)
+echo   [5] LLM backend cache  (legacy lemonade dir; llama-server binaries etc.)
 echo       %LOCALAPPDATA%\net.gakkousya.lott\lemonade\
 echo.
 echo   [6] App settings  (localStorage / WebView2 data)
@@ -230,25 +230,25 @@ echo [4] Done: Gemma GGUF deleted.
 exit /b 0
 
 :: ===========================================================
-::  Subroutine: [5] Lemonade backend cache
+::  Subroutine: [5] LLM backend cache
 :: ===========================================================
 :item_lemonade
 echo.
 set "LEMON=%LOCALAPPDATA%\net.gakkousya.lott\lemonade"
 if not exist "%LEMON%" (
-    echo [5] Lemonade cache dir not found ^(skip^): %LEMON%
+    echo [5] LLM backend cache dir not found ^(skip^): %LEMON%
     exit /b 0
 )
-echo [5] Delete Lemonade backend cache ^(llama-server binaries, config.json^):
+echo [5] Delete LLM backend cache ^(legacy lemonade dir; llama-server binaries, config.json^):
 echo       %LEMON%
 set /p CONFIRM5="Confirm? [Y/N]: "
 if /i not "%CONFIRM5%"=="Y" ( echo Skipped. & exit /b 0 )
 echo Deleting...
 rd /s /q "%LEMON%"
 if %ERRORLEVEL% equ 0 (
-    echo [5] Done: Lemonade cache deleted.
+    echo [5] Done: LLM backend cache deleted.
 ) else (
-    echo [5] ERROR: delete failed ^(lemond.exe may still be running^).
+    echo [5] ERROR: delete failed ^(files may still be in use^).
 )
 exit /b 0
 

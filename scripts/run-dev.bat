@@ -4,13 +4,6 @@ setlocal EnableExtensions
 
 cd /d "%~dp0\.."
 
-echo Stopping any running lemond process...
-taskkill /F /IM lemond.exe >nul 2>&1
-if errorlevel 1 (
-  echo [INFO] lemond was not running.
-) else (
-  echo [OK] lemond stopped.
-)
 set "PYTHON_BIN=py"
 if exist ".venv312\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312\Scripts\python.exe"
 set "CUDA_HINT_1=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin"
@@ -102,26 +95,7 @@ if /I "%EMULATION_MODE%"=="missing_community1" (
 )
 echo [INFO] Emulation state saved: %EMULATION_STATE_FILE%
 
-set "LEMONADE_BIN="
-where lemonade-server >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%i in ('where lemonade-server') do set "LEMONADE_BIN=%%i"
-  goto :lemonade_run_done
-)
-where lemonade >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%i in ('where lemonade') do set "LEMONADE_BIN=%%i"
-  goto :lemonade_run_done
-)
-if exist "C:\Program Files\Lemonade\lemonade-server.exe" (
-  set "LEMONADE_BIN=C:\Program Files\Lemonade\lemonade-server.exe"
-)
-:lemonade_run_done
-if defined LEMONADE_BIN (
-  echo [OK] Lemonade available: %LEMONADE_BIN%
-) else (
-  echo [INFO] Lemonade not found. LLM backend will use llama_cpp only.
-)
+echo [INFO] LLM backend: bundled/downloaded llama.cpp llama-server direct launch ^(no Lemonade/lemond^).
 
 if not exist "python_sidecar\models\pyannote-speaker-diarization-community-1" (
   echo [INFO] Diarization model directory not found.

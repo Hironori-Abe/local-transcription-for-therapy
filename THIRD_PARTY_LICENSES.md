@@ -8,7 +8,7 @@
 > 依存やバージョンを更新した場合は、該当行とチェックリストを再確認すること。
 > 本ファイルは法的助言ではありません。
 
-最終更新: 2026-06-12
+最終更新: 2026-07-09
 
 ---
 
@@ -26,9 +26,10 @@
 |---|---|---|---|
 | **Python 3.12 embeddable** (`resources/python312/`) | Python ランタイム | PSF License Agreement | ライセンス本文の同梱（`LICENSE.txt` 同梱済み） |
 | **llama.cpp** (`resources/llama-server/` の `llama-server.exe`, `ggml*.dll`, `llama*.dll` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | 著作権表示＋MIT本文の同梱 |
-| **Lemonade SDK** (`resources/lemonade/` の `lemonade.exe`, `lemond.exe`) | LLM バックエンド管理 | **Apache-2.0** (`LICENSE` 同梱済み) | NOTICE/著作権の保持。改変時は変更告知 |
 | ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV 変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows NSIS で同梱確認済み。`--enable-gpl` / `--enable-nonfree` / GPL 系 encoder なし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt` を同梱 |
 | ✅ **NVIDIA CUDA 再頒布 DLL** (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll` — CUDA 12.4 / llama.cpp 公式ビルド由来) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3） |
+
+> Lemonade SDK / lemond は現在の配布物には同梱しません。`%LOCALAPPDATA%\{app-id}\lemonade\` というディレクトリ名は後方互換のキャッシュ名として残る場合がありますが、中身はダウンロード済み llama.cpp バックエンドや設定ファイルです。
 
 ---
 
@@ -50,7 +51,7 @@
 | pyzipper | MIT | 著作権＋本文同梱 |
 | sympy | BSD-3-Clause | 著作権＋本文同梱 |
 | protobuf | BSD-3-Clause | 著作権＋本文同梱 |
-| llama-cpp-python（別途ビルド） | MIT | 著作権＋本文同梱 |
+| llama-cpp-python（任意の direct Python backend 検証時のみ別途ビルド） | MIT | 同梱・配布する場合は著作権＋本文同梱 |
 
 > venv 内の各パッケージは `*.dist-info/` に `LICENSE` を保持しています。これらを束ねて配布物に含めるのが確実です（自動収集スクリプトは後述）。
 > 配布用 Python 環境には `av`（PyAV）と `imageio-ffmpeg` を入れません。`faster-whisper` は `--no-deps` で導入し、音声デコードは同梱 LGPL FFmpeg CLI で行います（F-4）。

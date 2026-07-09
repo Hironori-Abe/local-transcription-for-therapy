@@ -6,7 +6,10 @@
 # ctranslate2: setup-dev.sh の install_rocm_ctranslate2 が GitHub Releases の
 #   ROCm ホイール (v$CTRANSLATE2_ROCM_VERSION) で別途インストールする。
 #
-# llama-cpp-python: HIPBLAS または Vulkan フラグ付きで別途ビルド・インストールする。
+# llama-cpp-python: 任意の direct Python LLM backend を検証する場合のみ、
+# HIPBLAS または Vulkan フラグ付きで別途ビルド・インストールする。
+# アプリ既定の LLM 校正はセットアップタブで取得した llama.cpp ROCm/Vulkan
+# llama-server を直接起動する。
 #   CMAKE_ARGS="-DGGML_HIPBLAS=on" pip install llama-cpp-python --no-cache-dir
 #   または
 #   CMAKE_ARGS="-DGGML_VULKAN=on" pip install llama-cpp-python --no-cache-dir

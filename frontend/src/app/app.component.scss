@@ -1792,7 +1792,10 @@ $segment-cols: 96px 84px 88px 1fr;
   justify-content: center;
   flex: 0 0 auto;
   width: auto;
-  max-width: min(100%, 360px);
+  // 長文の置き換え候補（区間聞き直し）が縦長に折り返されないよう、
+  // 閉じるボタン（32px+gap）分だけ残して行幅いっぱいまで横に延ばす。
+  // 短い候補は従来どおり内容幅のまま。
+  max-width: calc(100% - 44px);
   min-width: 0;
   min-height: 32px;
   padding: 4px 14px;

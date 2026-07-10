@@ -7842,7 +7842,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         : 'この構成では区間の聞き直しを利用できません。';
     }
     if (this.isPlaybackDisabled() || !this.selectedAudioPath()) {
-      return '音声ファイルを読み込むと、この区間をAIで聞き直せます。';
+      return '音声ファイルを読み込むと、この区間をAIによる再文字起こしができるようになります。';
     }
     return null;
   }
@@ -7855,7 +7855,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.isVoiceInputProcessing(segmentId)) {
       return '候補を生成中...';
     }
-    return 'この区間をAIで聞き直して、置き換え候補を生成';
+    return 'この区間をAIによる再文字起こし';
   }
 
   async retranscribeSegment(segment: TranscriptionSegment): Promise<void> {

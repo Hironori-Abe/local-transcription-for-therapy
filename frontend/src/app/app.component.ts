@@ -22,6 +22,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { save, open } from '@tauri-apps/plugin-dialog';
+import { getVersion } from '@tauri-apps/api/app';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { environment } from '../environments/environment';
@@ -511,6 +512,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly appDisplayName = this.editorOnlyBuild
     ? 'Local Transcription for Therapy (LoTT) (Editor)'
     : 'Local Transcription for Therapy (LoTT)';
+  readonly appVersion = signal<string>('');
   readonly isTauriRuntime = signal<boolean>(this.detectTauriRuntime());
   readonly runtimeCheckDone = signal<boolean>(false);
   readonly devEmulationLabel = signal<string>('');
@@ -4783,8 +4785,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.canShowTranscriptionTab() ? 2 : 1;
   }
 
+  private async loadAppVersion(): Promise<void> {
+    if (!this.isTauriRuntime()) {
+      return;
+    }
+    try {
+      const version = await getVersion();
+      this.ngZone.run(() => this.appVersion.set(version));
+    } catch {
+      // 取得できない場合はバージョン行を出さない
+    }
+  }
+
   private async initializeStartupState(): Promise<void> {
     this.runtimeCheckDone.set(false);
+    void this.loadAppVersion();
     await this.probeAndPersistDevEmulationState();
     void this.checkGpuAvailability();
     void this.loadComputeEnv();

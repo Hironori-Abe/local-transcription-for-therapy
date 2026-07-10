@@ -19,6 +19,8 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - **Japanese transcription** - faster-whisper with the Whisper turbo model
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
 - **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. The proofreading AI supports the standard model, Gemma 4 E4B, and an optional higher-accuracy model, Gemma 4 12B, which is available for both NVIDIA and AMD after download
+- **Voice input** - Record up to 15 seconds from the microphone on any transcript row, and a local AI transcribes it and suggests up to 3 candidates to insert into the edit field (available after installing the "voice input pack" from the Settings tab)
+- **Segment re-listen** - The AI re-transcribes the audio for a row's time range and suggests up to 3 candidates that replace the row's content, helping fix rows where the original transcription looks wrong
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
 - Save as Word (.docx), Excel (.xlsx), or JSON
 
@@ -59,6 +61,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
    - Transcription model: Whisper turbo
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
    - Proofreading LLM: Gemma 4 E4B GGUF
+   - Voice input pack (optional, required for voice input and segment re-listen)
 
 After the models are downloaded, the app can be used offline.
 
@@ -66,6 +69,7 @@ After the models are downloaded, the app can be used offline.
 
 1. Select an audio file and run transcription
 2. Listen to the audio while editing the conversation text and speaker labels. Default speaker labels include `SPEAKER_00 -> Th` and `SPEAKER_01 -> Cl`
+   - While editing, you can also use microphone voice input and the "segment re-listen" feature, which lets the AI re-transcribe a row's time range (requires the voice input pack)
 3. Save as Word, Excel, or JSON
 
 ## Technology Stack

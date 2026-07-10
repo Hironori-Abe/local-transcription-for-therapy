@@ -1149,6 +1149,7 @@
           <mat-card-content>
             <div class="info-section">
               <p><strong>アプリ名:</strong> {{ appDisplayName }}</p>
+              <p *ngIf="appVersion()"><strong>バージョン:</strong> {{ appVersion() }}</p>
               <p><strong>会社名:</strong> 合同会社学幸社</p>
             </div>
 

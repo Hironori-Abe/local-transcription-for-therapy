@@ -7756,56 +7756,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistProofreadSettings();
   }
 
-  appendPunctuationToSegment(
-    segmentId: number,
-    punctuation: '、' | '。' | '？' | '！' | ',' | '.',
-    textInputEl?: HTMLInputElement | HTMLTextAreaElement
-  ): void {
-    const current = this.editedSegmentTextMap();
-    const base = typeof current[segmentId] === 'string'
-      ? current[segmentId]
-      : (this.result()?.segments.find((s) => s.id === segmentId)?.text ?? '');
-    const isFocused = !!textInputEl && document.activeElement === textInputEl;
-    const hasSelection = !!textInputEl
-      && isFocused
-      && typeof textInputEl.selectionStart === 'number'
-      && typeof textInputEl.selectionEnd === 'number';
-    const selectionStart = hasSelection ? (textInputEl as HTMLInputElement | HTMLTextAreaElement).selectionStart as number : null;
-    const selectionEnd = hasSelection ? (textInputEl as HTMLInputElement | HTMLTextAreaElement).selectionEnd as number : null;
-
-    let updatedText = `${base}${punctuation}`;
-    if (selectionStart !== null && selectionEnd !== null) {
-      const safeStart = Math.max(0, Math.min(base.length, selectionStart));
-      const safeEnd = Math.max(safeStart, Math.min(base.length, selectionEnd));
-      updatedText = `${base.slice(0, safeStart)}${punctuation}${base.slice(safeEnd)}`;
-    }
-
-    const next = { ...current };
-    next[segmentId] = updatedText;
-    this.editedSegmentTextMap.set(next);
-    this.clearProofreadMetadataIfTextDiverged(segmentId, updatedText);
-
-    setTimeout(() => {
-      if (!textInputEl) {
-        return;
-      }
-
-      if (selectionStart !== null && selectionEnd !== null) {
-        const safeStart = Math.max(0, Math.min(base.length, selectionStart));
-        const nextPos = Math.max(0, Math.min(updatedText.length, safeStart + punctuation.length));
-        if (document.activeElement !== textInputEl) {
-          textInputEl.focus({ preventScroll: true });
-        }
-        textInputEl.setSelectionRange(nextPos, nextPos);
-        return;
-      }
-
-      textInputEl.focus({ preventScroll: true });
-      const endPos = updatedText.length;
-      textInputEl.setSelectionRange(endPos, endPos);
-    }, 0);
-  }
-
   isVoiceInputRecording(segmentId: number): boolean {
     return this.voiceInputRecordingSegmentId() === segmentId;
   }

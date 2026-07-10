@@ -1659,44 +1659,26 @@ $segment-cols: 96px 84px 88px 1fr;
   bottom: -12px;
 }
 
-// 行下部の3ボタン（聞き直し・コピー・分割）を均等配置する。
-.segment-retranscribe-btn {
-  bottom: -12px;
-  left: 25%;
-}
-
+// 行下部の2ボタン（コピー・分割）を均等配置する。聞き直しボタンは segment-text-field の matPrefix へ移動済み。
 .segment-insert-btn-copy {
   bottom: -12px;
-  left: 50%;
+  left: 33.33%;
 }
 
 .segment-insert-btn-split {
   bottom: -12px;
-  left: 75%;
+  left: 66.67%;
 }
 
 .segment-insert-icon-rotated {
   transform: rotate(180deg);
 }
 
-.segment-punctuation-suffix {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin-left: 6px;
-}
-
-.segment-punctuation-btn {
-  min-width: 48px;
-  height: 28px;
-  padding: 0 8px;
-  line-height: 1;
-}
-
-.segment-voice-input-btn {
+// 音声入力ボタン（matSuffix）・聞き直しボタン（matPrefix）共通の icon-button 見た目。
+.segment-voice-input-btn,
+.segment-retranscribe-btn {
   width: 32px;
   height: 32px;
-  margin: 0 8px 0 0;
   padding: 0;
   color: #00695c;
   align-self: flex-start;
@@ -1723,7 +1705,16 @@ $segment-cols: 96px 84px 88px 1fr;
   }
 }
 
-.segment-voice-input-btn.segment-voice-input-btn-unavailable {
+.segment-voice-input-btn {
+  margin: 0 0 0 8px;
+}
+
+.segment-retranscribe-btn {
+  margin: 0 8px 0 0;
+}
+
+.segment-voice-input-btn.segment-voice-input-btn-unavailable,
+.segment-retranscribe-btn.segment-retranscribe-btn-unavailable {
   color: rgba(0, 0, 0, 0.26);
   cursor: default;
 
@@ -1775,14 +1766,6 @@ $segment-cols: 96px 84px 88px 1fr;
 
 .voice-input-replace-hint {
   font-weight: 600;
-}
-
-// モデル未導入などで使えないときの見た目（mini-fab をグレー化。
-// ネイティブ disabled にすると matTooltip の案内が出ないため見た目だけ無効化する）。
-.segment-retranscribe-btn.segment-retranscribe-btn-unavailable {
-  opacity: 0.55;
-  filter: grayscale(1);
-  cursor: default;
 }
 
 .voice-input-candidate-btn {

@@ -1491,7 +1491,27 @@
                     } @else if (llmStatus === 'done') {
                     <span matPrefix class="llm-status-icon llm-status-done" title="AI校正完了">check_circle</span>
                     }
-                    <button matPrefix mat-icon-button type="button"
+                    <button *ngIf="segmentRetranscribeButtonVisible()" matPrefix mat-icon-button type="button"
+                      class="segment-retranscribe-btn" tabindex="-1"
+                      [class.segment-retranscribe-btn-unavailable]="segmentRetranscribeUnavailableReason() !== null"
+                      [attr.aria-disabled]="segmentRetranscribeUnavailableReason() !== null ? true : null"
+                      [disableRipple]="segmentRetranscribeUnavailableReason() !== null"
+                      [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id)) || voiceInputRecordingSegmentId() !== null"
+                      [matTooltip]="segmentRetranscribeTooltip(segment.id)"
+                      [attr.aria-label]="segmentRetranscribeTooltip(segment.id)"
+                      (click)="retranscribeSegment(segment)">
+                      <mat-icon class="material-symbols-outlined">{{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : 'graphic_eq' }}</mat-icon>
+                    </button>
+                    <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
+                      cdkAutosizeMaxRows="12" class="segment-content-input"
+                      [value]="getEditableTextFromMap(segment, editedSegmentTextMap())"
+                      [disabled]="isProofreadLocked || llmStatus === 'processing'"
+                      (input)="setEditableText(segment.id, $any($event.target).value)"></textarea>
+                    <mat-hint *ngIf="proofreadHintBySegmentId()[segment.id] as proofreadHint"
+                      class="proofread-hint-row">
+                      <span>{{ proofreadHint }}</span>
+                    </mat-hint>
+                    <button matSuffix mat-icon-button type="button"
                       class="segment-voice-input-btn" tabindex="-1"
                       [class.segment-voice-input-btn-unavailable]="!editorVoiceInputAvailable()"
                       [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
@@ -1504,23 +1524,6 @@
                         {{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : (isVoiceInputRecording(segment.id) ? 'stop' : 'mic') }}
                       </mat-icon>
                     </button>
-                    <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
-                      cdkAutosizeMaxRows="12" class="segment-content-input"
-                      [value]="getEditableTextFromMap(segment, editedSegmentTextMap())"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing'"
-                      (input)="setEditableText(segment.id, $any($event.target).value)"></textarea>
-                    <mat-hint *ngIf="proofreadHintBySegmentId()[segment.id] as proofreadHint"
-                      class="proofread-hint-row">
-                      <span>{{ proofreadHint }}</span>
-                    </mat-hint>
-                    <button matSuffix mat-stroked-button type="button" class="segment-punctuation-btn" tabindex="-1"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing'"
-                      (mousedown)="$event.preventDefault()"
-                      (click)="appendPunctuationToSegment(segment.id, editCommaChar(), segmentTextInput)">+{{ editCommaChar() }}</button>
-                    <button matSuffix mat-stroked-button type="button" class="segment-punctuation-btn" tabindex="-1"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing'"
-                      (mousedown)="$event.preventDefault()"
-                      (click)="appendPunctuationToSegment(segment.id, editPeriodChar(), segmentTextInput)">+{{ editPeriodChar() }}</button>
                   </mat-form-field>
                   <div class="voice-input-inline-status"
                     *ngIf="voiceInputFeedbackSegmentId() === segment.id && voiceInputStatus()">
@@ -1567,19 +1570,6 @@
                       <mat-icon
                         class="material-symbols-outlined segment-insert-icon segment-insert-icon-rotated">call_split</mat-icon>
                       <mat-icon class="material-symbols-outlined segment-insert-icon">arrow_downward</mat-icon>
-                    </span>
-                  </button>
-                  <button *ngIf="segmentRetranscribeButtonVisible()" mat-mini-fab type="button"
-                    class="segment-insert-btn segment-retranscribe-btn" tabindex="-1"
-                    [class.segment-retranscribe-btn-unavailable]="segmentRetranscribeUnavailableReason() !== null"
-                    [attr.aria-disabled]="segmentRetranscribeUnavailableReason() !== null ? true : null"
-                    [disableRipple]="segmentRetranscribeUnavailableReason() !== null"
-                    [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id)) || voiceInputRecordingSegmentId() !== null"
-                    [matTooltip]="segmentRetranscribeTooltip(segment.id)"
-                    [attr.aria-label]="segmentRetranscribeTooltip(segment.id)"
-                    (click)="retranscribeSegment(segment)">
-                    <span class="segment-insert-icon-pair" aria-hidden="true">
-                      <mat-icon class="material-symbols-outlined segment-insert-icon">{{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : 'graphic_eq' }}</mat-icon>
                     </span>
                   </button>
                 </div>

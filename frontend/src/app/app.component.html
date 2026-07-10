@@ -567,11 +567,13 @@
             <div class="section-separator"><span>名前・地名チェック</span></div>
             <ng-container [ngTemplateOutlet]="locationSelectionTpl"></ng-container>
 
-            <ng-container *ngIf="editorOnlyBuild">
+            <!-- 音声入力パック: 全ビルドで表示。Editor版はCPUバックエンド込み、Full版はGPU直起動のため
+                 mmproj（+未導入ならE4B本体）のみ導入する。 -->
+            <ng-container>
               <div class="section-separator"><span>音声入力パック</span></div>
               <div class="voice-input-pack-panel">
                 <div class="setup-component-list voice-input-pack-list">
-                  <div class="setup-component-row">
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? editorOnlyBuild">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.cpuBackend"
                       [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.cpuBackend"
@@ -622,8 +624,12 @@
                   音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
                 <p class="reader-hint voice-input-pack-note"
-                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed">
+                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && editorVoiceInputPackStatus()?.cpuBackendRequired">
                   未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンドを合わせて約5.0 GiBをダウンロードします。
+                </p>
+                <p class="reader-hint voice-input-pack-note"
+                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && !editorVoiceInputPackStatus()?.cpuBackendRequired">
+                  未導入の場合は、音声入力用 mmproj 約946MiBをダウンロードします（Gemma 4 E4B 本体が未導入の場合は追加で約4.0GiB）。
                 </p>
                 <p class="copy-status error-text" *ngIf="editorVoiceInputPackProgressMap()['_error'] as e">{{ e.message }}</p>
                 <div *ngIf="editorVoiceInputPackDeleteResult() as r" class="dev-delete-result">

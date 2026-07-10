@@ -429,6 +429,7 @@ interface AllSetupStatus {
 
 interface EditorVoiceInputPackStatus {
   installed: boolean;
+  cpuBackendRequired: boolean;
   cpuBackend: boolean;
   cpuBackendExpectedPath: string;
   gemmaGguf: boolean;
@@ -969,8 +970,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly editorVoiceInputPackDeleting = signal<boolean>(false);
   readonly editorVoiceInputPackDeleteResult = signal<DeleteModelsResponse | null>(null);
   readonly editorVoiceInputPackProgressMap = signal<Record<string, SetupProgressEvent>>({});
-  readonly editorVoiceInputAvailable = computed(() =>
-    this.editorOnlyBuild && this.editorVoiceInputPackStatus()?.installed === true
+  readonly editorVoiceInputAvailable = computed(
+    // Full 版（CUDA/AMD）でも導入済みなら利用可能。editor 版限定ではない。
+    () => this.editorVoiceInputPackStatus()?.installed === true
   );
   readonly editorVoiceInputDevControlsVisible = computed(
     () => this.editorOnlyBuild && this.isDevModeBuild && this.isTauriRuntime()
@@ -6029,14 +6031,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async checkEditorVoiceInputPackStatus(): Promise<void> {
-    if (!this.editorOnlyBuild) {
-      this.editorVoiceInputPackStatus.set(null);
-      this.editorVoiceInputPackChecked.set(true);
-      return;
-    }
     if (!this.isTauriRuntime()) {
       this.editorVoiceInputPackStatus.set({
         installed: false,
+        cpuBackendRequired: this.editorOnlyBuild,
         cpuBackend: false,
         cpuBackendExpectedPath: '',
         gemmaGguf: false,
@@ -6070,7 +6068,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async installEditorVoiceInputPack(): Promise<void> {
-    if (!this.editorOnlyBuild || this.editorVoiceInputPackInstalling()) return;
+    if (this.editorVoiceInputPackInstalling()) return;
     this.editorVoiceInputPackInstalling.set(true);
     this.editorVoiceInputPackDeleteResult.set(null);
     this.editorVoiceInputPackProgressMap.set({});

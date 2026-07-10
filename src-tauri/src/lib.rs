@@ -1028,6 +1028,7 @@ fn try_start_llama_server_cuda(
     bin_path: &str,
     model_path: &str,
     mtp_model_path: Option<&str>,
+    mmproj_path: Option<&str>,
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
@@ -1108,6 +1109,11 @@ fn try_start_llama_server_cuda(
             cmd.arg("--spec-draft-ngl").arg("99");
         }
     }
+    if let Some(mmproj) = mmproj_path {
+        // 音声入力（マルチモーダル）用。GPU オフロードを意図的に許可するため
+        // --no-mmproj-offload は付けない（CPU 版の音声入力経路とはここが異なる）。
+        cmd.arg("--mmproj").arg(mmproj);
+    }
     // stderr は破棄せずパイプで読み取り、起動時 VRAM 不足（OOM）を検出する。
     // パイプを溜めるとプロセスが書き込みでブロックするため、専用スレッドで常時ドレインする。
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
@@ -1145,6 +1151,7 @@ fn try_start_llama_server_vulkan(
     bin_path: &str,
     model_path: &str,
     mtp_model_path: Option<&str>,
+    mmproj_path: Option<&str>,
     port: u16,
     ctx_size: u32,
     vk_device_index: Option<i32>,
@@ -1213,6 +1220,10 @@ fn try_start_llama_server_vulkan(
             .arg("--spec-draft-n-max")
             .arg("3");
     }
+    if let Some(mmproj) = mmproj_path {
+        // 音声入力（マルチモーダル）用。GPU オフロードを許可するため --no-mmproj-offload は付けない。
+        cmd.arg("--mmproj").arg(mmproj);
+    }
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
@@ -1248,6 +1259,7 @@ fn try_start_llama_server_rocm(
     bin_path: &str,
     model_path: &str,
     mtp_model_path: Option<&str>,
+    mmproj_path: Option<&str>,
     port: u16,
     ctx_size: u32,
     hip_device_index: Option<i32>,
@@ -1318,6 +1330,10 @@ fn try_start_llama_server_rocm(
             .arg(mtp_path)
             .arg("--spec-draft-n-max")
             .arg("3");
+    }
+    if let Some(mmproj) = mmproj_path {
+        // 音声入力（マルチモーダル）用。GPU オフロードを許可するため --no-mmproj-offload は付けない。
+        cmd.arg("--mmproj").arg(mmproj);
     }
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd
@@ -1814,6 +1830,7 @@ fn start_amd_12b_blocking(
             &bin,
             &main_path,
             mtp_path.as_deref(),
+            None, // 校正(12B)は mmproj 無し
             resolved_port,
             ctx_size,
             Some(hip_index),
@@ -1861,6 +1878,7 @@ fn start_amd_12b_blocking(
             &bin,
             &main_path,
             mtp_path.as_deref(),
+            None, // 校正(12B)は mmproj 無し
             resolved_port,
             ctx_size,
             Some(0),
@@ -1921,6 +1939,7 @@ fn amd_e4b_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
 /// 12B と違い失敗をエラーにせず lemond へ委ねるので、ROCm 直起動が不調でも校正は止まらない。
 fn try_start_amd_e4b_rocm_direct(
     launch: RocmLaunch,
+    mmproj_path: Option<&str>,
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
     parallel_arc: &Arc<AtomicU8>,
@@ -1931,6 +1950,7 @@ fn try_start_amd_e4b_rocm_direct(
         &bin,
         &main_path,
         mtp_path.as_deref(),
+        mmproj_path,
         resolved_port,
         ctx_size,
         Some(hip_index),
@@ -1990,6 +2010,7 @@ fn amd_e4b_vulkan_launch(app: &AppHandle) -> Option<VulkanLaunch> {
 /// （lemond）へ退避する。12B と違い失敗をエラーにしない。
 fn try_start_amd_e4b_vulkan_direct(
     launch: VulkanLaunch,
+    mmproj_path: Option<&str>,
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
     parallel_arc: &Arc<AtomicU8>,
@@ -2000,6 +2021,7 @@ fn try_start_amd_e4b_vulkan_direct(
         &bin,
         &main_path,
         mtp_path.as_deref(),
+        mmproj_path,
         resolved_port,
         ctx_size,
         Some(0),
@@ -2176,6 +2198,7 @@ fn start_cuda_llama_blocking(
     bin: &str,
     model_path: &str,
     mtp_model_path: Option<&str>,
+    mmproj_path: Option<&str>,
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
@@ -2188,6 +2211,7 @@ fn start_cuda_llama_blocking(
         bin,
         model_path,
         mtp_model_path,
+        mmproj_path,
         port,
         n_parallel,
         ctx_size,
@@ -2287,6 +2311,7 @@ async fn start_llm_server(
                 &bin,
                 &mpath,
                 mtp_path.as_deref(),
+                None, // 校正は mmproj 無し
                 resolved_port,
                 n_parallel,
                 ctx_size,
@@ -2325,6 +2350,7 @@ async fn start_llm_server(
             if let Some(launch) = e4b_rocm {
                 if try_start_amd_e4b_rocm_direct(
                     launch,
+                    None, // 校正は mmproj 無し
                     &child_arc,
                     &mode_arc,
                     &parallel_arc,
@@ -2337,6 +2363,7 @@ async fn start_llm_server(
             if let Some(launch) = e4b_vulkan {
                 if try_start_amd_e4b_vulkan_direct(
                     launch,
+                    None, // 校正は mmproj 無し
                     &child_arc,
                     &mode_arc,
                     &parallel_arc,
@@ -2482,6 +2509,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                 &bin,
                 &mpath,
                 mtp_path.as_deref(),
+                None, // 校正は mmproj 無し
                 resolved_port,
                 n_parallel,
                 ctx_size,
@@ -2527,6 +2555,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
             if let Some(launch) = e4b_rocm {
                 if try_start_amd_e4b_rocm_direct(
                     launch,
+                    None, // 校正は mmproj 無し
                     &child_arc,
                     &mode_arc,
                     &parallel_arc,
@@ -2539,6 +2568,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
             if let Some(launch) = e4b_vulkan {
                 if try_start_amd_e4b_vulkan_direct(
                     launch,
+                    None, // 校正は mmproj 無し
                     &child_arc,
                     &mode_arc,
                     &parallel_arc,
@@ -2731,6 +2761,153 @@ fn start_editor_voice_input_server_blocking(
     }
     mode_arc.store(0, Ordering::Relaxed);
     Err("音声入力エンジンの起動タイムアウト（120秒）".to_string())
+}
+
+// Full版（CUDA/AMD）の音声入力サーバー起動 ctx。校正の AMD_E4B_CTX_SIZE(16384) と異なり、
+// 8GB クラスの AMD ノート GPU でも mmproj 込みで安全に収まるサイズに絞る
+// （実測: RX 7600M XT gfx1102・ctx 8192 で ROCm/Vulkan とも安定動作、VRAM 4.2GiB 程度）。
+const VOICE_INPUT_GPU_CTX_SIZE: u32 = 8192;
+
+/// 音声入力用に AMD で E4B を ROCm 直起動するパラメータを返す。校正用 amd_e4b_rocm_launch と
+/// ほぼ同じだが、校正AIモデル階層の選択（12B選択中でも）に関係なく常に E4B を対象にする
+/// （音声入力は常に E4B + mmproj 固定）。ctx は校正より小さい VOICE_INPUT_GPU_CTX_SIZE。
+fn voice_amd_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
+    let rocm_bin = find_llm_rocm_llama_server(app)?;
+    // 音声 mmproj（gemma4a プロジェクタ）は旧 ROCm ビルドの libmtmd が認識できない。
+    // MTP と同じ b9585+ ゲートを流用して旧ビルドを弾き、Vulkan フォールバックへ回す。
+    if !rocm_build_supports_gemma4_assistant(&rocm_bin) {
+        return None;
+    }
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
+    let (hip_index, gfx, _vram) = amd_gpu_priority_list().into_iter().next()?;
+    if !system_rocm_tensile_has_arch(&gfx) {
+        return None;
+    }
+    Some((rocm_bin, main_path, None, VOICE_INPUT_GPU_CTX_SIZE, hip_index))
+}
+
+/// 音声入力用に AMD で E4B を Vulkan 直起動するパラメータを返す（ROCm 直起動が使えない機の受け皿）。
+/// 校正用 amd_e4b_vulkan_launch と違い tier チェックは行わない（音声入力は常に E4B 固定）。
+fn voice_amd_vulkan_launch(app: &AppHandle) -> Option<VulkanLaunch> {
+    let vk_bin = find_llm_vulkan_llama_server(app)?;
+    let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
+    Some((vk_bin, main_path, None, VOICE_INPUT_GPU_CTX_SIZE))
+}
+
+/// Full版（CUDA/AMD）向けの音声入力サーバー起動。Editor版の CPU 直起動
+/// （start_editor_voice_input_server_blocking）と異なり、GPU 直起動のみを試みる
+/// （CPU フォールバックは実装しない。GPUが無い/準備未完了ならエラーで終わる）。
+///
+/// 音声入力は校正AIモデルの階層選択（12B選択中でも）に関係なく、常に Gemma 4 E4B + mmproj を
+/// 使う（resolve_effective_proofread_tier は呼ばない）。MTP は使わない。
+fn start_full_voice_input_server_blocking(
+    app: &AppHandle,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    port_arc: &Arc<AtomicU32>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+) -> Result<u16, String> {
+    let status = check_editor_voice_input_pack_status_impl(app);
+    if !status.installed {
+        return Err("音声入力モデルが未導入です。設定タブから導入してください。".to_string());
+    }
+    // 音声入力は常に E4B + mmproj（校正の階層選択とは独立）。
+    let model_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)
+        .ok_or_else(|| "Gemma 4 E4B GGUF が見つかりません。".to_string())?;
+    let mmproj_path = resolve_gemma_e4b_mmproj_path(app)
+        .ok_or_else(|| "Gemma 4 E4B mmproj が見つかりません。".to_string())?;
+
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    mode_arc.store(0, Ordering::Relaxed);
+
+    let resolved_port = match get_llm_engine_cache_dir(app) {
+        Some(p) => {
+            let _ = fs::create_dir_all(&p);
+            let rp = resolve_llm_server_port(&p);
+            ensure_llm_server_port_config(&p, rp);
+            rp
+        }
+        None => 13306,
+    };
+    port_arc.store(resolved_port as u32, Ordering::Relaxed);
+
+    // 1) NVIDIA: 同梱 CUDA llama-server を auto-fit 起動（校正の12Bと同方式。小VRAM機でも
+    //    本体+mmprojが収まらない分は CPU へ自動配置され安全）。
+    let nvidia_list = nvidia_gpu_priority_list();
+    if !nvidia_list.is_empty() {
+        if let Some(bin) = find_bundled_llama_server_bin(app) {
+            mode_arc.store(1, Ordering::Relaxed);
+            parallel_arc.store(1, Ordering::Relaxed);
+            start_cuda_llama_blocking(
+                &bin,
+                &model_path,
+                None, // 音声入力は MTP を使わない
+                Some(&mmproj_path),
+                resolved_port,
+                1,
+                VOICE_INPUT_GPU_CTX_SIZE,
+                None,
+                true, // autofit
+                child_arc,
+                mode_arc,
+            )
+            // start_cuda_llama_blocking のエラー文言は校正向けのため、音声入力向けに差し替える
+            // （VRAM_OOM_MARKER 等の構造は保つ）。並列処理数の案内は音声入力では調整手段が
+            // 無い（np=1 固定）ので、実行可能な対処に置き換える。
+            .map_err(|e| {
+                e.replace("AI校正エンジン", "音声入力エンジン").replace(
+                    "並列処理数を下げて再試行してください",
+                    "GPUを使用中の他のアプリを終了して再試行してください",
+                )
+            })?;
+            return Ok(resolved_port);
+        }
+    }
+
+    // 2) AMD: E4B を ROCm 優先 → Vulkan フォールバックで直起動（校正の E4B 経路と同方式）。
+    let rocm_launch = voice_amd_rocm_launch(app);
+    let vulkan_launch = voice_amd_vulkan_launch(app);
+    if let Some(launch) = rocm_launch {
+        if try_start_amd_e4b_rocm_direct(
+            launch,
+            Some(&mmproj_path),
+            child_arc,
+            mode_arc,
+            parallel_arc,
+            resolved_port,
+        ) {
+            return Ok(resolved_port);
+        }
+    }
+    if let Some(launch) = vulkan_launch {
+        if try_start_amd_e4b_vulkan_direct(
+            launch,
+            Some(&mmproj_path),
+            child_arc,
+            mode_arc,
+            parallel_arc,
+            resolved_port,
+        ) {
+            return Ok(resolved_port);
+        }
+    }
+
+    // NVIDIA・AMD いずれの GPU 直起動条件も満たさなかった（CPU フォールバックは行わない）。
+    // ここに到達した原因を切り分けて案内する（NVIDIA 検出済みなら同梱エンジン欠落の可能性が高い）。
+    mode_arc.store(0, Ordering::Relaxed);
+    if !nvidia_list.is_empty() {
+        return Err(
+            "NVIDIA GPU を検出しましたが、同梱のAIエンジン (CUDA llama-server) が見つからないため音声入力を開始できませんでした。インストールが完全か確認してください。"
+                .to_string(),
+        );
+    }
+    Err("音声入力エンジンを起動できませんでした。AMD GPU の場合はセットアップタブで LLM バックエンド（ROCm/Vulkan）の取得が完了しているか確認してください。".to_string())
 }
 
 fn parse_editor_voice_candidates_text(raw: &str, max_candidates: usize) -> Vec<String> {
@@ -2927,9 +3104,18 @@ fn generate_editor_voice_input_candidates_blocking(
     mode_arc: Arc<AtomicU8>,
     parallel_arc: Arc<AtomicU8>,
 ) -> Result<EditorVoiceInputResponse, String> {
-    if !editor_voice_input_allowed(&app) {
-        return Err("音声入力はEditor版専用です。".to_string());
-    }
+    // Full版では校正（句読点付与/全体校正）と同じ LlmServer.child スロットを共有するため、
+    // 校正実行中に音声入力が校正用 llama-server を kill してしまわないよう、
+    // LLM_PROOFREAD_ACTIVE で相互排他する（校正側も同フラグを取得している）。
+    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Err(
+                "AI校正または別の音声入力が実行中のため、音声入力を開始できません。完了するかキャンセルしてから再試行してください。"
+                    .to_string(),
+            )
+        }
+    };
     if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
         return Err("音声入力が長すぎます。最大15秒まで録音してください。".to_string());
     }
@@ -2938,13 +3124,25 @@ fn generate_editor_voice_input_candidates_blocking(
         .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
         .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
     let result = (|| {
-        let port = start_editor_voice_input_server_blocking(
-            &app,
-            &child_arc,
-            &port_arc,
-            &mode_arc,
-            &parallel_arc,
-        )?;
+        // Editor版: 従来どおり CPU 直起動。Full版（CUDA/AMD）: GPU 直起動（新規経路）。
+        // リクエスト構築・応答解析・終了時 kill はビルドを問わず共通。
+        let port = if editor_voice_input_allowed(&app) {
+            start_editor_voice_input_server_blocking(
+                &app,
+                &child_arc,
+                &port_arc,
+                &mode_arc,
+                &parallel_arc,
+            )?
+        } else {
+            start_full_voice_input_server_blocking(
+                &app,
+                &child_arc,
+                &port_arc,
+                &mode_arc,
+                &parallel_arc,
+            )?
+        };
         let target = LocalOpenAiHttpTarget {
             host: "127.0.0.1".to_string(),
             authority: format!("127.0.0.1:{port}"),
@@ -3828,6 +4026,9 @@ struct AllSetupStatus {
 #[serde(rename_all = "camelCase")]
 struct EditorVoiceInputPackStatus {
     installed: bool,
+    // Editor版のみ true。CPU バックエンド（llama.cpp CPU ビルド）の導入が installed 判定に
+    // 必要かどうかをフロントに伝える（Full版は GPU 直起動のため CPU バックエンド不要）。
+    cpu_backend_required: bool,
     cpu_backend: bool,
     cpu_backend_expected_path: String,
     gemma_gguf: bool,
@@ -5312,8 +5513,18 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
     let (cpu_backend, cpu_backend_expected_path) = get_editor_voice_cpu_backend_info(app);
     let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
     let (mmproj_gguf, mmproj_gguf_expected_path) = get_gemma_mmproj_gguf_info(app);
+    // Editor版: 従来どおり CPU バックエンドも installed 判定に含める。
+    // Full版（CUDA/AMD）: 音声入力は GPU 直起動のみで CPU バックエンドを使わないため、
+    // 本体 GGUF + mmproj の有無だけで判定する。
+    let cpu_backend_required = editor_voice_input_allowed(app);
+    let installed = if cpu_backend_required {
+        cpu_backend && gemma_gguf && mmproj_gguf
+    } else {
+        gemma_gguf && mmproj_gguf
+    };
     EditorVoiceInputPackStatus {
-        installed: cpu_backend && gemma_gguf && mmproj_gguf,
+        installed,
+        cpu_backend_required,
         cpu_backend,
         cpu_backend_expected_path,
         gemma_gguf,
@@ -5325,9 +5536,8 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
 
 #[tauri::command]
 fn check_editor_voice_input_pack_status(app: AppHandle) -> Result<EditorVoiceInputPackStatus, String> {
-    if !editor_voice_input_allowed(&app) {
-        return Err("音声入力パックはEditor版専用です。".to_string());
-    }
+    // 音声入力は Full 版（CUDA/AMD）にも展開済み。ビルド判定は cpu_backend_required 経由で
+    // フロントに伝える（本コマンド自体は全ビルドで許可）。
     Ok(check_editor_voice_input_pack_status_impl(&app))
 }
 
@@ -5795,10 +6005,11 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
 }
 
 fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, String> {
-    if !editor_voice_input_allowed(&app) {
-        return Err("音声入力パックはEditor版専用です。".to_string());
+    // Editor版のみ CPU バックエンド（llama.cpp CPU ビルド）が必要。Full版（CUDA/AMD）は
+    // 音声入力も GPU 直起動のため、この導入ステップ自体をスキップする（進捗イベントも出さない）。
+    if editor_voice_input_allowed(&app) {
+        install_editor_voice_cpu_backend_blocking(&app)?;
     }
-    install_editor_voice_cpu_backend_blocking(&app)?;
 
     let model_dir = if cfg!(debug_assertions) {
         gemma_debug_model_dir_candidates(GemmaTier::E4b)[0].clone()

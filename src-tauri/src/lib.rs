@@ -1478,6 +1478,13 @@ const LLAMA_CPP_DEFAULT_BUILD: &str = "b9631";
 const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 120_000_000;
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
 const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
+/// 区間聞き直しの切り出し上限秒数。超過分は先頭からこの秒数だけ処理する
+/// （フロントが snackbar で「開始30秒のみ読み取ります」と通知する）。
+const SEGMENT_RETRANSCRIBE_MAX_SECONDS: f64 = 30.0;
+/// これ未満の区間は「有効な時間範囲がない」としてエラーにする。
+const SEGMENT_RETRANSCRIBE_MIN_SECONDS: f64 = 0.2;
+/// BtbN LGPL ffmpeg アーカイブのおよそのサイズ（進捗表示のフォールバック用）。
+const EDITOR_VOICE_FFMPEG_APPROX_BYTES: u64 = 95 * 1024 * 1024;
 const EDITOR_VOICE_INPUT_CTX_SIZE: &str = "8192";
 const EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS: usize = 400;
 
@@ -3096,51 +3103,39 @@ fn build_editor_voice_context_section(context: Option<&EditorVoiceInputContext>)
     }
 }
 
-fn generate_editor_voice_input_candidates_blocking(
-    app: AppHandle,
-    request: EditorVoiceInputRequest,
-    child_arc: Arc<Mutex<Option<Child>>>,
-    port_arc: Arc<AtomicU32>,
-    mode_arc: Arc<AtomicU8>,
-    parallel_arc: Arc<AtomicU8>,
+/// 音声（base64 WAV）+ プロンプトを per-request llama-server に投げ、候補配列を返す共通部。
+/// サーバ起動（Editor=CPU / Full=GPU の分岐）〜応答解析〜終了時 kill（VRAM解放）までを担う。
+/// マイク音声入力と区間聞き直しの両方から呼ばれる。呼び出し側で LLM_PROOFREAD_ACTIVE の
+/// TaskRunGuard を取得してから呼ぶこと。
+fn run_editor_voice_audio_llm_blocking(
+    app: &AppHandle,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    port_arc: &Arc<AtomicU32>,
+    mode_arc: &Arc<AtomicU8>,
+    parallel_arc: &Arc<AtomicU8>,
+    wav_base64: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    max_candidates: usize,
 ) -> Result<EditorVoiceInputResponse, String> {
-    // Full版では校正（句読点付与/全体校正）と同じ LlmServer.child スロットを共有するため、
-    // 校正実行中に音声入力が校正用 llama-server を kill してしまわないよう、
-    // LLM_PROOFREAD_ACTIVE で相互排他する（校正側も同フラグを取得している）。
-    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
-        Some(g) => g,
-        None => {
-            return Err(
-                "AI校正または別の音声入力が実行中のため、音声入力を開始できません。完了するかキャンセルしてから再試行してください。"
-                    .to_string(),
-            )
-        }
-    };
-    if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
-        return Err("音声入力が長すぎます。最大15秒まで録音してください。".to_string());
-    }
-    let max_candidates = request
-        .max_candidates
-        .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
-        .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
     let result = (|| {
-        // Editor版: 従来どおり CPU 直起動。Full版（CUDA/AMD）: GPU 直起動（新規経路）。
+        // Editor版: 従来どおり CPU 直起動。Full版（CUDA/AMD）: GPU 直起動。
         // リクエスト構築・応答解析・終了時 kill はビルドを問わず共通。
-        let port = if editor_voice_input_allowed(&app) {
+        let port = if editor_voice_input_allowed(app) {
             start_editor_voice_input_server_blocking(
-                &app,
-                &child_arc,
-                &port_arc,
-                &mode_arc,
-                &parallel_arc,
+                app,
+                child_arc,
+                port_arc,
+                mode_arc,
+                parallel_arc,
             )?
         } else {
             start_full_voice_input_server_blocking(
-                &app,
-                &child_arc,
-                &port_arc,
-                &mode_arc,
-                &parallel_arc,
+                app,
+                child_arc,
+                port_arc,
+                mode_arc,
+                parallel_arc,
             )?
         };
         let target = LocalOpenAiHttpTarget {
@@ -3149,12 +3144,6 @@ fn generate_editor_voice_input_candidates_blocking(
             port,
             path_prefix: String::new(),
         };
-        let system_prompt_path = resolve_editor_voice_input_system_prompt_path(&app)?;
-        let system_prompt = read_text_file_content(&system_prompt_path)?;
-        let context_section = build_editor_voice_context_section(request.context.as_ref());
-        let user_prompt = format!(
-            "音声を日本語として聞き取り、音声の聞こえを最優先して、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
-        );
         let body = serde_json::json!({
             "model": LLM_DEFAULT_MODEL,
             "messages": [
@@ -3172,7 +3161,7 @@ fn generate_editor_voice_input_candidates_blocking(
                         {
                             "type": "input_audio",
                             "input_audio": {
-                                "data": request.wav_base64,
+                                "data": wav_base64,
                                 "format": "wav"
                             }
                         }
@@ -3206,6 +3195,272 @@ fn generate_editor_voice_input_candidates_blocking(
     }
     mode_arc.store(0, Ordering::Relaxed);
     result
+}
+
+fn generate_editor_voice_input_candidates_blocking(
+    app: AppHandle,
+    request: EditorVoiceInputRequest,
+    child_arc: Arc<Mutex<Option<Child>>>,
+    port_arc: Arc<AtomicU32>,
+    mode_arc: Arc<AtomicU8>,
+    parallel_arc: Arc<AtomicU8>,
+) -> Result<EditorVoiceInputResponse, String> {
+    // Full版では校正（句読点付与/全体校正）と同じ LlmServer.child スロットを共有するため、
+    // 校正実行中に音声入力が校正用 llama-server を kill してしまわないよう、
+    // LLM_PROOFREAD_ACTIVE で相互排他する（校正側も同フラグを取得している）。
+    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Err(
+                "AI校正または別の音声入力が実行中のため、音声入力を開始できません。完了するかキャンセルしてから再試行してください。"
+                    .to_string(),
+            )
+        }
+    };
+    if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
+        return Err("音声入力が長すぎます。最大15秒まで録音してください。".to_string());
+    }
+    let max_candidates = request
+        .max_candidates
+        .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
+        .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
+    let system_prompt_path = resolve_editor_voice_input_system_prompt_path(&app)?;
+    let system_prompt = read_text_file_content(&system_prompt_path)?;
+    let context_section = build_editor_voice_context_section(request.context.as_ref());
+    let user_prompt = format!(
+        "音声を日本語として聞き取り、音声の聞こえを最優先して、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
+    );
+    run_editor_voice_audio_llm_blocking(
+        &app,
+        &child_arc,
+        &port_arc,
+        &mode_arc,
+        &parallel_arc,
+        &request.wav_base64,
+        &system_prompt,
+        &user_prompt,
+        max_candidates,
+    )
+}
+
+/// 区間聞き直し用 ffmpeg のDL配置先（Editor版の後付けDL先）。
+/// `%LOCALAPPDATA%\{identifier}\ffmpeg\` 相当で、NSIS アンインストーラーの一括削除対象。
+fn editor_ffmpeg_install_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_local_data_dir().ok().map(|d| d.join("ffmpeg"))
+}
+
+fn find_downloaded_ffmpeg_bin(app: &AppHandle) -> Option<String> {
+    let dir = editor_ffmpeg_install_dir(app)?;
+    let path = dir.join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX));
+    if path_is_nonempty_file(&path, 1024 * 1024) {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// PATH 上の ffmpeg CLI。AGENTS.md の「同梱または PATH 上の ffmpeg CLI」方針の範囲内
+/// （別プロセス起動のみで、GPL 構成でも配布物のライセンスには影響しない）。
+fn find_path_ffmpeg_bin() -> Option<String> {
+    let mut cmd = Command::new("ffmpeg");
+    apply_windows_no_window(&mut cmd);
+    cmd.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+    match cmd.status() {
+        Ok(status) if status.success() => Some("ffmpeg".to_string()),
+        _ => None,
+    }
+}
+
+/// 解決順: FFMPEG_BIN 環境変数 → 同梱（Full版）→ DL済み（Editor版の音声入力パック）→ PATH。
+fn resolve_ffmpeg_bin_for_segment_cut(app: &AppHandle) -> Option<String> {
+    if let Ok(bin) = env::var("FFMPEG_BIN") {
+        if !bin.trim().is_empty() {
+            return Some(bin);
+        }
+    }
+    if let Some(bin) = find_bundled_ffmpeg_bin(app) {
+        return Some(bin);
+    }
+    if let Some(bin) = find_downloaded_ffmpeg_bin(app) {
+        return Some(bin);
+    }
+    find_path_ffmpeg_bin()
+}
+
+/// 依存クレートを増やさないための最小 base64 エンコーダ（標準アルファベット・パディングあり）。
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// 同梱 LGPL ffmpeg で音声ファイルの指定区間を 16kHz mono PCM16 WAV に切り出し、base64 で返す。
+fn extract_segment_wav_base64(
+    app: &AppHandle,
+    audio_path: &str,
+    start_seconds: f64,
+    duration_seconds: f64,
+) -> Result<String, String> {
+    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
+        .ok_or_else(|| "音声切り出しに必要な ffmpeg が見つかりませんでした。設定タブの「音声入力パック」の状態を確認してください。".to_string())?;
+    if !Path::new(audio_path).exists() {
+        return Err("音声ファイルが見つかりません。音声ファイルを読み込み直してから再試行してください。".to_string());
+    }
+    let temp_path = env::temp_dir().join(format!(
+        "lott-retranscribe-{}-{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    ));
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-ss")
+        .arg(format!("{start_seconds:.3}"))
+        .arg("-t")
+        .arg(format!("{duration_seconds:.3}"))
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("16000")
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg("-f")
+        .arg("wav")
+        .arg(&temp_path);
+    apply_windows_no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+    let result = (|| {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("音声の切り出しに失敗しました: {}", stderr.trim()));
+        }
+        let bytes = fs::read(&temp_path)
+            .map_err(|e| format!("切り出した音声の読み込みに失敗しました: {e}"))?;
+        // 44 バイトは WAV ヘッダのみ（データ無し）
+        if bytes.len() <= 44 {
+            return Err("切り出した音声が空でした。この行の時間範囲が音声の長さの範囲内か確認してください。".to_string());
+        }
+        let encoded = base64_encode(&bytes);
+        if encoded.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
+            return Err("切り出した音声が大きすぎます。".to_string());
+        }
+        Ok(encoded)
+    })();
+    let _ = fs::remove_file(&temp_path);
+    result
+}
+
+fn generate_segment_retranscribe_candidates_blocking(
+    app: AppHandle,
+    request: SegmentRetranscribeRequest,
+    allowed_path_arc: Arc<Mutex<Option<String>>>,
+    child_arc: Arc<Mutex<Option<Child>>>,
+    port_arc: Arc<AtomicU32>,
+    mode_arc: Arc<AtomicU8>,
+    parallel_arc: Arc<AtomicU8>,
+) -> Result<EditorVoiceInputResponse, String> {
+    // 全ビルド対応。Editor版は音声入力パックで後付けDLした ffmpeg（または PATH 上の ffmpeg）、
+    // Full版は同梱 ffmpeg を使う（resolve_ffmpeg_bin_for_segment_cut が解決）。
+    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
+        Some(g) => g,
+        None => {
+            return Err(
+                "AI校正または音声入力が実行中のため、聞き直しを開始できません。完了するかキャンセルしてから再試行してください。"
+                    .to_string(),
+            )
+        }
+    };
+    // 再生用に許可済みのパス（set_audio_allowed_path）以外は受け付けない。
+    let allowed = allowed_path_arc.lock().ok().and_then(|g| g.clone());
+    if allowed.as_deref() != Some(request.audio_path.as_str()) {
+        return Err("指定された音声ファイルを利用できません。音声ファイルを読み込み直してから再試行してください。".to_string());
+    }
+    if !request.start_seconds.is_finite()
+        || !request.end_seconds.is_finite()
+        || request.start_seconds < 0.0
+    {
+        return Err("時間範囲が不正です。".to_string());
+    }
+    let duration_raw = request.end_seconds - request.start_seconds;
+    if duration_raw < SEGMENT_RETRANSCRIBE_MIN_SECONDS {
+        return Err("この行には有効な時間範囲がありません。開始・終了時刻を確認してください。".to_string());
+    }
+    // 30秒超はフロントが snackbar で通知したうえで先頭30秒のみ処理する。
+    let duration = duration_raw.min(SEGMENT_RETRANSCRIBE_MAX_SECONDS);
+    let wav_base64 =
+        extract_segment_wav_base64(&app, &request.audio_path, request.start_seconds, duration)?;
+    let max_candidates = request
+        .max_candidates
+        .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
+        .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
+    let system_prompt_path = resolve_segment_retranscribe_system_prompt_path(&app)?;
+    let system_prompt = read_text_file_content(&system_prompt_path)?;
+    let context_section = build_editor_voice_context_section(request.context.as_ref());
+    let user_prompt = format!(
+        "音声はセッション録音から切り出した区間です。日本語として聞き取り、音声の聞こえを最優先して、この行の内容をそのまま置き換えられる候補を最大{max_candidates}件返してください。文脈の「入力行」はこの区間の以前の文字起こし結果で、誤りを含んでいる可能性が高いため、音声と食い違う場合は音声を優先してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
+    );
+    run_editor_voice_audio_llm_blocking(
+        &app,
+        &child_arc,
+        &port_arc,
+        &mode_arc,
+        &parallel_arc,
+        &wav_base64,
+        &system_prompt,
+        &user_prompt,
+        max_candidates,
+    )
+}
+
+#[tauri::command]
+async fn generate_segment_retranscribe_candidates(
+    app: AppHandle,
+    state: tauri::State<'_, LlmServer>,
+    audio: tauri::State<'_, AudioStreamServer>,
+    request: SegmentRetranscribeRequest,
+) -> Result<EditorVoiceInputResponse, String> {
+    let child_arc = Arc::clone(&state.child);
+    let port_arc = Arc::clone(&state.port);
+    let mode_arc = Arc::clone(&state.mode);
+    let parallel_arc = Arc::clone(&state.parallel);
+    let allowed_path_arc = Arc::clone(&audio.allowed_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_segment_retranscribe_candidates_blocking(
+            app,
+            request,
+            allowed_path_arc,
+            child_arc,
+            port_arc,
+            mode_arc,
+            parallel_arc,
+        )
+    })
+    .await
+    .map_err(|e| format!("聞き直し候補生成タスクエラー: {e}"))?
+}
+
+#[tauri::command]
+fn check_segment_retranscribe_available(app: AppHandle) -> bool {
+    resolve_ffmpeg_bin_for_segment_cut(&app).is_some()
 }
 
 #[tauri::command]
@@ -4035,6 +4290,11 @@ struct EditorVoiceInputPackStatus {
     gemma_gguf_expected_path: String,
     mmproj_gguf: bool,
     mmproj_gguf_expected_path: String,
+    // Editor版のみ true。区間聞き直し用 ffmpeg（LGPL・後付けDL）の導入が
+    // installed 判定に必要かどうか（Full版は同梱 ffmpeg があるため不要）。
+    ffmpeg_required: bool,
+    ffmpeg: bool,
+    ffmpeg_expected_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -4081,6 +4341,18 @@ struct EditorVoiceInputContextLine {
 #[serde(rename_all = "camelCase")]
 struct EditorVoiceInputResponse {
     candidates: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentRetranscribeRequest {
+    audio_path: String,
+    start_seconds: f64,
+    end_seconds: f64,
+    #[serde(default)]
+    max_candidates: Option<usize>,
+    #[serde(default)]
+    context: Option<EditorVoiceInputContext>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -5513,12 +5785,22 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
     let (cpu_backend, cpu_backend_expected_path) = get_editor_voice_cpu_backend_info(app);
     let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
     let (mmproj_gguf, mmproj_gguf_expected_path) = get_gemma_mmproj_gguf_info(app);
-    // Editor版: 従来どおり CPU バックエンドも installed 判定に含める。
-    // Full版（CUDA/AMD）: 音声入力は GPU 直起動のみで CPU バックエンドを使わないため、
+    // Editor版: 従来どおり CPU バックエンドも installed 判定に含める。区間聞き直し用の
+    // ffmpeg（後付けDL）も Editor版のみ判定に含める。
+    // Full版（CUDA/AMD）: 音声入力は GPU 直起動のみ・ffmpeg は同梱のため、
     // 本体 GGUF + mmproj の有無だけで判定する。
     let cpu_backend_required = editor_voice_input_allowed(app);
+    let ffmpeg_required = cpu_backend_required;
+    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app).is_some();
+    let ffmpeg_expected_path = editor_ffmpeg_install_dir(app)
+        .map(|d| {
+            d.join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
     let installed = if cpu_backend_required {
-        cpu_backend && gemma_gguf && mmproj_gguf
+        cpu_backend && gemma_gguf && mmproj_gguf && ffmpeg
     } else {
         gemma_gguf && mmproj_gguf
     };
@@ -5531,6 +5813,9 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
         gemma_gguf_expected_path,
         mmproj_gguf,
         mmproj_gguf_expected_path,
+        ffmpeg_required,
+        ffmpeg,
+        ffmpeg_expected_path,
     }
 }
 
@@ -6004,11 +6289,247 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
     Ok(())
 }
 
+fn ffmpeg_lgpl_asset_name() -> Result<String, String> {
+    // setup_ffmpeg_lgpl.py（Full版の同梱ffmpeg取得スクリプト）と同じ BtbN latest LGPL ビルド。
+    if cfg!(target_os = "windows") {
+        Ok("ffmpeg-master-latest-win64-lgpl.zip".to_string())
+    } else if cfg!(target_os = "linux") {
+        Ok("ffmpeg-master-latest-linux64-lgpl.tar.xz".to_string())
+    } else {
+        Err("このOSの ffmpeg 取得は未対応です。".to_string())
+    }
+}
+
+fn ffmpeg_lgpl_url(asset: &str) -> String {
+    format!("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/{asset}")
+}
+
+/// setup_ffmpeg_lgpl.py と同じ禁止トークン。DL した ffmpeg の buildconf に
+/// これらが含まれていたら LGPL 配布方針違反として配置を取り消す。
+const FFMPEG_FORBIDDEN_CONFIG_TOKENS: [&str; 6] = [
+    "--enable-gpl",
+    "--enable-nonfree",
+    "--enable-libx264",
+    "--enable-libx265",
+    "--enable-libxvid",
+    "--enable-libfdk-aac",
+];
+
+fn verify_ffmpeg_lgpl_build(bin: &Path) -> Result<String, String> {
+    let mut cmd = Command::new(bin);
+    apply_windows_no_window(&mut cmd);
+    let output = cmd
+        .arg("-hide_banner")
+        .arg("-buildconf")
+        .output()
+        .map_err(|e| format!("ダウンロードした ffmpeg を実行できませんでした: {e}"))?;
+    if !output.status.success() {
+        return Err("ダウンロードした ffmpeg を実行できませんでした。".to_string());
+    }
+    let conf = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for token in FFMPEG_FORBIDDEN_CONFIG_TOKENS {
+        if conf.split_whitespace().any(|t| t == token) {
+            return Err(format!(
+                "ダウンロードした ffmpeg に許可されない構成 {token} が含まれています。"
+            ));
+        }
+    }
+    Ok(conf)
+}
+
+fn find_file_recursive(dir: &Path, file_name: &str, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
+    let entries = fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if path
+                .file_name()
+                .map(|n| n.to_string_lossy().eq_ignore_ascii_case(file_name))
+                .unwrap_or(false)
+            {
+                return Some(path);
+            }
+        } else if path.is_dir() {
+            subdirs.push(path);
+        }
+    }
+    for sub in subdirs {
+        if let Some(found) = find_file_recursive(&sub, file_name, max_depth - 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// BtbN LGPL アーカイブから ffmpeg 本体と LICENSE.txt だけを配置先へ取り出す。
+fn extract_ffmpeg_lgpl_archive(archive: &Path, dest_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("ffmpeg 配置先ディレクトリを作成できませんでした: {e}"))?;
+    let exe_name = format!("ffmpeg{}", std::env::consts::EXE_SUFFIX);
+    let bin_dest = dest_dir.join(&exe_name);
+    let license_dest = dest_dir.join("LICENSE.txt");
+
+    let is_zip = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().ends_with(".zip"))
+        .unwrap_or(false);
+    if is_zip {
+        let file = fs::File::open(archive)
+            .map_err(|e| format!("ffmpeg アーカイブを開けませんでした: {e}"))?;
+        let mut zip = zip::ZipArchive::new(file)
+            .map_err(|e| format!("ffmpeg アーカイブを読めませんでした: {e}"))?;
+        for i in 0..zip.len() {
+            let mut entry = zip
+                .by_index(i)
+                .map_err(|e| format!("ffmpeg アーカイブの展開に失敗しました: {e}"))?;
+            let normalized = entry.name().replace('\\', "/");
+            if normalized.ends_with('/') {
+                continue;
+            }
+            let basename = normalized.rsplit('/').next().unwrap_or("");
+            let out_path = if normalized.ends_with(&format!("bin/{exe_name}")) {
+                Some(bin_dest.clone())
+            } else if basename.eq_ignore_ascii_case("license.txt") {
+                Some(license_dest.clone())
+            } else {
+                None
+            };
+            if let Some(out_path) = out_path {
+                let mut out = fs::File::create(&out_path)
+                    .map_err(|e| format!("展開ファイルを作成できませんでした: {e}"))?;
+                std::io::copy(&mut entry, &mut out)
+                    .map_err(|e| format!("展開ファイルを書き込めませんでした: {e}"))?;
+            }
+        }
+    } else {
+        // tar.xz はシステム tar で展開（Ubuntu では標準で xz 対応）。
+        let extract_dir = archive.with_file_name("ffmpeg_extract_tmp");
+        if extract_dir.exists() {
+            fs::remove_dir_all(&extract_dir)
+                .map_err(|e| format!("一時展開ディレクトリを削除できませんでした: {e}"))?;
+        }
+        fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("一時展開ディレクトリを作成できませんでした: {e}"))?;
+        let mut tar = Command::new("tar");
+        apply_windows_no_window(&mut tar);
+        let status = tar
+            .arg("-xf")
+            .arg(archive)
+            .arg("-C")
+            .arg(&extract_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("tar の起動に失敗しました: {e}"))?;
+        let result = (|| {
+            if !status.success() {
+                return Err("ffmpeg アーカイブの展開に失敗しました。".to_string());
+            }
+            let bin_src = find_file_recursive(&extract_dir, &exe_name, 6)
+                .ok_or_else(|| "アーカイブ内に ffmpeg が見つかりませんでした。".to_string())?;
+            fs::copy(&bin_src, &bin_dest)
+                .map_err(|e| format!("ffmpeg の配置に失敗しました: {e}"))?;
+            if let Some(license_src) = find_file_recursive(&extract_dir, "LICENSE.txt", 6) {
+                let _ = fs::copy(&license_src, &license_dest);
+            }
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(&extract_dir);
+        result?;
+    }
+
+    if !path_is_nonempty_file(&bin_dest, 1024 * 1024) {
+        return Err("展開後に ffmpeg が見つかりませんでした。".to_string());
+    }
+    ensure_executable(&bin_dest);
+    Ok(())
+}
+
+fn install_editor_voice_ffmpeg_blocking(app: &AppHandle) -> Result<(), String> {
+    // 同梱・DL済み・PATH のいずれかで解決できるならスキップ。
+    if resolve_ffmpeg_bin_for_segment_cut(app).is_some() {
+        emit_voice_input_pack_progress(
+            app,
+            "voice_ffmpeg",
+            "skipped",
+            "インストール済みです",
+            None,
+            Some(EDITOR_VOICE_FFMPEG_APPROX_BYTES),
+        );
+        return Ok(());
+    }
+    let dest_dir = editor_ffmpeg_install_dir(app)
+        .ok_or_else(|| "ffmpeg の配置先を解決できませんでした。".to_string())?;
+    let cache = get_llm_engine_cache_dir(app)
+        .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
+    let downloads = cache.join("downloads");
+    let asset = ffmpeg_lgpl_asset_name()?;
+    let archive = downloads.join(&asset);
+    let url = ffmpeg_lgpl_url(&asset);
+    download_file_with_progress_blocking(
+        app,
+        "voice_ffmpeg",
+        "音声切り出し用 ffmpeg (LGPL)",
+        &url,
+        &archive,
+        Some(EDITOR_VOICE_FFMPEG_APPROX_BYTES),
+        1024 * 1024,
+    )?;
+    emit_voice_input_pack_progress(
+        app,
+        "voice_ffmpeg",
+        "downloading",
+        "ffmpeg を展開中...",
+        None,
+        Some(EDITOR_VOICE_FFMPEG_APPROX_BYTES),
+    );
+    let result = (|| {
+        extract_ffmpeg_lgpl_archive(&archive, &dest_dir)?;
+        let bin = dest_dir.join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX));
+        let buildconf = verify_ffmpeg_lgpl_build(&bin)?;
+        // LGPLv3 対応: LICENSE.txt はアーカイブから配置済み。取得元と構成の記録を残す。
+        let build_info = format!(
+            "Source: {url}\nRetrieved-at (unix epoch secs): {}\nLicense: LGPL v3 (BtbN lgpl build, includes --enable-version3)\n\n== ffmpeg -buildconf ==\n{buildconf}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
+        let _ = fs::write(dest_dir.join("FFMPEG_BUILD_INFO.txt"), build_info);
+        Ok(())
+    })();
+    if result.is_err() {
+        // 検証に失敗したビルドを残さない。
+        let _ = fs::remove_dir_all(&dest_dir);
+        let _ = fs::remove_file(&archive);
+        return result;
+    }
+    emit_voice_input_pack_progress(
+        app,
+        "voice_ffmpeg",
+        "done",
+        "インストール完了",
+        Some(EDITOR_VOICE_FFMPEG_APPROX_BYTES),
+        Some(EDITOR_VOICE_FFMPEG_APPROX_BYTES),
+    );
+    Ok(())
+}
+
 fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, String> {
-    // Editor版のみ CPU バックエンド（llama.cpp CPU ビルド）が必要。Full版（CUDA/AMD）は
-    // 音声入力も GPU 直起動のため、この導入ステップ自体をスキップする（進捗イベントも出さない）。
+    // Editor版のみ CPU バックエンド（llama.cpp CPU ビルド）と区間聞き直し用 ffmpeg が必要。
+    // Full版（CUDA/AMD）は音声入力も GPU 直起動・ffmpeg は同梱のため、
+    // これらの導入ステップ自体をスキップする（進捗イベントも出さない）。
     if editor_voice_input_allowed(&app) {
         install_editor_voice_cpu_backend_blocking(&app)?;
+        install_editor_voice_ffmpeg_blocking(&app)?;
     }
 
     let model_dir = if cfg!(debug_assertions) {
@@ -6113,14 +6634,25 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
     let mut not_found = Vec::new();
     let mut errors = Vec::new();
 
-    // Full版（CUDA/AMD）は音声入力もGPU直起動のためCPUバックエンドを持たない。
-    // Editor版のみCPUバックエンドの削除対象がある。
+    // Full版（CUDA/AMD）は音声入力もGPU直起動のためCPUバックエンドを持たず、ffmpegも同梱。
+    // Editor版のみCPUバックエンドとDL済みffmpegの削除対象がある。
     if editor_voice_input_allowed(&app) {
         let cpu_dir = editor_voice_cpu_backend_dir(&app);
         delete_dir_recording(&cpu_dir, &mut deleted, &mut not_found, &mut errors);
 
+        if let Some(ffmpeg_dir) = editor_ffmpeg_install_dir(&app) {
+            delete_dir_recording(&ffmpeg_dir, &mut deleted, &mut not_found, &mut errors);
+        }
+
         if let Some(cache) = get_llm_engine_cache_dir(&app) {
+            let mut archives = Vec::new();
             if let Ok(asset) = llama_cpu_backend_asset_name() {
+                archives.push(asset);
+            }
+            if let Ok(asset) = ffmpeg_lgpl_asset_name() {
+                archives.push(asset);
+            }
+            for asset in archives {
                 let archive = cache.join("downloads").join(asset);
                 delete_file_recording(&archive, &mut deleted, &mut not_found, &mut errors);
                 delete_file_recording(
@@ -11203,11 +11735,14 @@ fn resolve_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, Stri
     ))
 }
 
-fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_voice_input_prompt_template_path(
+    app: &AppHandle,
+    filename: &str,
+) -> Result<PathBuf, String> {
     let prompt_relative = PathBuf::from("python_sidecar")
         .join("prompt_templates")
         .join("voice_input")
-        .join("gemma4_e4b_candidates_system.txt");
+        .join(filename);
 
     if cfg!(debug_assertions) {
         let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -11234,12 +11769,12 @@ fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<Path
         resource_dir
             .join("prompt_templates")
             .join("voice_input")
-            .join("gemma4_e4b_candidates_system.txt"),
+            .join(filename),
         resource_dir
             .join("_up_")
             .join("prompt_templates")
             .join("voice_input")
-            .join("gemma4_e4b_candidates_system.txt"),
+            .join(filename),
     ];
 
     for candidate in &bundled_candidates {
@@ -11256,6 +11791,14 @@ fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<Path
             .collect::<Vec<String>>()
             .join(" / ")
     ))
+}
+
+fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_voice_input_prompt_template_path(app, "gemma4_e4b_candidates_system.txt")
+}
+
+fn resolve_segment_retranscribe_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_voice_input_prompt_template_path(app, "gemma4_e4b_retranscribe_system.txt")
 }
 
 fn resolve_default_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -11597,6 +12140,8 @@ pub fn run() {
             install_editor_voice_input_pack,
             dev_delete_editor_voice_input_pack,
             generate_editor_voice_input_candidates,
+            generate_segment_retranscribe_candidates,
+            check_segment_retranscribe_available,
             get_audio_stream_port,
             set_audio_allowed_path,
             get_dev_demo_data_dir,

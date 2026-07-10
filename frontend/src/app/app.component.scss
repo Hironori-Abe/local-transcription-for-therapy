@@ -1659,14 +1659,20 @@ $segment-cols: 96px 84px 88px 1fr;
   bottom: -12px;
 }
 
+// 行下部の3ボタン（聞き直し・コピー・分割）を均等配置する。
+.segment-retranscribe-btn {
+  bottom: -12px;
+  left: 25%;
+}
+
 .segment-insert-btn-copy {
   bottom: -12px;
-  left: 33%;
+  left: 50%;
 }
 
 .segment-insert-btn-split {
   bottom: -12px;
-  left: 67%;
+  left: 75%;
 }
 
 .segment-insert-icon-rotated {
@@ -1765,6 +1771,18 @@ $segment-cols: 96px 84px 88px 1fr;
   color: #546e7a;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.voice-input-replace-hint {
+  font-weight: 600;
+}
+
+// モデル未導入などで使えないときの見た目（mini-fab をグレー化。
+// ネイティブ disabled にすると matTooltip の案内が出ないため見た目だけ無効化する）。
+.segment-retranscribe-btn.segment-retranscribe-btn-unavailable {
+  opacity: 0.55;
+  filter: grayscale(1);
+  cursor: default;
 }
 
 .voice-input-candidate-btn {

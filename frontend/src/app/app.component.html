@@ -586,6 +586,20 @@
                       [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'skipped'"
                       *ngIf="editorVoiceInputPackComponentProgress('voice_cpu_backend') as p">{{ p.message }}</span>
                   </div>
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? editorOnlyBuild">
+                    <mat-icon class="setup-comp-icon material-symbols-outlined"
+                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.ffmpeg"
+                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.ffmpeg"
+                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'downloading'">{{
+                      editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'downloading' ? 'downloading' :
+                      editorVoiceInputPackStatus()?.ffmpeg ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+                    <span class="setup-comp-name">音声切り出し用 ffmpeg（LGPL）</span>
+                    <span class="setup-comp-size">約 95 MiB</span>
+                    <span class="setup-comp-progress"
+                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'error'"
+                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'skipped'"
+                      *ngIf="editorVoiceInputPackComponentProgress('voice_ffmpeg') as p">{{ p.message }}</span>
+                  </div>
                   <div class="setup-component-row">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.gemmaGguf"
@@ -625,7 +639,7 @@
                 </p>
                 <p class="reader-hint voice-input-pack-note"
                   *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && editorVoiceInputPackStatus()?.cpuBackendRequired">
-                  未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンドを合わせて約5.0 GiBをダウンロードします。
+                  未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンド・音声切り出し用 ffmpeg を合わせて約5.1 GiBをダウンロードします。
                 </p>
                 <p class="reader-hint voice-input-pack-note"
                   *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && !editorVoiceInputPackStatus()?.cpuBackendRequired">
@@ -665,7 +679,7 @@
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="devDeleteEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">delete</mat-icon>
-                    {{ editorOnlyBuild ? 'llama.cpp CPU/mmprojを削除' : 'mmprojを削除' }}
+                    {{ editorOnlyBuild ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
@@ -1517,6 +1531,9 @@
                   </div>
                   <div class="voice-input-candidate-panel"
                     *ngIf="voiceInputCandidates()?.segmentId === segment.id && voiceInputCandidates() as voicePanel">
+                    <div class="voice-input-candidate-hint voice-input-replace-hint" *ngIf="voicePanel.mode === 'replace'">
+                      候補を選ぶと、この行の内容全体が置き換わります（挿入ではありません）。
+                    </div>
                     <button type="button" class="voice-input-candidate-btn"
                       *ngFor="let candidate of voicePanel.candidates"
                       (mousedown)="$event.preventDefault()"
@@ -1549,6 +1566,19 @@
                       <mat-icon
                         class="material-symbols-outlined segment-insert-icon segment-insert-icon-rotated">call_split</mat-icon>
                       <mat-icon class="material-symbols-outlined segment-insert-icon">arrow_downward</mat-icon>
+                    </span>
+                  </button>
+                  <button *ngIf="segmentRetranscribeButtonVisible()" mat-mini-fab type="button"
+                    class="segment-insert-btn segment-retranscribe-btn" tabindex="-1"
+                    [class.segment-retranscribe-btn-unavailable]="segmentRetranscribeUnavailableReason() !== null"
+                    [attr.aria-disabled]="segmentRetranscribeUnavailableReason() !== null ? true : null"
+                    [disableRipple]="segmentRetranscribeUnavailableReason() !== null"
+                    [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id)) || voiceInputRecordingSegmentId() !== null"
+                    [matTooltip]="segmentRetranscribeTooltip(segment.id)"
+                    [attr.aria-label]="segmentRetranscribeTooltip(segment.id)"
+                    (click)="retranscribeSegment(segment)">
+                    <span class="segment-insert-icon-pair" aria-hidden="true">
+                      <mat-icon class="material-symbols-outlined segment-insert-icon">{{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : 'graphic_eq' }}</mat-icon>
                     </span>
                   </button>
                 </div>

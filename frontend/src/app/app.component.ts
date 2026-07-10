@@ -436,6 +436,9 @@ interface EditorVoiceInputPackStatus {
   gemmaGgufExpectedPath: string;
   mmprojGguf: boolean;
   mmprojGgufExpectedPath: string;
+  ffmpegRequired: boolean;
+  ffmpeg: boolean;
+  ffmpegExpectedPath: string;
 }
 
 interface EditorVoiceInputResponse {
@@ -955,9 +958,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly voiceInputRecordingSegmentId = signal<number | null>(null);
   readonly voiceInputProcessingSegmentId = signal<number | null>(null);
   readonly voiceInputFeedbackSegmentId = signal<number | null>(null);
-  readonly voiceInputCandidates = signal<{ segmentId: number; candidates: string[] } | null>(null);
+  readonly voiceInputCandidates = signal<{ segmentId: number; candidates: string[]; mode: 'insert' | 'replace' } | null>(null);
   readonly voiceInputStatus = signal<string>('');
   readonly voiceInputError = signal<string>('');
+  readonly segmentRetranscribeSupported = signal<boolean>(false);
+  readonly segmentRetranscribeButtonVisible = computed(
+    // 全ビルドで表示（Editor版は音声入力パックの ffmpeg 後付けDLで対応）。
+    () => this.isTauriRuntime()
+  );
 
   // 統合セットアップ
   readonly allSetupStatus = signal<AllSetupStatus | null>(null);
@@ -4784,6 +4792,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     void this.ensureSetupProgressListener();
     await this.checkAllSetupStatus();
     await this.checkEditorVoiceInputPackStatus();
+    void this.checkSegmentRetranscribeSupport();
     // ここ以降は直前までの await で実行コンテキストが Angular ゾーン外に出ている。
     // 画面表示を左右する signal（タブ表示を gate する runtimeCheckDone と
     // activeTabIndex）の更新を ngZone.run で包み、確定済みの値で変更検知を
@@ -6036,6 +6045,19 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
+  async checkSegmentRetranscribeSupport(): Promise<void> {
+    if (!this.isTauriRuntime()) {
+      this.segmentRetranscribeSupported.set(false);
+      return;
+    }
+    try {
+      const available = await invoke<boolean>('check_segment_retranscribe_available');
+      this.ngZone.run(() => this.segmentRetranscribeSupported.set(available === true));
+    } catch {
+      this.ngZone.run(() => this.segmentRetranscribeSupported.set(false));
+    }
+  }
+
   async checkEditorVoiceInputPackStatus(): Promise<void> {
     if (!this.isTauriRuntime()) {
       this.editorVoiceInputPackStatus.set({
@@ -6047,6 +6069,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         gemmaGgufExpectedPath: '',
         mmprojGguf: false,
         mmprojGgufExpectedPath: '',
+        ffmpegRequired: this.editorOnlyBuild,
+        ffmpeg: false,
+        ffmpegExpectedPath: '',
       });
       this.editorVoiceInputPackChecked.set(true);
       return;
@@ -6096,6 +6121,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } finally {
       this.editorVoiceInputPackInstalling.set(false);
       await this.checkEditorVoiceInputPackStatus();
+      void this.checkSegmentRetranscribeSupport();
     }
   }
 
@@ -6103,7 +6129,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.editorVoiceInputDevControlsVisible() || this.editorVoiceInputPackDeleting()) return;
     const ok = window.confirm(
       this.editorOnlyBuild
-        ? 'llama.cpp CPU バックエンドと mmproj を削除します。Gemma 4 E4B 本体GGUFは削除しません。'
+        ? 'llama.cpp CPU バックエンドと mmproj、ダウンロード済み ffmpeg を削除します。Gemma 4 E4B 本体GGUFは削除しません。'
         : 'mmprojを削除します。Gemma 4 E4B 本体GGUFは削除しません。'
     );
     if (!ok) return;
@@ -6123,6 +6149,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } finally {
       this.editorVoiceInputPackDeleting.set(false);
       await this.checkEditorVoiceInputPackStatus();
+      void this.checkSegmentRetranscribeSupport();
     }
   }
 
@@ -7787,6 +7814,95 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.isVoiceInputRecording(segmentId) ? '録音を停止' : '音声入力';
   }
 
+  segmentRetranscribeUnavailableReason(): string | null {
+    if (!this.editorVoiceInputPackChecked()) {
+      return '音声入力パックの状態を確認中です...';
+    }
+    if (!this.editorVoiceInputAvailable()) {
+      return '区間の聞き直しを使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
+    }
+    if (!this.segmentRetranscribeSupported()) {
+      return this.editorOnlyBuild
+        ? '区間の聞き直しに必要な ffmpeg が未導入です。設定タブの「音声入力パック」からダウンロードしてください。'
+        : 'この構成では区間の聞き直しを利用できません。';
+    }
+    if (this.isPlaybackDisabled() || !this.selectedAudioPath()) {
+      return '音声ファイルを読み込むと、この区間をAIで聞き直せます。';
+    }
+    return null;
+  }
+
+  segmentRetranscribeTooltip(segmentId: number): string {
+    const reason = this.segmentRetranscribeUnavailableReason();
+    if (reason) {
+      return reason;
+    }
+    if (this.isVoiceInputProcessing(segmentId)) {
+      return '候補を生成中...';
+    }
+    return 'この区間をAIで聞き直して、置き換え候補を生成';
+  }
+
+  async retranscribeSegment(segment: TranscriptionSegment): Promise<void> {
+    if (this.segmentRetranscribeUnavailableReason() !== null) {
+      return;
+    }
+    if (this.voiceInputProcessingSegmentId() !== null || this.voiceInputRecordingSegmentId() !== null) {
+      return;
+    }
+    const path = this.selectedAudioPath();
+    if (!path) {
+      return;
+    }
+    const start = Math.max(0, segment.start);
+    const end = Math.max(start, segment.end);
+    if (end - start < 0.2) {
+      this.voiceInputFeedbackSegmentId.set(segment.id);
+      this.voiceInputStatus.set('');
+      this.voiceInputError.set('この行には有効な時間範囲がありません。開始・終了時刻を確認してください。');
+      return;
+    }
+    if (end - start > 30) {
+      this.snackBar.open('区間が30秒を超えているため、開始30秒のみ読み取ります。', undefined, { duration: 4000 });
+    }
+    this.voiceInputCandidates.set(null);
+    this.voiceInputError.set('');
+    this.voiceInputFeedbackSegmentId.set(segment.id);
+    this.voiceInputProcessingSegmentId.set(segment.id);
+    this.voiceInputStatus.set('区間を聞き直して候補を生成中...');
+    try {
+      await invoke('set_audio_allowed_path', { path });
+      const context = this.buildVoiceInputContext(segment.id);
+      const response = await invoke<EditorVoiceInputResponse>('generate_segment_retranscribe_candidates', {
+        request: {
+          audioPath: path,
+          startSeconds: start,
+          endSeconds: end,
+          maxCandidates: 3,
+          ...(context ? { context } : {}),
+        },
+      });
+      const candidates = (response.candidates ?? [])
+        .map((candidate) => String(candidate).trim())
+        .filter((candidate) => candidate.length > 0)
+        .slice(0, 3);
+      if (candidates.length === 0) {
+        this.voiceInputError.set('候補を生成できませんでした。');
+        this.voiceInputCandidates.set(null);
+        this.voiceInputStatus.set('');
+      } else {
+        this.voiceInputCandidates.set({ segmentId: segment.id, candidates, mode: 'replace' });
+        this.voiceInputStatus.set('');
+      }
+    } catch (error) {
+      this.voiceInputCandidates.set(null);
+      this.voiceInputStatus.set('');
+      this.voiceInputError.set(this.normalizeErrorMessage(error));
+    } finally {
+      this.voiceInputProcessingSegmentId.set(null);
+    }
+  }
+
   async toggleVoiceInputForSegment(
     segmentId: number,
     textInputEl: HTMLInputElement | HTMLTextAreaElement
@@ -7914,7 +8030,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.voiceInputError.set('候補を生成できませんでした。');
         this.voiceInputCandidates.set(null);
       } else {
-        this.voiceInputCandidates.set({ segmentId, candidates });
+        this.voiceInputCandidates.set({ segmentId, candidates, mode: 'insert' });
         this.voiceInputStatus.set('');
         this.voiceInputFeedbackSegmentId.set(segmentId);
       }
@@ -8097,7 +8213,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     candidate: string,
     textInputEl: HTMLInputElement | HTMLTextAreaElement
   ): void {
-    this.insertTextAtSegmentCursor(segmentId, candidate, textInputEl);
+    if (this.voiceInputCandidates()?.mode === 'replace') {
+      this.setEditableText(segmentId, candidate);
+    } else {
+      this.insertTextAtSegmentCursor(segmentId, candidate, textInputEl);
+    }
     this.voiceInputCandidates.set(null);
     this.voiceInputStatus.set('');
     this.voiceInputError.set('');

@@ -6109,34 +6109,30 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
             errors: vec!["dev ビルドでのみ使用できます".to_string()],
         };
     }
-    if !editor_voice_input_allowed(&app) {
-        return EditorVoiceInputPackDeleteResponse {
-            deleted: vec![],
-            not_found: vec![],
-            errors: vec!["音声入力パック削除はEditor版専用です。".to_string()],
-        };
-    }
-
     let mut deleted = Vec::new();
     let mut not_found = Vec::new();
     let mut errors = Vec::new();
 
-    let cpu_dir = editor_voice_cpu_backend_dir(&app);
-    delete_dir_recording(&cpu_dir, &mut deleted, &mut not_found, &mut errors);
+    // Full版（CUDA/AMD）は音声入力もGPU直起動のためCPUバックエンドを持たない。
+    // Editor版のみCPUバックエンドの削除対象がある。
+    if editor_voice_input_allowed(&app) {
+        let cpu_dir = editor_voice_cpu_backend_dir(&app);
+        delete_dir_recording(&cpu_dir, &mut deleted, &mut not_found, &mut errors);
 
-    if let Some(cache) = get_llm_engine_cache_dir(&app) {
-        if let Ok(asset) = llama_cpu_backend_asset_name() {
-            let archive = cache.join("downloads").join(asset);
-            delete_file_recording(&archive, &mut deleted, &mut not_found, &mut errors);
-            delete_file_recording(
-                &archive.with_file_name(format!(
-                    "{}.part",
-                    archive.file_name().unwrap_or_default().to_string_lossy()
-                )),
-                &mut deleted,
-                &mut not_found,
-                &mut errors,
-            );
+        if let Some(cache) = get_llm_engine_cache_dir(&app) {
+            if let Ok(asset) = llama_cpu_backend_asset_name() {
+                let archive = cache.join("downloads").join(asset);
+                delete_file_recording(&archive, &mut deleted, &mut not_found, &mut errors);
+                delete_file_recording(
+                    &archive.with_file_name(format!(
+                        "{}.part",
+                        archive.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                    &mut deleted,
+                    &mut not_found,
+                    &mut errors,
+                );
+            }
         }
     }
 

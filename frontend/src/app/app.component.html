@@ -665,7 +665,7 @@
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="devDeleteEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">delete</mat-icon>
-                    llama.cpp CPU/mmprojを削除
+                    {{ editorOnlyBuild ? 'llama.cpp CPU/mmprojを削除' : 'mmprojを削除' }}
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
@@ -1476,12 +1476,15 @@
                     } @else if (llmStatus === 'done') {
                     <span matPrefix class="llm-status-icon llm-status-done" title="AI校正完了">check_circle</span>
                     }
-                    <button *ngIf="editorVoiceInputAvailable()" matPrefix mat-icon-button type="button"
+                    <button matPrefix mat-icon-button type="button"
                       class="segment-voice-input-btn" tabindex="-1"
+                      [class.segment-voice-input-btn-unavailable]="!editorVoiceInputAvailable()"
                       [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
+                      [disableRipple]="!editorVoiceInputAvailable()"
+                      [attr.aria-disabled]="!editorVoiceInputAvailable() ? true : null"
                       (pointerdown)="onVoiceInputPointerDown($event, segment.id, segmentTextInput)"
-                      [matTooltip]="isVoiceInputRecording(segment.id) ? '録音を停止' : '音声入力'"
-                      [attr.aria-label]="isVoiceInputRecording(segment.id) ? '録音を停止' : '音声入力'">
+                      [matTooltip]="voiceInputButtonTooltip(segment.id)"
+                      [attr.aria-label]="voiceInputButtonTooltip(segment.id)">
                       <mat-icon class="material-symbols-outlined">
                         {{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : (isVoiceInputRecording(segment.id) ? 'stop' : 'mic') }}
                       </mat-icon>

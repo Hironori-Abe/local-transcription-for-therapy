@@ -1717,6 +1717,16 @@ $segment-cols: 96px 84px 88px 1fr;
   }
 }
 
+.segment-voice-input-btn.segment-voice-input-btn-unavailable {
+  color: rgba(0, 0, 0, 0.26);
+  cursor: default;
+
+  &:hover,
+  &:focus {
+    background: transparent;
+  }
+}
+
 .voice-input-inline-status,
 .voice-input-inline-error {
   display: flex;

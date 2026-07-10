@@ -974,8 +974,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // Full 版（CUDA/AMD）でも導入済みなら利用可能。editor 版限定ではない。
     () => this.editorVoiceInputPackStatus()?.installed === true
   );
+  readonly editorVoiceInputUnavailableTooltip = computed(() => {
+    if (!this.editorVoiceInputPackChecked()) {
+      return '音声入力パックの状態を確認中です...';
+    }
+    return '音声入力を使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
+  });
   readonly editorVoiceInputDevControlsVisible = computed(
-    () => this.editorOnlyBuild && this.isDevModeBuild && this.isTauriRuntime()
+    () => this.isDevModeBuild && this.isTauriRuntime()
   );
   readonly editorVoiceInputInstallPercent = computed(() => {
     const values = Object.values(this.editorVoiceInputPackProgressMap());
@@ -6095,7 +6101,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async devDeleteEditorVoiceInputPack(): Promise<void> {
     if (!this.editorVoiceInputDevControlsVisible() || this.editorVoiceInputPackDeleting()) return;
-    const ok = window.confirm('llama.cpp CPU バックエンドと mmproj を削除します。Gemma 4 E4B 本体GGUFは削除しません。');
+    const ok = window.confirm(
+      this.editorOnlyBuild
+        ? 'llama.cpp CPU バックエンドと mmproj を削除します。Gemma 4 E4B 本体GGUFは削除しません。'
+        : 'mmprojを削除します。Gemma 4 E4B 本体GGUFは削除しません。'
+    );
     if (!ok) return;
     this.editorVoiceInputPackDeleting.set(true);
     this.editorVoiceInputPackDeleteResult.set(null);
@@ -7768,6 +7778,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return false;
     }
     return items.every((candidate) => Array.from(candidate).length <= 4);
+  }
+
+  voiceInputButtonTooltip(segmentId: number): string {
+    if (!this.editorVoiceInputAvailable()) {
+      return this.editorVoiceInputUnavailableTooltip();
+    }
+    return this.isVoiceInputRecording(segmentId) ? '録音を停止' : '音声入力';
   }
 
   async toggleVoiceInputForSegment(

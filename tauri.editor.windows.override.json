@@ -16,6 +16,9 @@
     "beforeBuildCommand": "npm.cmd --prefix frontend run build -- --configuration editorProduction"
   },
   "bundle": {
+    "targets": [
+      "nsis"
+    ],
     "resources": [
       "../LICENSE",
       "../NOTICE",

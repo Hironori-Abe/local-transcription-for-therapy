@@ -9,6 +9,7 @@
     "frontend:build:editor": "cmd /c npm --prefix frontend run build -- --configuration editorProduction",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "tauri:build:nvidia": "tauri build --bundles nsis --config tauri.build.nvidia-windows.override.json",
     "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json"
   },
   "devDependencies": {

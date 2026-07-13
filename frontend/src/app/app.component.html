@@ -572,6 +572,17 @@
             <ng-container>
               <div class="section-separator"><span>音声入力パック</span></div>
               <div class="voice-input-pack-panel">
+                <div *ngIf="editorOnlyBuild" class="actions-row settings-llm-row">
+                  <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                    <mat-label>対象言語</mat-label>
+                    <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                      [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
+                      <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
+                        {{ option.label }}
+                      </mat-option>
+                    </mat-select>
+                  </mat-form-field>
+                </div>
                 <div class="setup-component-list voice-input-pack-list">
                   <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? editorOnlyBuild">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"

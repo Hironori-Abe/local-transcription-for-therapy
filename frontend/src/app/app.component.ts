@@ -1160,110 +1160,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: 'cpu', label: 'CPU' }
   ];
   // 文字起こし言語の選択肢。
-  // faster-whisper（Whisper）が対応する全言語コード（ISO 639-1 系）。話者分離の
-  // pyannote は音響特徴ベースで言語非依存のため、両者が対応する言語＝この一覧。
-  // 既定 ja を先頭にし、利用頻度の高い言語を上位へ。以降はコード順。
+  // faster-whisper と Gemma 4 E4B の音声 ASR の両方で対応が明示されている言語に限定する。
+  // Gemma 4 Technical Report の FLEURS ASR 評価では pt-br だが、Whisper の言語コードは pt。
+  // 既定 ja を先頭にし、利用頻度の高い言語を上位へ並べる。
   readonly transcriptionLanguageOptions: ReadonlyArray<{ value: string; label: string }> = [
     { value: 'ja', label: '日本語' },
     { value: 'en', label: '英語' },
     { value: 'zh', label: '中国語' },
     { value: 'ko', label: '韓国語' },
-    { value: 'af', label: 'アフリカーンス語' },
-    { value: 'am', label: 'アムハラ語' },
     { value: 'ar', label: 'アラビア語' },
-    { value: 'as', label: 'アッサム語' },
-    { value: 'az', label: 'アゼルバイジャン語' },
-    { value: 'ba', label: 'バシキール語' },
-    { value: 'be', label: 'ベラルーシ語' },
-    { value: 'bg', label: 'ブルガリア語' },
-    { value: 'bn', label: 'ベンガル語' },
-    { value: 'bo', label: 'チベット語' },
-    { value: 'br', label: 'ブルトン語' },
-    { value: 'bs', label: 'ボスニア語' },
-    { value: 'ca', label: 'カタルーニャ語' },
-    { value: 'cs', label: 'チェコ語' },
-    { value: 'cy', label: 'ウェールズ語' },
-    { value: 'da', label: 'デンマーク語' },
     { value: 'de', label: 'ドイツ語' },
-    { value: 'el', label: 'ギリシャ語' },
     { value: 'es', label: 'スペイン語' },
-    { value: 'et', label: 'エストニア語' },
-    { value: 'eu', label: 'バスク語' },
-    { value: 'fa', label: 'ペルシア語' },
-    { value: 'fi', label: 'フィンランド語' },
-    { value: 'fo', label: 'フェロー語' },
     { value: 'fr', label: 'フランス語' },
-    { value: 'gl', label: 'ガリシア語' },
-    { value: 'gu', label: 'グジャラート語' },
-    { value: 'ha', label: 'ハウサ語' },
-    { value: 'haw', label: 'ハワイ語' },
-    { value: 'he', label: 'ヘブライ語' },
     { value: 'hi', label: 'ヒンディー語' },
-    { value: 'hr', label: 'クロアチア語' },
-    { value: 'ht', label: 'ハイチ・クレオール語' },
-    { value: 'hu', label: 'ハンガリー語' },
-    { value: 'hy', label: 'アルメニア語' },
-    { value: 'id', label: 'インドネシア語' },
-    { value: 'is', label: 'アイスランド語' },
     { value: 'it', label: 'イタリア語' },
-    { value: 'jw', label: 'ジャワ語' },
-    { value: 'ka', label: 'ジョージア語' },
-    { value: 'kk', label: 'カザフ語' },
-    { value: 'km', label: 'クメール語' },
-    { value: 'kn', label: 'カンナダ語' },
-    { value: 'la', label: 'ラテン語' },
-    { value: 'lb', label: 'ルクセンブルク語' },
-    { value: 'ln', label: 'リンガラ語' },
-    { value: 'lo', label: 'ラオ語' },
-    { value: 'lt', label: 'リトアニア語' },
-    { value: 'lv', label: 'ラトビア語' },
-    { value: 'mg', label: 'マラガシ語' },
-    { value: 'mi', label: 'マオリ語' },
-    { value: 'mk', label: 'マケドニア語' },
-    { value: 'ml', label: 'マラヤーラム語' },
-    { value: 'mn', label: 'モンゴル語' },
-    { value: 'mr', label: 'マラーティー語' },
-    { value: 'ms', label: 'マレー語' },
-    { value: 'mt', label: 'マルタ語' },
-    { value: 'my', label: 'ビルマ語（ミャンマー語）' },
-    { value: 'ne', label: 'ネパール語' },
-    { value: 'nl', label: 'オランダ語' },
-    { value: 'nn', label: 'ノルウェー語（ニーノシュク）' },
-    { value: 'no', label: 'ノルウェー語' },
-    { value: 'oc', label: 'オック語' },
-    { value: 'pa', label: 'パンジャブ語' },
-    { value: 'pl', label: 'ポーランド語' },
-    { value: 'ps', label: 'パシュトー語' },
     { value: 'pt', label: 'ポルトガル語' },
-    { value: 'ro', label: 'ルーマニア語' },
-    { value: 'ru', label: 'ロシア語' },
-    { value: 'sa', label: 'サンスクリット語' },
-    { value: 'sd', label: 'シンド語' },
-    { value: 'si', label: 'シンハラ語' },
-    { value: 'sk', label: 'スロバキア語' },
-    { value: 'sl', label: 'スロベニア語' },
-    { value: 'sn', label: 'ショナ語' },
-    { value: 'so', label: 'ソマリ語' },
-    { value: 'sq', label: 'アルバニア語' },
-    { value: 'sr', label: 'セルビア語' },
-    { value: 'su', label: 'スンダ語' },
-    { value: 'sv', label: 'スウェーデン語' },
-    { value: 'sw', label: 'スワヒリ語' },
-    { value: 'ta', label: 'タミル語' },
-    { value: 'te', label: 'テルグ語' },
-    { value: 'tg', label: 'タジク語' },
-    { value: 'th', label: 'タイ語' },
-    { value: 'tk', label: 'トルクメン語' },
-    { value: 'tl', label: 'タガログ語' },
-    { value: 'tr', label: 'トルコ語' },
-    { value: 'tt', label: 'タタール語' },
-    { value: 'uk', label: 'ウクライナ語' },
-    { value: 'ur', label: 'ウルドゥー語' },
-    { value: 'uz', label: 'ウズベク語' },
-    { value: 'vi', label: 'ベトナム語' },
-    { value: 'yi', label: 'イディッシュ語' },
-    { value: 'yo', label: 'ヨルバ語' },
-    { value: 'yue', label: '広東語' }
+    { value: 'ru', label: 'ロシア語' }
   ];
   // 外部 LLM アプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
   // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
@@ -7805,7 +7717,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.isVoiceInputProcessing(segmentId)) {
       return '候補を生成中...';
     }
-    return 'この区間をAIによる再文字起こし';
+    return 'この区間を別のAIで再文字起こしする';
   }
 
   async retranscribeSegment(segment: TranscriptionSegment): Promise<void> {

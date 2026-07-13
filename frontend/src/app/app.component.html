@@ -567,6 +567,84 @@
             <div class="section-separator"><span>名前・地名チェック</span></div>
             <ng-container [ngTemplateOutlet]="locationSelectionTpl"></ng-container>
 
+            <ng-container *ngIf="!editorOnlyBuild">
+              <div class="section-separator"><span>文字起こし・話者分離</span></div>
+              <div class="actions-row settings-llm-row compute-env-row">
+                <div class="whisper-model-wrapper">
+                  <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                    <mat-label>文字起こし用モデル</mat-label>
+                    <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                      [value]="whisperModel()" (valueChange)="onWhisperModelChange($event)">
+                      <mat-option *ngFor="let option of whisperModelOptions()" [value]="option.value">
+                        {{ option.label }}
+                      </mat-option>
+                    </mat-select>
+                    <mat-hint *ngIf="largeV3Installed() === false && !largeV3Downloading()">
+                      large-v3はダウンロードが必要です
+                    </mat-hint>
+                  </mat-form-field>
+                  <div *ngIf="largeV3Downloading()" class="whisper-dl-progress">
+                    <mat-progress-bar
+                      [mode]="largeV3DownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
+                      [value]="largeV3DownloadPercent()"></mat-progress-bar>
+                    <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
+                  </div>
+                </div>
+                <ng-container *ngIf="computeEnvInfo(); else envLoading">
+                  <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
+                    [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
+                    [class.backend-none]="computeEnvInfo()!.backendType === 'none'">
+                    {{ computeEnvBackendLabel() }}
+                  </span> -->
+                  <mat-form-field *ngIf="computeEnvInfo()!.devices.length > 0" appearance="outline"
+                    class="settings-llm-field settings-field-device">
+                    <mat-label>使用デバイス</mat-label>
+                    <mat-select [disabled]="running() || diarizationRunning()" [value]="selectedHipDeviceIndex()"
+                      (valueChange)="onHipDeviceChange($event)">
+                      <mat-option [value]="-1">自動（デフォルト）</mat-option>
+                      <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
+                        {{ gpuDeviceLabel(d) }}
+                      </mat-option>
+                    </mat-select>
+                  </mat-form-field>
+                  <span *ngIf="computeEnvInfo()!.devices.length === 0" class="compute-env-no-dev">
+                    GPU デバイス未検出
+                  </span>
+                  <div *ngIf="selectedGpuAsrWarning()" class="gpu-asr-warning">
+                    <mat-icon class="material-symbols-outlined">warning</mat-icon>
+                    {{ selectedGpuAsrWarning() }}
+                  </div>
+                </ng-container>
+                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                  <mat-label>対象言語</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                    [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
+                    <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
+                      {{ option.label }}
+                    </mat-option>
+                  </mat-select>
+                </mat-form-field>
+                <ng-template #envLoading>
+                  <span class="compute-env-no-dev">演算環境を確認中...</span>
+                </ng-template>
+                <!-- <button mat-icon-button (click)="loadComputeEnv()" aria-label="演算環境を再確認" matTooltip="演算環境を再確認"
+                  matTooltipPosition="above">
+                  <mat-icon class="material-symbols-outlined">refresh</mat-icon>
+                </button> -->
+                <!-- 処理方法: 封印中 -->
+                <!-- <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact"
+                style="display: none">
+                <mat-label>処理方法</mat-label>
+                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                  [value]="parallelMode()" (valueChange)="parallelMode.set($event)">
+                  <mat-option value="standard">継次処理</mat-option>
+                  <mat-option value="fast">並行処理</mat-option>
+                </mat-select>
+                <mat-hint>{{ parallelModeHint() }}</mat-hint>
+              </mat-form-field> -->
+              </div>
+            </ng-container>
+
             <!-- 音声入力パック: 全ビルドで表示。Editor版はCPUバックエンド込み、Full版はGPU直起動のため
                  mmproj（+未導入ならE4B本体）のみ導入する。 -->
             <ng-container>
@@ -694,84 +772,6 @@
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
-              </div>
-            </ng-container>
-
-            <ng-container *ngIf="!editorOnlyBuild">
-              <div class="section-separator"><span>文字起こし・話者分離</span></div>
-              <div class="actions-row settings-llm-row compute-env-row">
-                <div class="whisper-model-wrapper">
-                  <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
-                    <mat-label>文字起こし用モデル</mat-label>
-                    <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                      [value]="whisperModel()" (valueChange)="onWhisperModelChange($event)">
-                      <mat-option *ngFor="let option of whisperModelOptions()" [value]="option.value">
-                        {{ option.label }}
-                      </mat-option>
-                    </mat-select>
-                    <mat-hint *ngIf="largeV3Installed() === false && !largeV3Downloading()">
-                      large-v3はダウンロードが必要です
-                    </mat-hint>
-                  </mat-form-field>
-                  <div *ngIf="largeV3Downloading()" class="whisper-dl-progress">
-                    <mat-progress-bar
-                      [mode]="largeV3DownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
-                      [value]="largeV3DownloadPercent()"></mat-progress-bar>
-                    <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
-                  </div>
-                </div>
-                <ng-container *ngIf="computeEnvInfo(); else envLoading">
-                  <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
-                    [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
-                    [class.backend-none]="computeEnvInfo()!.backendType === 'none'">
-                    {{ computeEnvBackendLabel() }}
-                  </span> -->
-                  <mat-form-field *ngIf="computeEnvInfo()!.devices.length > 0" appearance="outline"
-                    class="settings-llm-field settings-field-device">
-                    <mat-label>使用デバイス</mat-label>
-                    <mat-select [disabled]="running() || diarizationRunning()" [value]="selectedHipDeviceIndex()"
-                      (valueChange)="onHipDeviceChange($event)">
-                      <mat-option [value]="-1">自動（デフォルト）</mat-option>
-                      <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
-                        {{ gpuDeviceLabel(d) }}
-                      </mat-option>
-                    </mat-select>
-                  </mat-form-field>
-                  <span *ngIf="computeEnvInfo()!.devices.length === 0" class="compute-env-no-dev">
-                    GPU デバイス未検出
-                  </span>
-                  <div *ngIf="selectedGpuAsrWarning()" class="gpu-asr-warning">
-                    <mat-icon class="material-symbols-outlined">warning</mat-icon>
-                    {{ selectedGpuAsrWarning() }}
-                  </div>
-                </ng-container>
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>対象言語</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                    [value]="transcriptionLanguage()" (valueChange)="onTranscriptionLanguageChange($event)">
-                    <mat-option *ngFor="let option of transcriptionLanguageOptions" [value]="option.value">
-                      {{ option.label }}
-                    </mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <ng-template #envLoading>
-                  <span class="compute-env-no-dev">演算環境を確認中...</span>
-                </ng-template>
-                <!-- <button mat-icon-button (click)="loadComputeEnv()" aria-label="演算環境を再確認" matTooltip="演算環境を再確認"
-                  matTooltipPosition="above">
-                  <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-                </button> -->
-                <!-- 処理方法: 封印中 -->
-                <!-- <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact"
-                style="display: none">
-                <mat-label>処理方法</mat-label>
-                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                  [value]="parallelMode()" (valueChange)="parallelMode.set($event)">
-                  <mat-option value="standard">継次処理</mat-option>
-                  <mat-option value="fast">並行処理</mat-option>
-                </mat-select>
-                <mat-hint>{{ parallelModeHint() }}</mat-hint>
-              </mat-form-field> -->
               </div>
             </ng-container>
 

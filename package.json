@@ -10,7 +10,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:nvidia": "tauri build --bundles nsis --config tauri.build.nvidia-windows.override.json",
-    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json"
+    "tauri:build:nvidia:local-llm-apps": "tauri build --bundles nsis --features local-llm-apps --config tauri.build.nvidia-windows.override.json",
+    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json",
+    "tauri:build:editor:local-llm-apps": "tauri build --bundles nsis --features local-llm-apps --config tauri.editor.windows.override.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

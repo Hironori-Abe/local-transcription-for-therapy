@@ -99,14 +99,14 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
   - 既定は常に E4B。12B はオプトインで、未ダウンロード時は自動で E4B にフォールバックして起動します。
   - 選択は `app_local_data_dir()/proofread-model-tier.txt`（`e4b` / `12b`）に保存。MTP（投機デコード）の適用範囲・FlashAttention の扱いは [AGENTS.md](../AGENTS.md) の「MTP（投機的デコード）の適用範囲」を参照してください。
 
-### 外部 LLM アプリ（LM Studio / Ollama）連携のゲート
+### ローカルAIアプリ（LM Studio / Ollama）連携のゲート
 
-ローカル OpenAI 互換 API（LM Studio / Ollama）連携は **既定で無効**です。インストーラのオプトイン（`nvidia-hooks.nsh` / `editor-hooks.nsh`）で「はい」を選んだときだけ、`app_local_data_dir()` 直下に `external-llm-policy.txt`（内容 `enabled`）が書き込まれて有効になります。
+ローカル OpenAI 互換 API（LM Studio / Ollama）連携は **公式ビルドで無効**です。Cargo feature `local-llm-apps` を付けてソースからビルドした構成だけで有効になります。
 
-- 判定の単一の真実はこのマーカーファイルです（内容が `enabled` のときだけ有効、それ以外はすべて無効＝フェイルクローズ）。
-- Rust `external_llm_enabled()`（`src-tauri/src/lib.rs`）が校正コマンドとモデル一覧取得をゲートし（多層防御の要）、無効時はフロントの LLM バックエンド選択肢からも LM Studio / Ollama を除外します。
-- アプリ内に再有効化トグルはありません。有効／無効の変更は再インストールで行います。
-- **dev で連携を試す場合**: `app_local_data_dir()` 相当のパス（Windows は `%LOCALAPPDATA%\{identifier}\`）に `external-llm-policy.txt` を作成し、内容を `enabled` にして再起動します。
+- 判定の単一の真実はコンパイル時の `local-llm-apps` feature です。実行時のファイルや設定変更では有効化できません。
+- Rust `local_llm_apps_enabled()`（`src-tauri/src/lib.rs`）が校正コマンドとモデル一覧取得をゲートし（多層防御の要）、無効時はフロントの LLM バックエンド選択肢からも LM Studio / Ollama を除外します。
+- 公式インストーラーに選択ダイアログはなく、アプリ内にも有効化トグルはありません。
+- **dev で連携を試す場合**: `cargo tauri dev --features local-llm-apps` で起動します。
 - セグメント単位の逐次校正（`proofread_llm_cli.py`）は 40 セグメントを1バッチで送信します。プロンプトには話者ラベル（例: `Th`・`Cl`）も含まれます。
 - 全体一括校正（`overall_proofread_cli.py`）は全セグメントをチャンク化して一括送信します。
 - ローカル OpenAI 互換 API は Base URL とモデルを登録してプロファイル化できます。モデル一覧は互換APIサーバーへ問い合わせて取得し、サーバー名（Ollama / LM Studio / llama.cpp server など）をベストエフォートで推定します。

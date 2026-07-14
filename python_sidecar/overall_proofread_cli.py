@@ -20,7 +20,7 @@ _PROMPT_TEMPLATES_DIR = Path(__file__).parent / "prompt_templates" / "proofread"
 _PROMPT_TYPE = "gemma4"
 _SYSTEM_PROMPT_OVERRIDE_FILE: Optional[Path] = None
 # 同時送信数（継続バッチング）。内蔵 llama-server 経路（backend 名は後方互換で lemonade）のみ。
-# openai 互換は外部サーバー負荷回避で 1 固定。
+# OpenAI互換は別プロセスのローカルサーバー負荷回避で 1 固定。
 _OVERALL_PARALLEL: int = 1
 # emit の stderr 書き込みをワーカースレッド間で直列化し、行の混線を防ぐ。
 _EMIT_LOCK = threading.Lock()
@@ -494,7 +494,7 @@ def _normalize_local_openai_base_url(base_url: str) -> str:
         raise RuntimeError("ローカルOpenAI互換APIの Base URL にはクエリ文字列やフラグメントを含めないでください。")
     host = (parsed.hostname or "").lower()
     if not _is_loopback_host(host):
-        raise RuntimeError("外部送信防止のため、ローカルOpenAI互換APIは localhost / 127.x.x.x / ::1 のみ指定できます。")
+        raise RuntimeError("PC外への送信防止のため、ローカルOpenAI互換APIは localhost / 127.x.x.x / ::1 のみ指定できます。")
     return normalized
 
 
@@ -615,7 +615,7 @@ def _run_openai_chat_batches(
         # コールドスタート時、サーバーはモデルの GPU ロード / 初回 CUDA カーネル JIT が
         # 終わるまで /v1/models に 503 を返す（ポートは先に開くため「起動済み」に見える）。
         # require_model_list=True のローカル内蔵 llama-server 経路では、ロード完了まで
-        # 503 / 接続失敗をリトライする。外部サーバー（require_model_list=False）は従来どおり即時判定。
+        # 503 / 接続失敗をリトライする。別プロセスのローカルサーバー（require_model_list=False）は従来どおり即時判定。
         deadline = time.monotonic() + (180.0 if require_model_list else 0.0)
         attempt = 0
         while True:

@@ -1415,7 +1415,7 @@ doctor_summary() {
 print_development_reminders() {
   echo
   echo "開発時のリマインダー:"
-  echo "- プライバシー最優先: 会話データ・音声データを外部 API に送信しない。"
+  echo "- プライバシー最優先: 会話データ・音声データを PC 外の API に送信しない。"
   echo "- ネット接続は初回セットアップ、依存導入、モデル取得時のみ許可する。"
   echo "- LLM 校正は同梱 llama-server（CUDA）/ ダウンロードした llama.cpp ROCm・Vulkan（AMD）を使う。"
   echo "- AMD GPU: ctranslate2 ROCm ホイール (GitHub Releases) + ROCm PyTorch で faster-whisper が動作する。"

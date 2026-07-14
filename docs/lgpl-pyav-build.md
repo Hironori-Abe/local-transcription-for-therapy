@@ -28,7 +28,7 @@ GPL 構成の FFmpeg バイナリが混入しやすい `av`（PyAV）と `imagei
 - GPL 構成の ffmpeg バイナリを「別プロセスだから問題ない」という扱いで配布物へ含めない。
 
 入れる対象は Python パッケージではなく、`resources/ffmpeg/ffmpeg(.exe)` に置く
-**LGPL 構成の ffmpeg CLI** だけである。通常運用時の音声・会話データは外部へ送らず、
+**LGPL 構成の ffmpeg CLI** だけである。通常運用時の音声・会話データは PC 外へ送らず、
 この CLI もローカルの別プロセスとしてのみ使う。
 
 ## なぜこの方針にするか

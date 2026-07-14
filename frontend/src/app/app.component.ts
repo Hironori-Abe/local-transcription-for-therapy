@@ -588,11 +588,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** アプリ identifier から判定したビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版。 */
   readonly buildVariant = signal<'cuda' | 'rocm'>('cuda');
   /**
-   * 外部 LLM アプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
-   * 既定は無効（フェイルクローズ）。インストール時の明示オプトインでのみ有効化され、
-   * Rust の external-llm-policy.txt マーカーから check_gpu_availability 経由で取得する。
+   * ローカルAIアプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
+   * 公式配布は無効（フェイルクローズ）。local-llm-apps feature 付きでソースから
+   * ビルドした構成だけが、Rust の check_gpu_availability 経由で true を返す。
    */
-  readonly externalLlmEnabled = signal<boolean>(false);
+  readonly localLlmAppsEnabled = signal<boolean>(false);
   /** GPU セットアップバナーで CUDA インストール案内を表示するか。 */
   readonly showCudaInstallLinks = computed(() =>
     this.isNoCudaEmulation() || this.buildVariant() === 'cuda'
@@ -725,7 +725,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** コンテキスト長フィールドのヒント。自動(0)選択時のみ、VRAM/バックエンドから解決した実値を表示。手動値は空（非表示）。 */
   readonly llmNCtxHint = computed<string>(() => {
     if (this.llmNCtx() >= 4096) return '';
-    // 外部API(lmstudio/ollama)経路はアプリ側でn_ctxを解決しないため表示しない。
+    // ローカルAIアプリ(lmstudio/ollama)経路はアプリ側でn_ctxを解決しないため表示しない。
     if (this.llmBackendMode() !== 'local_gguf') return '';
     // AMD/Lemonade経路は config.json の ctx_size=16384 固定。
     if (this.computeEnvInfo()?.backendType === 'rocm') return '現在: 16,384';
@@ -1215,7 +1215,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: 'pt', label: 'ポルトガル語' },
     { value: 'ru', label: 'ロシア語' }
   ];
-  // 外部 LLM アプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
+  // ローカルAIアプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
   // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
   readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendSelection; label: string }>>(() => {
     const options: Array<{ value: LlmBackendSelection; label: string }> = [
@@ -1226,7 +1226,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.editorOnlyBuild) {
       options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
     }
-    if (this.externalLlmEnabled()) {
+    if (this.localLlmAppsEnabled()) {
       options.push({ value: 'lmstudio', label: 'LM Studio' });
       options.push({ value: 'ollama', label: 'Ollama' });
     }
@@ -4812,14 +4812,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async checkGpuAvailability(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const result = await invoke<{ cudaAvailable: boolean; rocmAvailable: boolean; buildVariant?: string; externalLlmEnabled?: boolean }>('check_gpu_availability');
+      const result = await invoke<{ cudaAvailable: boolean; rocmAvailable: boolean; buildVariant?: string; localLlmAppsEnabled?: boolean }>('check_gpu_availability');
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
         this.cudaAvailable.set(result.cudaAvailable);
         this.rocmAvailable.set(result.rocmAvailable);
         if (result.buildVariant === 'rocm') this.buildVariant.set('rocm');
         // 明示的に true のときだけ有効化（欠落・false はフェイルクローズで無効のまま）
-        this.externalLlmEnabled.set(result.externalLlmEnabled === true);
+        this.localLlmAppsEnabled.set(result.localLlmAppsEnabled === true);
         // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
         this.applyBackendModeFromSettings();
       });
@@ -5082,8 +5082,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   /**
    * 保存済み backendMode を現在のポリシーに沿って適用する。
-   * 外部 LLM 連携が無効のとき、lmstudio / ollama は内蔵モデルにフォールバックする。
-   * externalLlmEnabled は起動時の check_gpu_availability で非同期に確定するため、
+   * ローカルAIアプリ連携が無効のとき、lmstudio / ollama は内蔵モデルにフォールバックする。
+   * localLlmAppsEnabled は起動時の check_gpu_availability で非同期に確定するため、
    * 設定適用時（applyAppSettings）とフラグ確定後（checkGpuAvailability）の両方から呼ぶ。
    */
   private applyBackendModeFromSettings(): void {
@@ -5092,13 +5092,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     const savedMode = saved as LlmBackendMode;
-    const usesExternal = savedMode === 'lmstudio' || savedMode === 'ollama';
-    this.llmBackendMode.set(usesExternal && !this.externalLlmEnabled() ? 'local_gguf' : savedMode);
+    const usesLocalLlmApp = savedMode === 'lmstudio' || savedMode === 'ollama';
+    this.llmBackendMode.set(usesLocalLlmApp && !this.localLlmAppsEnabled() ? 'local_gguf' : savedMode);
   }
 
   /**
    * 「AI校正バックエンド」セレクタの変更ハンドラ。内蔵モデルの E4B / 12B 階層と
-   * 外部API（lmstudio / ollama）の切替を 1 つのセレクタで扱う。
+   * ローカルAIアプリ（lmstudio / ollama）の切替を 1 つのセレクタで扱う。
    * 内蔵モデルは backendMode='local_gguf' に統一し、階層は proofreadModelTier で表す。
    */
   async onLlmBackendSelectionChange(value: LlmBackendSelection): Promise<void> {
@@ -5116,7 +5116,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
       return;
     }
-    // 外部API（lmstudio / ollama）。階層は内蔵モデル専用なので変更しない。
+    // ローカルAIアプリ（lmstudio / ollama）。階層は内蔵モデル専用なので変更しない。
     this.onLlmBackendModeChange(value);
   }
 

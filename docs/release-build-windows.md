@@ -89,7 +89,7 @@ src-tauri\resources\python312\python.exe scripts\collect_licenses.py --venv .ven
 
 ### NSIS フックについて
 
-`src-tauri/nsis/nvidia-hooks.nsh`（Full 版）/ `editor-hooks.nsh`（Editor 版）が Tauri の NSIS インストーラーフックです。Lemonade のインストール促し・プロセス管理を担っていた `lemonade-hooks.nsh` は撤去済みで、現フックは外部LLMアプリ（LM Studio / Ollama）連携のオプトイン（`external-llm-policy.txt`）等を担います。
+`src-tauri/nsis/nvidia-hooks.nsh`（Full 版）/ `editor-hooks.nsh`（Editor 版）が Tauri の NSIS インストーラーフックです。Lemonade のインストール促し・プロセス管理を担っていた `lemonade-hooks.nsh` は撤去済みです。公式インストーラーはローカルAIアプリ（LM Studio / Ollama）連携の選択ダイアログを表示しません。
 
 `tauri.build.nvidia-windows.override.json` の `bundle.windows.nsis` ブロックは `tauri.conf.json` の同ブロックをシャロー上書きするため、`tauri.conf.json` 側の `installerHooks` 指定が失われる可能性があります。Windows 向け override の `nsis` ブロックを追加・変更する際は `installerHooks` を明示してください。
 
@@ -100,6 +100,26 @@ src-tauri\resources\python312\python.exe scripts\collect_licenses.py --venv .ven
   "displayLanguageSelector": false
 }
 ```
+
+### ローカルAIアプリ連携を有効にした専用ビルド
+
+公式配布は `local-llm-apps` feature を付けず、LM Studio / Ollama 連携を常に無効にします。連携が必要な利用者は、ソースから専用インストーラーをビルドします。
+
+```powershell
+# Full CUDA版
+npm.cmd run tauri:build:nvidia:local-llm-apps
+
+# Editor版
+npm.cmd run tauri:build:editor:local-llm-apps
+```
+
+直接実行する場合:
+
+```powershell
+cargo tauri build --bundles nsis --features local-llm-apps --config tauri.build.nvidia-windows.override.json
+```
+
+このfeatureは、既存のローカルAIアプリ接続コードとloopback制限を有効にするだけです。LM Studio / Ollama本体やモデルは同梱しません。接続先アプリの設定とデータの取り扱いはビルド・利用する人の責任で確認してください。専用ビルドは公式Releaseへ添付しません。
 
 ### インストーラーサイズ
 
@@ -160,7 +180,7 @@ Get-FileHash *.exe -Algorithm SHA256 |
 - [ ] アセット名がリネーム規約どおりか（空白・括弧が残っていないか）
 - [ ] `SHA256SUMS.txt` のハッシュがアップロード済みアセットと一致するか（ダウンロードして `sha256sum -c` で確認）
 - [ ] AMD 版が pre-release 扱いになっているか
-- [ ] Release 本文に「初回セットアップ時のみインターネット接続が必要」「会話・音声データは外部送信しない」の注記があるか
+- [ ] Release 本文に「初回セットアップ時のみインターネット接続が必要」「会話・音声データは PC 外へ送信しない」の注記があるか
 - [ ] SmartScreen 警告についての案内（未署名の場合）が本文にあるか
 
 ---

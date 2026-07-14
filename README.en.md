@@ -15,7 +15,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 
 ## Features
 
-- **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to external APIs
+- **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
 - **Japanese transcription** - faster-whisper with the Whisper turbo model
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
 - **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. The proofreading AI supports the standard model, Gemma 4 E4B, and an optional higher-accuracy model, Gemma 4 12B, which is available for both NVIDIA and AMD after download
@@ -26,15 +26,15 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 
 ## Privacy and Offline Policy
 
-- The app does not call external APIs while running transcription, speaker diarization, or proofreading.
+- The app does not call internet-hosted APIs while running transcription, speaker diarization, or proofreading.
 - Internet access is needed only for the initial setup, including dependency and model downloads.
 - Support for an "OpenAI-compatible API" means protocol compatibility only. The connection target is restricted to localhost / loopback. The design does not allow cloud inference endpoints.
 
-### External LLM Apps (LM Studio / Ollama)
+### Local AI Apps (LM Studio / Ollama)
 
-- Integration with external LLM apps such as LM Studio and Ollama is **disabled by default**. The built-in AI, Gemma 4 E4B, can handle proofreading without external app integration.
-- Integration can be enabled **only when explicitly selected during installation**. The app does not provide an in-app switch to enable it later; changing this setting requires reinstalling.
-- Even when integration is enabled, the connection target is restricted to loopback, but **the behavior of the connected app itself is outside LoTT's control**. Depending on the LM Studio or Ollama settings, conversation data could be sent externally. Keeping this integration disabled is recommended for normal use.
+- Integration with local AI apps running on the same PC, such as LM Studio and Ollama, is **disabled in the official installers**. There is no installer prompt or in-app switch for enabling it. The built-in Gemma 4 E4B model handles proofreading by default.
+- If this integration is required, build a dedicated installer from source with the Cargo feature `local-llm-apps`. See the [Windows release build guide](docs/release-build-windows.md#ローカルaiアプリ連携を有効にした専用ビルド).
+- Even when integration is enabled, the connection target is restricted to loopback, but **the behavior of the connected app itself is outside LoTT's control**. Depending on the LM Studio or Ollama settings, conversation data could be sent outside the PC. Keeping this integration disabled is recommended for normal use.
 
 ## Editions
 

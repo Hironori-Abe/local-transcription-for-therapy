@@ -36,3 +36,6 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# 公式配布では有効にしない。LM Studio / Ollama 連携が必要な利用者が
+# ソースから専用インストーラーをビルドするときだけ指定する。
+local-llm-apps = []

@@ -7720,6 +7720,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return 'この区間を別のAIで再文字起こしする';
   }
 
+  private async isVoiceInputModelLoaded(): Promise<boolean> {
+    if (!this.isTauriRuntime()) return false;
+    try {
+      return await invoke<boolean>('get_voice_input_server_status');
+    } catch {
+      return false;
+    }
+  }
+
   async retranscribeSegment(segment: TranscriptionSegment): Promise<void> {
     if (this.segmentRetranscribeUnavailableReason() !== null) {
       return;
@@ -7746,7 +7755,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.voiceInputError.set('');
     this.voiceInputFeedbackSegmentId.set(segment.id);
     this.voiceInputProcessingSegmentId.set(segment.id);
-    this.voiceInputStatus.set('区間を聞き直して候補を生成中...');
+    const modelLoaded = await this.isVoiceInputModelLoaded();
+    this.voiceInputStatus.set(modelLoaded
+      ? '区間を聞き直して候補を生成中...'
+      : 'モデルを読み込んでいます。1回目は時間がかかります...');
     try {
       await invoke('set_audio_allowed_path', { path });
       const context = this.buildVoiceInputContext(segment.id);
@@ -7892,7 +7904,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const wavBase64 = this.arrayBufferToBase64(wav);
     this.voiceInputProcessingSegmentId.set(segmentId);
     this.voiceInputFeedbackSegmentId.set(segmentId);
-    this.voiceInputStatus.set('候補を生成中...');
+    const modelLoaded = await this.isVoiceInputModelLoaded();
+    this.voiceInputStatus.set(modelLoaded
+      ? '候補を生成中...'
+      : 'モデルを読み込んでいます。1回目は時間がかかります...');
     this.voiceInputError.set('');
     try {
       const context = this.buildVoiceInputContext(segmentId);

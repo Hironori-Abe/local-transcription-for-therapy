@@ -31,7 +31,14 @@ struct LlmServer {
     /// CUDA llama-server 起動時に決めた並列スロット数 (-np)。
     /// 校正サイドカーの --parallel をこれと一致させ、継続バッチングの同時送信数を揃える。
     parallel: Arc<AtomicU8>,
+    /// 現在ロード中の用途: 0=なし、1=校正、2=音声入力/区間再文字起こし。
+    /// 同じ音声モデルを次回リクエストで再利用し、校正用サーバーとの取り違えを防ぐ。
+    purpose: Arc<AtomicU8>,
 }
+
+const LLM_PURPOSE_NONE: u8 = 0;
+const LLM_PURPOSE_PROOFREAD: u8 = 1;
+const LLM_PURPOSE_VOICE_INPUT: u8 = 2;
 
 #[derive(Clone)]
 struct DevWindowFocusState {
@@ -1410,6 +1417,25 @@ fn try_stop_cuda_llama_server(app: &AppHandle) -> bool {
     }
     // ポートが閉じ、次回の start_llm_server で再検出・再起動される
     state.mode.store(0, Ordering::Relaxed);
+    state.purpose.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
+    true
+}
+
+/// 保持中の音声入力サーバーだけを停止する。校正サーバーには触れない。
+fn stop_retained_voice_input_server(app: &AppHandle) -> bool {
+    let state = app.state::<LlmServer>();
+    if state.purpose.load(Ordering::Relaxed) != LLM_PURPOSE_VOICE_INPUT {
+        return false;
+    }
+    if let Ok(mut guard) = state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    state.mode.store(0, Ordering::Relaxed);
+    state.purpose.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
     true
 }
 
@@ -2148,6 +2174,11 @@ fn nvidia_devices_for_env() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> String {
+    // このコマンドは校正エンジンのUI状態用。音声入力サーバーが保持中でも校正用としては
+    // 未起動なので stopped を返し、start_llm_server に用途切替を行わせる。
+    if state.purpose.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT {
+        return "stopped".to_string();
+    }
     let port = state.port.load(Ordering::Relaxed) as u16;
     let has_process = state.child.lock().map(|g| g.is_some()).unwrap_or(false);
     if llm_server_port_open(port) {
@@ -2185,6 +2216,9 @@ fn get_llm_attempted_parallel(state: tauri::State<'_, LlmServer>) -> u32 {
 // LLM バックエンドが現在ロードしているデバイスを返す: gpu / stopped
 #[tauri::command]
 fn get_llm_loaded_device(state: tauri::State<'_, LlmServer>) -> Result<String, String> {
+    if state.purpose.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT {
+        return Ok("stopped".to_string());
+    }
     let port = state.port.load(Ordering::Relaxed) as u16;
     if !llm_server_port_open(port) {
         return Ok("stopped".to_string());
@@ -2262,7 +2296,13 @@ async fn start_llm_server(
 ) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
     if llm_server_port_open(port) {
-        return Ok("already_running".to_string());
+        if state.purpose.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT {
+            // 音声入力用は E4B+mmproj/np1 固定であり、選択中の校正モデル・ctx・並列数と
+            // 一致するとは限らない。校正開始前に必ず解放して校正用として起動し直す。
+            stop_retained_voice_input_server(&app);
+        } else {
+            return Ok("already_running".to_string());
+        }
     }
 
     // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
@@ -2287,6 +2327,7 @@ async fn start_llm_server(
     let child_arc = Arc::clone(&state.child);
     let mode_arc = Arc::clone(&state.mode);
     let parallel_arc = Arc::clone(&state.parallel);
+    let purpose_arc = Arc::clone(&state.purpose);
 
     if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
         let bin = llama_server_bin.unwrap();
@@ -2327,6 +2368,7 @@ async fn start_llm_server(
                 &child_arc,
                 &mode_arc,
             )?;
+            purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
             Ok("started".to_string())
         })
         .await
@@ -2335,7 +2377,7 @@ async fn start_llm_server(
         // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。単一スロット運用。
         tauri::async_runtime::spawn_blocking(move || {
-            start_amd_12b_blocking(
+            let result = start_amd_12b_blocking(
                 rocm,
                 vulkan,
                 &child_arc,
@@ -2343,7 +2385,11 @@ async fn start_llm_server(
                 &parallel_arc,
                 resolved_port,
                 "started",
-            )
+            );
+            if result.is_ok() {
+                purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
+            }
+            result
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -2363,6 +2409,7 @@ async fn start_llm_server(
                     &parallel_arc,
                     resolved_port,
                 ) {
+                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
                     return Ok("started".to_string());
                 }
             }
@@ -2376,6 +2423,7 @@ async fn start_llm_server(
                     &parallel_arc,
                     resolved_port,
                 ) {
+                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
                     return Ok("started".to_string());
                 }
             }
@@ -2465,6 +2513,7 @@ async fn install_llm_backend(
 // オフライン動作専用: winget は使用しない。バンドルバイナリを起動するだけ
 #[tauri::command]
 async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) -> Result<String, String> {
+    stop_retained_voice_input_server(&app);
     // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
     let nvidia_list = nvidia_gpu_priority_list();
     let llama_server_bin = find_bundled_llama_server_bin(&app);
@@ -2487,6 +2536,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
     let child_arc = Arc::clone(&state.child);
     let mode_arc = Arc::clone(&state.mode);
     let parallel_arc = Arc::clone(&state.parallel);
+    let purpose_arc = Arc::clone(&state.purpose);
     let app_clone = app.clone();
 
     if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
@@ -2525,6 +2575,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                 &child_arc,
                 &mode_arc,
             )?;
+            purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
             Ok("installed_and_started".to_string())
         })
         .await
@@ -2536,7 +2587,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                 "llm-install-progress",
                 serde_json::json!({"stage": "starting", "message": "AI校正エンジン(高精度12B)を起動中..."}),
             );
-            start_amd_12b_blocking(
+            let result = start_amd_12b_blocking(
                 rocm,
                 vulkan,
                 &child_arc,
@@ -2544,7 +2595,11 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                 &parallel_arc,
                 resolved_port,
                 "installed_and_started",
-            )
+            );
+            if result.is_ok() {
+                purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
+            }
+            result
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
@@ -2568,6 +2623,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                     &parallel_arc,
                     resolved_port,
                 ) {
+                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
                     return Ok("installed_and_started".to_string());
                 }
             }
@@ -2581,6 +2637,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
                     &parallel_arc,
                     resolved_port,
                 ) {
+                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
                     return Ok("installed_and_started".to_string());
                 }
             }
@@ -2600,6 +2657,8 @@ fn stop_llm_server(state: tauri::State<'_, LlmServer>) -> Result<(), String> {
         let _ = kill_process_tree_by_pid(child.id());
         let _ = child.kill();
     }
+    state.mode.store(0, Ordering::Relaxed);
+    state.purpose.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
     Ok(())
 }
 
@@ -2706,6 +2765,7 @@ fn start_editor_voice_input_server_blocking(
     port_arc: &Arc<AtomicU32>,
     mode_arc: &Arc<AtomicU8>,
     parallel_arc: &Arc<AtomicU8>,
+    purpose_arc: &Arc<AtomicU8>,
 ) -> Result<u16, String> {
     let status = check_editor_voice_input_pack_status_impl(app);
     if !status.installed {
@@ -2718,6 +2778,13 @@ fn start_editor_voice_input_server_blocking(
     let mmproj_path = resolve_gemma_e4b_mmproj_path(app)
         .ok_or_else(|| "Gemma 4 E4B mmproj が見つかりません。".to_string())?;
 
+    let current_port = port_arc.load(Ordering::Relaxed) as u16;
+    if purpose_arc.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT
+        && editor_voice_input_server_ready(current_port)
+    {
+        return Ok(current_port);
+    }
+
     if let Ok(mut guard) = child_arc.lock() {
         if let Some(mut child) = guard.take() {
             let _ = kill_process_tree_by_pid(child.id());
@@ -2726,6 +2793,7 @@ fn start_editor_voice_input_server_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
+    purpose_arc.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
 
     let resolved_port = match get_llm_engine_cache_dir(app) {
         Some(p) => {
@@ -2745,6 +2813,7 @@ fn start_editor_voice_input_server_blocking(
     for _ in 0..240 {
         thread::sleep(Duration::from_millis(500));
         if editor_voice_input_server_ready(resolved_port) {
+            purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
             return Ok(resolved_port);
         }
         let child_dead = child_arc
@@ -2767,6 +2836,7 @@ fn start_editor_voice_input_server_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
+    purpose_arc.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
     Err("音声入力エンジンの起動タイムアウト（120秒）".to_string())
 }
 
@@ -2813,6 +2883,7 @@ fn start_full_voice_input_server_blocking(
     port_arc: &Arc<AtomicU32>,
     mode_arc: &Arc<AtomicU8>,
     parallel_arc: &Arc<AtomicU8>,
+    purpose_arc: &Arc<AtomicU8>,
 ) -> Result<u16, String> {
     let status = check_editor_voice_input_pack_status_impl(app);
     if !status.installed {
@@ -2824,6 +2895,13 @@ fn start_full_voice_input_server_blocking(
     let mmproj_path = resolve_gemma_e4b_mmproj_path(app)
         .ok_or_else(|| "Gemma 4 E4B mmproj が見つかりません。".to_string())?;
 
+    let current_port = port_arc.load(Ordering::Relaxed) as u16;
+    if purpose_arc.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT
+        && editor_voice_input_server_ready(current_port)
+    {
+        return Ok(current_port);
+    }
+
     if let Ok(mut guard) = child_arc.lock() {
         if let Some(mut child) = guard.take() {
             let _ = kill_process_tree_by_pid(child.id());
@@ -2832,6 +2910,7 @@ fn start_full_voice_input_server_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
+    purpose_arc.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
 
     let resolved_port = match get_llm_engine_cache_dir(app) {
         Some(p) => {
@@ -2873,6 +2952,7 @@ fn start_full_voice_input_server_blocking(
                     "GPUを使用中の他のアプリを終了して再試行してください",
                 )
             })?;
+            purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
             return Ok(resolved_port);
         }
     }
@@ -2889,6 +2969,7 @@ fn start_full_voice_input_server_blocking(
             parallel_arc,
             resolved_port,
         ) {
+            purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
             return Ok(resolved_port);
         }
     }
@@ -2901,6 +2982,7 @@ fn start_full_voice_input_server_blocking(
             parallel_arc,
             resolved_port,
         ) {
+            purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
             return Ok(resolved_port);
         }
     }
@@ -2908,6 +2990,7 @@ fn start_full_voice_input_server_blocking(
     // NVIDIA・AMD いずれの GPU 直起動条件も満たさなかった（CPU フォールバックは行わない）。
     // ここに到達した原因を切り分けて案内する（NVIDIA 検出済みなら同梱エンジン欠落の可能性が高い）。
     mode_arc.store(0, Ordering::Relaxed);
+    purpose_arc.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
     if !nvidia_list.is_empty() {
         return Err(
             "NVIDIA GPU を検出しましたが、同梱のAIエンジン (CUDA llama-server) が見つからないため音声入力を開始できませんでした。インストールが完全か確認してください。"
@@ -3103,8 +3186,8 @@ fn build_editor_voice_context_section(context: Option<&EditorVoiceInputContext>)
     }
 }
 
-/// 音声（base64 WAV）+ プロンプトを per-request llama-server に投げ、候補配列を返す共通部。
-/// サーバ起動（Editor=CPU / Full=GPU の分岐）〜応答解析〜終了時 kill（VRAM解放）までを担う。
+/// 音声（base64 WAV）+ プロンプトを保持型 llama-server に投げ、候補配列を返す共通部。
+/// 初回だけサーバーを起動し、以後は同じ E4B+mmproj を音声入力・区間再文字起こしで再利用する。
 /// マイク音声入力と区間聞き直しの両方から呼ばれる。呼び出し側で LLM_PROOFREAD_ACTIVE の
 /// TaskRunGuard を取得してから呼ぶこと。
 fn run_editor_voice_audio_llm_blocking(
@@ -3113,6 +3196,7 @@ fn run_editor_voice_audio_llm_blocking(
     port_arc: &Arc<AtomicU32>,
     mode_arc: &Arc<AtomicU8>,
     parallel_arc: &Arc<AtomicU8>,
+    purpose_arc: &Arc<AtomicU8>,
     wav_base64: &str,
     system_prompt: &str,
     user_prompt: &str,
@@ -3120,7 +3204,7 @@ fn run_editor_voice_audio_llm_blocking(
 ) -> Result<EditorVoiceInputResponse, String> {
     let result = (|| {
         // Editor版: 従来どおり CPU 直起動。Full版（CUDA/AMD）: GPU 直起動。
-        // リクエスト構築・応答解析・終了時 kill はビルドを問わず共通。
+        // リクエスト構築・応答解析・起動済みサーバーの再利用はビルドを問わず共通。
         let port = if editor_voice_input_allowed(app) {
             start_editor_voice_input_server_blocking(
                 app,
@@ -3128,6 +3212,7 @@ fn run_editor_voice_audio_llm_blocking(
                 port_arc,
                 mode_arc,
                 parallel_arc,
+                purpose_arc,
             )?
         } else {
             start_full_voice_input_server_blocking(
@@ -3136,6 +3221,7 @@ fn run_editor_voice_audio_llm_blocking(
                 port_arc,
                 mode_arc,
                 parallel_arc,
+                purpose_arc,
             )?
         };
         let target = LocalOpenAiHttpTarget {
@@ -3186,15 +3272,30 @@ fn run_editor_voice_audio_llm_blocking(
         }
         Ok(EditorVoiceInputResponse { candidates })
     })();
-    if let Ok(mut guard) = child_arc.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = kill_process_tree_by_pid(child.id());
-            let _ = child.kill();
-            let _ = child.wait();
+    // 正常稼働中なら次回の音声処理に備えて保持する。推論中にサーバーが落ちた場合だけ
+    // 状態とプロセスハンドルを片付け、次回リクエストで再起動できるようにする。
+    let port = port_arc.load(Ordering::Relaxed) as u16;
+    if !editor_voice_input_server_ready(port) {
+        if let Ok(mut guard) = child_arc.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = kill_process_tree_by_pid(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
+        mode_arc.store(0, Ordering::Relaxed);
+        purpose_arc.store(LLM_PURPOSE_NONE, Ordering::Relaxed);
     }
-    mode_arc.store(0, Ordering::Relaxed);
     result
+}
+
+#[tauri::command]
+fn get_voice_input_server_status(state: tauri::State<'_, LlmServer>) -> bool {
+    if state.purpose.load(Ordering::Relaxed) != LLM_PURPOSE_VOICE_INPUT {
+        return false;
+    }
+    let port = state.port.load(Ordering::Relaxed) as u16;
+    editor_voice_input_server_ready(port)
 }
 
 fn generate_editor_voice_input_candidates_blocking(
@@ -3204,6 +3305,7 @@ fn generate_editor_voice_input_candidates_blocking(
     port_arc: Arc<AtomicU32>,
     mode_arc: Arc<AtomicU8>,
     parallel_arc: Arc<AtomicU8>,
+    purpose_arc: Arc<AtomicU8>,
 ) -> Result<EditorVoiceInputResponse, String> {
     // Full版では校正（句読点付与/全体校正）と同じ LlmServer.child スロットを共有するため、
     // 校正実行中に音声入力が校正用 llama-server を kill してしまわないよう、
@@ -3236,6 +3338,7 @@ fn generate_editor_voice_input_candidates_blocking(
         &port_arc,
         &mode_arc,
         &parallel_arc,
+        &purpose_arc,
         &request.wav_base64,
         &system_prompt,
         &user_prompt,
@@ -3377,6 +3480,7 @@ fn generate_segment_retranscribe_candidates_blocking(
     port_arc: Arc<AtomicU32>,
     mode_arc: Arc<AtomicU8>,
     parallel_arc: Arc<AtomicU8>,
+    purpose_arc: Arc<AtomicU8>,
 ) -> Result<EditorVoiceInputResponse, String> {
     // 全ビルド対応。Editor版は音声入力パックで後付けDLした ffmpeg（または PATH 上の ffmpeg）、
     // Full版は同梱 ffmpeg を使う（resolve_ffmpeg_bin_for_segment_cut が解決）。
@@ -3424,6 +3528,7 @@ fn generate_segment_retranscribe_candidates_blocking(
         &port_arc,
         &mode_arc,
         &parallel_arc,
+        &purpose_arc,
         &wav_base64,
         &system_prompt,
         &user_prompt,
@@ -3442,6 +3547,7 @@ async fn generate_segment_retranscribe_candidates(
     let port_arc = Arc::clone(&state.port);
     let mode_arc = Arc::clone(&state.mode);
     let parallel_arc = Arc::clone(&state.parallel);
+    let purpose_arc = Arc::clone(&state.purpose);
     let allowed_path_arc = Arc::clone(&audio.allowed_path);
     tauri::async_runtime::spawn_blocking(move || {
         generate_segment_retranscribe_candidates_blocking(
@@ -3452,6 +3558,7 @@ async fn generate_segment_retranscribe_candidates(
             port_arc,
             mode_arc,
             parallel_arc,
+            purpose_arc,
         )
     })
     .await
@@ -3473,6 +3580,7 @@ async fn generate_editor_voice_input_candidates(
     let port_arc = Arc::clone(&state.port);
     let mode_arc = Arc::clone(&state.mode);
     let parallel_arc = Arc::clone(&state.parallel);
+    let purpose_arc = Arc::clone(&state.purpose);
     tauri::async_runtime::spawn_blocking(move || {
         generate_editor_voice_input_candidates_blocking(
             app,
@@ -3481,6 +3589,7 @@ async fn generate_editor_voice_input_candidates(
             port_arc,
             mode_arc,
             parallel_arc,
+            purpose_arc,
         )
     })
     .await
@@ -6584,6 +6693,7 @@ fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, Stri
 
 #[tauri::command]
 async fn install_editor_voice_input_pack(app: AppHandle) -> Result<bool, String> {
+    stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || install_editor_voice_input_pack_blocking(app))
         .await
         .map_err(|e| format!("音声入力パックの導入タスクエラー: {e}"))?
@@ -6630,6 +6740,7 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
             errors: vec!["dev ビルドでのみ使用できます".to_string()],
         };
     }
+    stop_retained_voice_input_server(&app);
     let mut deleted = Vec::new();
     let mut not_found = Vec::new();
     let mut errors = Vec::new();
@@ -6920,6 +7031,7 @@ async fn proofread_transcription_llm(
             })
         }
     };
+    stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || proofread_transcription_llm_blocking(app, request))
         .await
         .map_err(|e| format!("LLM校正タスクの実行に失敗しました: {e}"))?
@@ -6943,6 +7055,7 @@ async fn run_overall_proofread(
             })
         }
     };
+    stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || run_overall_proofread_blocking(app, request))
         .await
         .map_err(|e| format!("全体校正タスクの実行に失敗しました: {e}"))?
@@ -8744,6 +8857,7 @@ async fn run_transcription(
             })
         }
     };
+    stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || run_transcription_blocking(app, request))
         .await
         .map_err(|e| format!("文字起こしタスクの実行に失敗しました: {e}"))?
@@ -8767,6 +8881,7 @@ async fn run_diarization(
             })
         }
     };
+    stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || run_diarization_blocking(app, request))
         .await
         .map_err(|e| format!("話者分離タスクの実行に失敗しました: {e}"))?
@@ -12042,6 +12157,7 @@ pub fn run() {
             port: Arc::new(AtomicU32::new(0)),
             mode: Arc::new(AtomicU8::new(0)),
             parallel: Arc::new(AtomicU8::new(1)),
+            purpose: Arc::new(AtomicU8::new(LLM_PURPOSE_NONE)),
         })
         .manage(DevWindowFocusState::default())
         .manage(AudioStreamServer { port: audio_stream_port, allowed_path: audio_allowed_path })
@@ -12141,6 +12257,7 @@ pub fn run() {
             dev_delete_editor_voice_input_pack,
             generate_editor_voice_input_candidates,
             generate_segment_retranscribe_candidates,
+            get_voice_input_server_status,
             check_segment_retranscribe_available,
             get_audio_stream_port,
             set_audio_allowed_path,

@@ -726,6 +726,11 @@
                 <p class="reader-hint voice-input-pack-note">
                   音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
+                <p *ngIf="editorOnlyBuild && editorVoiceInputMemoryWarning() as memoryWarning"
+                  class="reader-hint voice-input-pack-note voice-input-memory-warning"
+                  [class.voice-input-memory-warning-low]="editorVoiceInputMemoryTier() === 'low'">
+                  {{ memoryWarning }}
+                </p>
                 <p class="reader-hint voice-input-pack-note"
                   *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && editorVoiceInputPackStatus()?.cpuBackendRequired">
                   未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンド・音声切り出し用 ffmpeg を合わせて約5.1 GiBをダウンロードします。
@@ -753,11 +758,16 @@
                   </p>
                 </div>
                 <div class="actions-row">
-                  <button mat-flat-button color="primary"
+                  <button mat-flat-button [color]="editorVoiceInputDownloadButtonColor()"
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting() || editorVoiceInputPackStatus()?.installed"
                     (click)="installEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">download</mat-icon>
                     {{ editorVoiceInputPackStatus()?.installed ? '導入済み' : (editorVoiceInputPackInstalling() ? '導入中...' : '音声入力パックをダウンロード') }}
+                  </button>
+                  <button *ngIf="editorOnlyBuild && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
+                    mat-flat-button color="warn" (click)="enableEditorVoiceInputForLowMemory()">
+                    <mat-icon class="material-symbols-outlined">warning</mat-icon>
+                    非推奨環境で音声入力を有効にする
                   </button>
                   <button mat-stroked-button [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="checkEditorVoiceInputPackStatus()">
@@ -1522,7 +1532,7 @@
                       class="proofread-hint-row">
                       <span>{{ proofreadHint }}</span>
                     </mat-hint>
-                    <button matSuffix mat-icon-button type="button"
+                    <button *ngIf="editorVoiceInputButtonsVisible()" matSuffix mat-icon-button type="button"
                       class="segment-voice-input-btn" tabindex="-1"
                       [class.segment-voice-input-btn-unavailable]="!editorVoiceInputAvailable()"
                       [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
@@ -1546,6 +1556,9 @@
                   </div>
                   <div class="voice-input-candidate-panel"
                     *ngIf="voiceInputCandidates()?.segmentId === segment.id && voiceInputCandidates() as voicePanel">
+                    <div class="voice-input-candidate-hint" *ngIf="voicePanel.mode === 'insert'">
+                      選択すると、カーソル位置に挿入されます。
+                    </div>
                     <div class="voice-input-candidate-hint voice-input-replace-hint" *ngIf="voicePanel.mode === 'replace'">
                       候補を選ぶと、この行の内容全体が置き換わります（挿入ではありません）。
                     </div>

@@ -1509,6 +1509,8 @@ const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
 const SEGMENT_RETRANSCRIBE_MAX_SECONDS: f64 = 30.0;
 /// これ未満の区間は「有効な時間範囲がない」としてエラーにする。
 const SEGMENT_RETRANSCRIBE_MIN_SECONDS: f64 = 0.2;
+/// Whisper由来の区間境界で語頭・語尾が欠けないよう、切り出しの前後に加える余白。
+const SEGMENT_RETRANSCRIBE_PADDING_SECONDS: f64 = 0.25;
 /// BtbN LGPL ffmpeg アーカイブのおよそのサイズ（進捗表示のフォールバック用）。
 const EDITOR_VOICE_FFMPEG_APPROX_BYTES: u64 = 95 * 1024 * 1024;
 const EDITOR_VOICE_INPUT_CTX_SIZE: &str = "8192";
@@ -3298,6 +3300,20 @@ fn get_voice_input_server_status(state: tauri::State<'_, LlmServer>) -> bool {
     editor_voice_input_server_ready(port)
 }
 
+#[tauri::command]
+fn get_installed_memory_bytes() -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
+        let mut total_kib = 0u64;
+        let ok = unsafe { GetPhysicallyInstalledSystemMemory(&mut total_kib) };
+        if ok != 0 {
+            return total_kib.checked_mul(1024);
+        }
+    }
+    None
+}
+
 fn generate_editor_voice_input_candidates_blocking(
     app: AppHandle,
     request: EditorVoiceInputRequest,
@@ -3330,7 +3346,7 @@ fn generate_editor_voice_input_candidates_blocking(
     let system_prompt = read_text_file_content(&system_prompt_path)?;
     let context_section = build_editor_voice_context_section(request.context.as_ref());
     let user_prompt = format!(
-        "音声を日本語として聞き取り、音声の聞こえを最優先して、編集欄にそのまま挿入できる候補を最大{max_candidates}件返してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
+        "音声を日本語として聞き取り、音声の聞こえを最優先してください。候補は、1件目=音声に忠実、2件目=自然な表記、3件目=音として成立する別解の順で、最大{max_candidates}件返してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
     );
     run_editor_voice_audio_llm_blocking(
         &app,
@@ -3472,6 +3488,15 @@ fn extract_segment_wav_base64(
     result
 }
 
+fn segment_retranscribe_padded_range(start_seconds: f64, core_duration_seconds: f64) -> (f64, f64) {
+    let padded_start = (start_seconds - SEGMENT_RETRANSCRIBE_PADDING_SECONDS).max(0.0);
+    let actual_leading_padding = start_seconds - padded_start;
+    let padded_duration = core_duration_seconds
+        + actual_leading_padding
+        + SEGMENT_RETRANSCRIBE_PADDING_SECONDS;
+    (padded_start, padded_duration)
+}
+
 fn generate_segment_retranscribe_candidates_blocking(
     app: AppHandle,
     request: SegmentRetranscribeRequest,
@@ -3510,8 +3535,10 @@ fn generate_segment_retranscribe_candidates_blocking(
     }
     // 30秒超はフロントが snackbar で通知したうえで先頭30秒のみ処理する。
     let duration = duration_raw.min(SEGMENT_RETRANSCRIBE_MAX_SECONDS);
+    let (padded_start, padded_duration) =
+        segment_retranscribe_padded_range(request.start_seconds, duration);
     let wav_base64 =
-        extract_segment_wav_base64(&app, &request.audio_path, request.start_seconds, duration)?;
+        extract_segment_wav_base64(&app, &request.audio_path, padded_start, padded_duration)?;
     let max_candidates = request
         .max_candidates
         .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
@@ -3520,7 +3547,7 @@ fn generate_segment_retranscribe_candidates_blocking(
     let system_prompt = read_text_file_content(&system_prompt_path)?;
     let context_section = build_editor_voice_context_section(request.context.as_ref());
     let user_prompt = format!(
-        "音声はセッション録音から切り出した区間です。日本語として聞き取り、音声の聞こえを最優先して、この行の内容をそのまま置き換えられる候補を最大{max_candidates}件返してください。文脈の「入力行」はこの区間の以前の文字起こし結果で、誤りを含んでいる可能性が高いため、音声と食い違う場合は音声を優先してください。前後行の文脈は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
+        "音声はセッション録音から前後に短い余白を付けて切り出した区間です。余白に含まれる明らかに別の隣接発話は加えず、対象行を日本語として聞き取ってください。候補は、1件目=音声に忠実、2件目=自然な表記、3件目=音として成立する別解の順で、最大{max_candidates}件返してください。文脈の「入力行」は以前の文字起こし結果で誤りを含む可能性が高いため、食い違う場合は音声を優先してください。前後行は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
     );
     run_editor_voice_audio_llm_blocking(
         &app,
@@ -8590,6 +8617,20 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn segment_retranscribe_padding_keeps_requested_core_range() {
+        let (start, duration) = segment_retranscribe_padded_range(10.0, 2.0);
+        assert!((start - 9.75).abs() < f64::EPSILON);
+        assert!((duration - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn segment_retranscribe_padding_does_not_go_before_zero() {
+        let (start, duration) = segment_retranscribe_padded_range(0.1, 2.0);
+        assert!(start.abs() < f64::EPSILON);
+        assert!((duration - 2.35).abs() < f64::EPSILON);
+    }
+
     fn assert_regex_compiles(name: &str, pattern: Option<&str>) {
         if let Some(pattern) = pattern {
             Regex::new(pattern.trim())
@@ -12258,6 +12299,7 @@ pub fn run() {
             generate_editor_voice_input_candidates,
             generate_segment_retranscribe_candidates,
             get_voice_input_server_status,
+            get_installed_memory_bytes,
             check_segment_retranscribe_available,
             get_audio_stream_port,
             set_audio_allowed_path,

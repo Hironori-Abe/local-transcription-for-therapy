@@ -291,8 +291,9 @@ interface OverallProofreadResultData {
 
 type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'llmRerunAll' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'lowerLlmParallelOnOom';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'llmRerunAll' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
+type EditorVoiceInputMemoryTier = 'unknown' | 'low' | 'caution' | 'normal';
 type AudioPreprocessPreset = 'none' | 'low_noise' | 'strong_noise' | 'volume_boost' | 'general_improvement' | 'manual';
 type NoiseReductionMode = 'standard' | 'weak';
 type NormalizedSensitiveEntityMetadata = {
@@ -964,9 +965,46 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly voiceInputStatus = signal<string>('');
   readonly voiceInputError = signal<string>('');
   readonly segmentRetranscribeSupported = signal<boolean>(false);
+  readonly editorInstalledMemoryBytes = signal<number | null>(null);
+  readonly editorInstalledMemoryChecked = signal<boolean>(false);
+  readonly editorLowMemoryVoiceInputOptIn = signal<boolean>(false);
+  private readonly editorLowMemoryVoiceInputOptInStorageKey = 'offline_transcriber_editor_low_memory_voice_input_opt_in_v1';
+  private readonly editorVoiceInputMinimumMemoryBytes = 16 * 1024 ** 3;
+  private readonly editorVoiceInputRecommendedMemoryBytes = 24 * 1024 ** 3;
+  readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTier>(() => {
+    if (!this.editorOnlyBuild || !this.editorInstalledMemoryChecked()) return 'unknown';
+    const bytes = this.editorInstalledMemoryBytes();
+    if (bytes === null) return 'unknown';
+    if (bytes < this.editorVoiceInputMinimumMemoryBytes) return 'low';
+    if (bytes < this.editorVoiceInputRecommendedMemoryBytes) return 'caution';
+    return 'normal';
+  });
+  readonly editorVoiceInputMemoryAllowed = computed(
+    () => !this.editorOnlyBuild
+      || this.editorVoiceInputMemoryTier() !== 'low'
+      || this.editorLowMemoryVoiceInputOptIn()
+  );
+  readonly editorVoiceInputButtonsVisible = computed(
+    () => this.isTauriRuntime() && this.editorVoiceInputMemoryAllowed()
+  );
+  readonly editorVoiceInputMemoryWarning = computed<string | null>(() => {
+    const tier = this.editorVoiceInputMemoryTier();
+    if (tier === 'low') {
+      return 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。';
+    }
+    if (tier === 'caution') {
+      return '音声入力を使用する際、他のアプリがメモリを多く使用していると、処理が失敗する可能性があります。';
+    }
+    return null;
+  });
+  readonly editorVoiceInputDownloadButtonColor = computed<'primary' | 'warn'>(
+    () => this.editorOnlyBuild && (this.editorVoiceInputMemoryTier() === 'low' || this.editorVoiceInputMemoryTier() === 'caution')
+      ? 'warn'
+      : 'primary'
+  );
   readonly segmentRetranscribeButtonVisible = computed(
     // 全ビルドで表示（Editor版は音声入力パックの ffmpeg 後付けDLで対応）。
-    () => this.isTauriRuntime()
+    () => this.isTauriRuntime() && this.editorVoiceInputMemoryAllowed()
   );
 
   // 統合セットアップ
@@ -982,7 +1020,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly editorVoiceInputPackProgressMap = signal<Record<string, SetupProgressEvent>>({});
   readonly editorVoiceInputAvailable = computed(
     // Full 版（CUDA/AMD）でも導入済みなら利用可能。editor 版限定ではない。
-    () => this.editorVoiceInputPackStatus()?.installed === true
+    () => this.editorVoiceInputPackStatus()?.installed === true && this.editorVoiceInputMemoryAllowed()
   );
   readonly editorVoiceInputUnavailableTooltip = computed(() => {
     if (!this.editorVoiceInputPackChecked()) {
@@ -2451,6 +2489,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   ngOnInit(): void {
     void this.debounceDevWindowFocus();
+    this.loadEditorLowMemoryVoiceInputOptIn();
     this.loadAppSettings();
     this.applyAppSettings();
     this.loadEstimateSamples();
@@ -3770,6 +3809,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
+    if (dialog.actionKind === 'installVoiceInputPackLowMemory') {
+      this.persistEditorLowMemoryVoiceInputOptIn();
+      await this.performInstallEditorVoiceInputPack();
+      return;
+    }
+
+    if (dialog.actionKind === 'enableVoiceInputLowMemory') {
+      this.persistEditorLowMemoryVoiceInputOptIn();
+      return;
+    }
+
     if (dialog.actionKind === 'cancelRun') {
       if (dialog.cancelRunKind === 'transcription') {
         await this.cancelTranscriptionRun();
@@ -4718,6 +4768,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.checkTranscriptionRuntimeSupport();
     void this.ensureSetupProgressListener();
     await this.checkAllSetupStatus();
+    await this.checkEditorInstalledMemory();
     await this.checkEditorVoiceInputPackStatus();
     void this.checkSegmentRetranscribeSupport();
     // ここ以降は直前までの await で実行コンテキストが Angular ゾーン外に出ている。
@@ -6017,6 +6068,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
+  async checkEditorInstalledMemory(): Promise<void> {
+    if (!this.editorOnlyBuild || !this.isTauriRuntime()) {
+      this.editorInstalledMemoryBytes.set(null);
+      this.editorInstalledMemoryChecked.set(true);
+      return;
+    }
+    try {
+      const bytes = await invoke<number | null>('get_installed_memory_bytes');
+      this.ngZone.run(() => {
+        this.editorInstalledMemoryBytes.set(typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : null);
+        this.editorInstalledMemoryChecked.set(true);
+      });
+    } catch {
+      this.ngZone.run(() => {
+        this.editorInstalledMemoryBytes.set(null);
+        this.editorInstalledMemoryChecked.set(true);
+      });
+    }
+  }
+
   private async ensureEditorVoiceInputPackProgressListener(): Promise<void> {
     if (!this.isTauriRuntime() || this.voiceInputPackProgressUnlisten) return;
     this.voiceInputPackProgressUnlisten = await listen<SetupProgressEvent>('voice-input-pack-progress', (event) => {
@@ -6027,6 +6098,39 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async installEditorVoiceInputPack(): Promise<void> {
     if (this.editorVoiceInputPackInstalling()) return;
+    if (this.editorOnlyBuild
+      && this.editorVoiceInputMemoryTier() === 'low'
+      && !this.editorLowMemoryVoiceInputOptIn()) {
+      this.openConfirmDialog({
+        actionKind: 'installVoiceInputPackLowMemory',
+        title: 'メモリ容量の確認',
+        message: 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。それでもダウンロードしますか？',
+        confirmLabel: '理解してダウンロード',
+        cancelLabel: 'キャンセル',
+        confirmColor: 'warn',
+        cancelColor: null,
+      });
+      return;
+    }
+    await this.performInstallEditorVoiceInputPack();
+  }
+
+  enableEditorVoiceInputForLowMemory(): void {
+    if (!this.editorOnlyBuild || this.editorVoiceInputMemoryTier() !== 'low' || this.editorLowMemoryVoiceInputOptIn()) {
+      return;
+    }
+    this.openConfirmDialog({
+      actionKind: 'enableVoiceInputLowMemory',
+      title: 'メモリ容量の確認',
+      message: 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。それでも音声入力を有効にしますか？',
+      confirmLabel: '理解して有効にする',
+      cancelLabel: 'キャンセル',
+      confirmColor: 'warn',
+      cancelColor: null,
+    });
+  }
+
+  private async performInstallEditorVoiceInputPack(): Promise<void> {
     this.editorVoiceInputPackInstalling.set(true);
     this.editorVoiceInputPackDeleteResult.set(null);
     this.editorVoiceInputPackProgressMap.set({});
@@ -6049,6 +6153,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.editorVoiceInputPackInstalling.set(false);
       await this.checkEditorVoiceInputPackStatus();
       void this.checkSegmentRetranscribeSupport();
+    }
+  }
+
+  private loadEditorLowMemoryVoiceInputOptIn(): void {
+    if (!this.editorOnlyBuild) return;
+    try {
+      this.editorLowMemoryVoiceInputOptIn.set(
+        window.localStorage.getItem(this.editorLowMemoryVoiceInputOptInStorageKey) === '1'
+      );
+    } catch {
+      this.editorLowMemoryVoiceInputOptIn.set(false);
+    }
+  }
+
+  private persistEditorLowMemoryVoiceInputOptIn(): void {
+    this.editorLowMemoryVoiceInputOptIn.set(true);
+    try {
+      window.localStorage.setItem(this.editorLowMemoryVoiceInputOptInStorageKey, '1');
+    } catch {
+      // 保存できない場合も、現在の起動中は明示的な同意を有効として扱う。
     }
   }
 

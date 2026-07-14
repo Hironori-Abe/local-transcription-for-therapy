@@ -117,6 +117,21 @@
   margin: 0;
 }
 
+.voice-input-memory-warning {
+  padding: 8px 10px;
+  border-left: 4px solid #ed6c02;
+  border-radius: 4px;
+  background: #fff4e5;
+  color: #8a4b00;
+  font-weight: 600;
+}
+
+.voice-input-memory-warning-low {
+  border-left-color: #b3261e;
+  background: #fff0f0;
+  color: #8c1d18;
+}
+
 .settings-info-icon {
   width: 28px;
   height: 28px;
@@ -1706,7 +1721,24 @@ $segment-cols: 96px 84px 88px 1fr;
 }
 
 .segment-voice-input-btn {
-  margin: 0 0 0 8px;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  flex-basis: 48px;
+  --mdc-icon-button-state-layer-size: 48px;
+  --mat-icon-button-state-layer-size: 48px;
+
+  .mat-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 36px;
+    line-height: 36px;
+  }
+
+  .mat-mdc-button-touch-target {
+    width: 48px;
+    height: 48px;
+  }
 }
 
 .segment-retranscribe-btn {

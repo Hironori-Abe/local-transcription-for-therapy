@@ -187,6 +187,13 @@ fn validate_local_openai_base_url(raw: &str) -> Result<String, String> {
     if !is_loopback_local_openai_host(&host) {
         return Err("PC外への送信防止のため、ローカルOpenAI互換APIは localhost / 127.x.x.x / ::1 のみ指定できます。".to_string());
     }
+    // hosts ファイル等で localhost が loopback 以外へ解決される余地をなくす。
+    // ユーザー向け設定値として localhost は引き続き受け付け、実接続だけを固定する。
+    if host == "localhost" {
+        let authority_suffix = &authority["localhost".len()..];
+        let path_suffix = &rest[authority.len()..];
+        return Ok(format!("http://127.0.0.1{authority_suffix}{path_suffix}"));
+    }
     Ok(trimmed)
 }
 
@@ -3429,7 +3436,7 @@ fn extract_segment_wav_base64(
     if !Path::new(audio_path).exists() {
         return Err("音声ファイルが見つかりません。音声ファイルを読み込み直してから再試行してください。".to_string());
     }
-    let temp_path = env::temp_dir().join(format!(
+    let temp_path = private_llm_temp_dir(app)?.join(format!(
         "lott-retranscribe-{}-{}.wav",
         std::process::id(),
         std::time::SystemTime::now()
@@ -3437,6 +3444,9 @@ fn extract_segment_wav_base64(
             .map(|d| d.as_millis())
             .unwrap_or(0)
     ));
+    let mut temp_guard = TempFileGuard::new();
+    write_private_temp_file(&temp_path, b"")?;
+    temp_guard.push(temp_path.clone());
     let mut cmd = Command::new(&ffmpeg);
     cmd.arg("-hide_banner")
         .arg("-loglevel")
@@ -3478,7 +3488,6 @@ fn extract_segment_wav_base64(
         }
         Ok(encoded)
     })();
-    let _ = fs::remove_file(&temp_path);
     result
 }
 
@@ -5014,6 +5023,86 @@ struct TempFileGuard {
     paths: Vec<PathBuf>,
 }
 
+const PRIVATE_TEMP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn private_llm_temp_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("一時ファイル保存先を解決できませんでした: {e}"))?
+        .join("private-temp");
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("一時ファイル保存先を作成できませんでした: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("一時ファイル保存先の権限設定に失敗しました: {e}"))?;
+    }
+    Ok(dir)
+}
+
+fn write_private_temp_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| format!("一時ファイルを安全に作成できませんでした: {e}"))?;
+    file.write_all(contents)
+        .map_err(|e| format!("一時ファイルの書き込みに失敗しました: {e}"))
+}
+
+fn cleanup_stale_private_temp_files(app: &AppHandle) {
+    let Ok(dir) = private_llm_temp_dir(app) else {
+        return;
+    };
+    let cleanup_dir = |target_dir: &Path, known_prefixes: Option<&[&str]>| {
+        let Ok(entries) = fs::read_dir(target_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if known_prefixes
+                .map(|prefixes| prefixes.iter().any(|prefix| name.starts_with(prefix)))
+                == Some(false)
+            {
+                continue;
+            }
+            let path = entry.path();
+            let is_stale_file = entry
+                .metadata()
+                .ok()
+                .filter(|metadata| metadata.is_file())
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.elapsed().ok())
+                .map(|age| age >= PRIVATE_TEMP_MAX_AGE)
+                .unwrap_or(false);
+            if is_stale_file {
+                let _ = fs::remove_file(path);
+            }
+        }
+    };
+    cleanup_dir(&dir, None);
+    // 旧バージョンや強制終了でOS一時領域に残った既知のファイルも、安全な期限後に回収する。
+    cleanup_dir(
+        &env::temp_dir(),
+        Some(&[
+            "lott_llm_segments_",
+            "lott_llm_system_prompt_",
+            "lott_overall_segments_",
+            "lott_overall_system_prompt_",
+            "lott-retranscribe-",
+            "offline_transcriber_diar_",
+        ]),
+    );
+}
+
 impl TempFileGuard {
     fn new() -> Self {
         Self { paths: Vec::new() }
@@ -5096,7 +5185,57 @@ fn encrypt_json_to_zip(app: &AppHandle, json_temp: &str, zip_path: &str, passwor
 
 struct AudioStreamServer {
     port: u16,
+    token: String,
     allowed_path: Arc<Mutex<Option<String>>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioStreamInfo {
+    port: u16,
+    token: String,
+}
+
+fn generate_audio_stream_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Security::Cryptography::{
+            BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        };
+        let status = unsafe {
+            BCryptGenRandom(
+                std::ptr::null_mut(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+            )
+        };
+        if status < 0 {
+            return Err(format!("音声配信用トークンを生成できませんでした: {status}"));
+        }
+    }
+    #[cfg(unix)]
+    {
+        let mut source = fs::File::open("/dev/urandom")
+            .map_err(|e| format!("音声配信用乱数を取得できませんでした: {e}"))?;
+        source
+            .read_exact(&mut bytes)
+            .map_err(|e| format!("音声配信用乱数を読み取れませんでした: {e}"))?;
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn constant_time_token_eq(actual: &str, expected: &str) -> bool {
+    if actual.len() != expected.len() {
+        return false;
+    }
+    actual
+        .as_bytes()
+        .iter()
+        .zip(expected.as_bytes())
+        .fold(0u8, |diff, (left, right)| diff | (left ^ right))
+        == 0
 }
 
 fn audio_mime(ext: &str) -> &'static str {
@@ -5133,7 +5272,11 @@ fn url_decode_path(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn serve_audio_connection(mut stream: std::net::TcpStream, allowed_path: Arc<Mutex<Option<String>>>) {
+fn serve_audio_connection(
+    mut stream: std::net::TcpStream,
+    allowed_path: Arc<Mutex<Option<String>>>,
+    expected_token: Arc<String>,
+) {
     use std::io::{Read, Seek, SeekFrom, Write};
 
     let mut buf = vec![0u8; 8192];
@@ -5147,7 +5290,18 @@ fn serve_audio_connection(mut stream: std::net::TcpStream, allowed_path: Arc<Mut
     let first_line = request.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
 
-    // Respond to CORS preflight
+    let request_target = parts.get(1).copied().unwrap_or("");
+    let (encoded_path, query) = request_target.split_once('?').unwrap_or((request_target, ""));
+    let supplied_token = query
+        .split('&')
+        .find_map(|part| part.strip_prefix("token="))
+        .unwrap_or("");
+    if !constant_time_token_eq(supplied_token, expected_token.as_str()) {
+        let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nCache-Control: no-store\r\n\r\n");
+        return;
+    }
+
+    // Respond to CORS preflight after authenticating the request URL.
     if parts.first().copied() == Some("OPTIONS") {
         let _ = stream.write_all(
             b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Range\r\n\r\n",
@@ -5159,7 +5313,7 @@ fn serve_audio_connection(mut stream: std::net::TcpStream, allowed_path: Arc<Mut
         return;
     }
 
-    let url_path = parts[1].trim_start_matches('/');
+    let url_path = encoded_path.trim_start_matches('/');
     let file_path = url_decode_path(url_path);
 
     // 登録済みパスと一致するか確認（パストラバーサル防止）
@@ -5264,22 +5418,29 @@ fn serve_audio_connection(mut stream: std::net::TcpStream, allowed_path: Arc<Mut
     }
 }
 
-fn start_audio_stream_server(allowed_path: Arc<Mutex<Option<String>>>) -> u16 {
+fn start_audio_stream_server(
+    allowed_path: Arc<Mutex<Option<String>>>,
+    token: Arc<String>,
+) -> u16 {
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").expect("audio stream server bind failed");
     let port = listener.local_addr().expect("audio stream server addr").port();
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let ap = Arc::clone(&allowed_path);
-            thread::spawn(move || serve_audio_connection(stream, ap));
+            let request_token = Arc::clone(&token);
+            thread::spawn(move || serve_audio_connection(stream, ap, request_token));
         }
     });
     port
 }
 
 #[tauri::command]
-fn get_audio_stream_port(state: tauri::State<'_, AudioStreamServer>) -> u16 {
-    state.port
+fn get_audio_stream_info(state: tauri::State<'_, AudioStreamServer>) -> AudioStreamInfo {
+    AudioStreamInfo {
+        port: state.port,
+        token: state.token.clone(),
+    }
 }
 
 #[tauri::command]
@@ -7542,11 +7703,13 @@ fn proofread_transcription_llm_blocking_with_kind(
     let segments_json_str = serde_json::to_string(&segments_json)
         .map_err(|e| format!("JSON シリアライズに失敗: {e}"))?;
 
-    let tmp_dir = std::env::temp_dir();
+    let tmp_dir = private_llm_temp_dir(&app)?;
     let invocation_id = LLM_PROOFREAD_INVOCATION_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = tmp_dir.join(format!("lott_llm_segments_{}_{}.json", std::process::id(), invocation_id));
-    std::fs::write(&tmp_path, &segments_json_str)
-        .map_err(|e| format!("一時ファイルの書き込みに失敗: {e}"))?;
+    // 最初のファイル作成直後からガードし、後続ファイルの作成失敗時にも残さない。
+    let mut _tmp_guard = TempFileGuard::new();
+    write_private_temp_file(&tmp_path, segments_json_str.as_bytes())?;
+    _tmp_guard.push(tmp_path.clone());
 
     let system_prompt_tmp_path = request
         .system_prompt
@@ -7555,7 +7718,7 @@ fn proofread_transcription_llm_blocking_with_kind(
         .filter(|prompt| !prompt.is_empty())
         .map(|prompt| {
             let path = tmp_dir.join(format!("lott_llm_system_prompt_{}_{}.txt", std::process::id(), invocation_id));
-            std::fs::write(&path, prompt)
+            write_private_temp_file(&path, prompt.as_bytes())
                 .map_err(|e| format!("LLM システムプロンプトの一時保存に失敗しました: {e}"))?;
             Ok::<PathBuf, String>(path)
         })
@@ -7563,8 +7726,6 @@ fn proofread_transcription_llm_blocking_with_kind(
 
     // 会話本文/システムプロンプトを含む一時ファイルは、以降のどの早期 return でも
     // 確実に削除されるよう RAII ガードへ登録する（spawn 失敗・パイプ取得失敗を含む）。
-    let mut _tmp_guard = TempFileGuard::new();
-    _tmp_guard.push(tmp_path.clone());
     if let Some(ref path) = system_prompt_tmp_path {
         _tmp_guard.push(path.clone());
     }
@@ -8610,6 +8771,22 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localhost_openai_url_is_normalized_to_literal_loopback() {
+        assert_eq!(
+            validate_local_openai_base_url("http://localhost:1234/v1").unwrap(),
+            "http://127.0.0.1:1234/v1"
+        );
+    }
+
+    #[test]
+    fn audio_stream_token_comparison_rejects_missing_or_changed_tokens() {
+        let expected = "0123456789abcdef";
+        assert!(constant_time_token_eq(expected, expected));
+        assert!(!constant_time_token_eq("", expected));
+        assert!(!constant_time_token_eq("0123456789abcdee", expected));
+    }
 
     #[test]
     fn segment_retranscribe_padding_keeps_requested_core_range() {
@@ -10813,8 +10990,10 @@ fn run_overall_proofread_blocking(
     let segments_json_str = serde_json::to_string(&segments_json)
         .map_err(|e| format!("JSON シリアライズに失敗: {e}"))?;
 
-    let tmp_dir = std::env::temp_dir();
+    let tmp_dir = private_llm_temp_dir(&app)?;
     let invocation_id = LLM_PROOFREAD_INVOCATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let mut _tmp_guard = TempFileGuard::new();
 
     let system_prompt_tmp_path = request
         .system_prompt
@@ -10827,28 +11006,25 @@ fn run_overall_proofread_blocking(
                 std::process::id(),
                 invocation_id
             ));
-            std::fs::write(&path, prompt)
+            write_private_temp_file(&path, prompt.as_bytes())
                 .map_err(|e| format!("全体校正システムプロンプトの一時保存に失敗しました: {e}"))?;
             Ok::<PathBuf, String>(path)
         })
         .transpose()?;
+    if let Some(ref path) = system_prompt_tmp_path {
+        _tmp_guard.push(path.clone());
+    }
 
     let tmp_path = tmp_dir.join(format!(
         "lott_overall_segments_{}_{}.json",
         std::process::id(),
         invocation_id
     ));
-    std::fs::write(&tmp_path, &segments_json_str)
-        .map_err(|e| format!("一時ファイルの書き込みに失敗: {e}"))?;
+    write_private_temp_file(&tmp_path, segments_json_str.as_bytes())?;
+    _tmp_guard.push(tmp_path.clone());
 
     // 会話本文/システムプロンプトを含む一時ファイルは、以降のどの早期 return でも
     // 確実に削除されるよう RAII ガードへ登録する（spawn 失敗・パイプ取得失敗を含む）。
-    let mut _tmp_guard = TempFileGuard::new();
-    _tmp_guard.push(tmp_path.clone());
-    if let Some(ref path) = system_prompt_tmp_path {
-        _tmp_guard.push(path.clone());
-    }
-
     let n_gpu_layers = request.n_gpu_layers.unwrap_or(-1);
     let n_ctx = request.n_ctx.unwrap_or(16384).clamp(4096, 131072);
 
@@ -12183,7 +12359,13 @@ fn resolve_diarization_python_bin(app: &AppHandle, _fallback_python_bin: &str) -
 
 pub fn run() {
     let audio_allowed_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let audio_stream_port = start_audio_stream_server(Arc::clone(&audio_allowed_path));
+    let audio_stream_token = Arc::new(
+        generate_audio_stream_token().expect("audio stream token generation failed"),
+    );
+    let audio_stream_port = start_audio_stream_server(
+        Arc::clone(&audio_allowed_path),
+        Arc::clone(&audio_stream_token),
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -12195,9 +12377,14 @@ pub fn run() {
             purpose: Arc::new(AtomicU8::new(LLM_PURPOSE_NONE)),
         })
         .manage(DevWindowFocusState::default())
-        .manage(AudioStreamServer { port: audio_stream_port, allowed_path: audio_allowed_path })
+        .manage(AudioStreamServer {
+            port: audio_stream_port,
+            token: (*audio_stream_token).clone(),
+            allowed_path: audio_allowed_path,
+        })
         .manage(OpenAiUnloadState::default())
         .setup(|app| {
+            cleanup_stale_private_temp_files(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "linux")]
                 {
@@ -12295,7 +12482,7 @@ pub fn run() {
             get_voice_input_server_status,
             get_installed_memory_bytes,
             check_segment_retranscribe_available,
-            get_audio_stream_port,
+            get_audio_stream_info,
             set_audio_allowed_path,
             get_dev_demo_data_dir,
             dev_delete_downloaded_models,

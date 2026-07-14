@@ -1,8 +1,7 @@
 ; NVIDIA (CUDA) 版インストーラーフック
 ; NVIDIA 版は AI 校正に同梱 llama-server (CUDA) を直接起動するため、Lemonade を同梱しない。
 ; そのため lemonade-hooks.nsh と異なり、Lemonade の winget インストール促しは行わない。
-; ただしアンインストール時の後始末（アプリ固有データ・$INSTDIR 残存・旧 HF キャッシュ）は
-; lemonade-hooks.nsh と同一の処理を温存する。
+; アンインストール時は、Tauri 標準の「アプリデータを削除する」の選択を尊重する。
 ; Called by Tauri NSIS template via NSIS_HOOK_POSTINSTALL / NSIS_HOOK_POSTUNINSTALL
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -21,13 +20,15 @@
   ; ユーザーのモデル・パッケージを保持する。真のアンインストール時のみ削除する。
   StrCmp $UpdateMode "1" nsis_skip_full_cleanup 0
 
-  ; ── アプリ固有キャッシュを削除 ──────────────────────────────────────────────
+  ; ── チェックONの場合だけアプリ固有データを削除 ─────────────────────────────
   ; HF Hub キャッシュなどアプリ固有ディレクトリをまとめて削除する。
   ; %LOCALAPPDATA%\${BUNDLEID}\ が対象。
   ; （${BUNDLEID} は Tauri NSIS テンプレートが提供する define。${IDENTIFIER} は未定義）
-  ; ユーザーが再インストールした場合はモデルを再ダウンロードする必要がある。
+  ; OFFの場合はダウンロード済みモデルを残し、同じエディションの再インストールで再利用する。
+  StrCmp $DeleteAppDataCheckboxState "1" 0 nsis_skip_app_data_cleanup
   DetailPrint "アプリキャッシュ ($LOCALAPPDATA\${BUNDLEID}) を削除しています..."
   RMDir /r "$LOCALAPPDATA\${BUNDLEID}"
+  nsis_skip_app_data_cleanup:
 
   ; ── インストール先に残る未追跡ファイルを削除 ────────────────────────────────
   ; resources\python312\Lib\site-packages\ 以下は setup_venv_cli.py が pip で

@@ -7278,7 +7278,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     );
   }
 
-  private audioStreamPort: number | null = null;
+  private audioStreamInfo: { port: number; token: string } | null = null;
 
   private async resolvePlayableAudioSrc(path: string): Promise<string> {
     if (!this.isTauriRuntime()) {
@@ -7287,11 +7287,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // Serve audio via a local HTTP server that supports Range requests.
     // GStreamer (WebKitGTK media backend) requires http:// for seeking;
     // blob:// URLs don't support Range requests and cause wrong-position playback.
-    if (this.audioStreamPort === null) {
-      this.audioStreamPort = await invoke<number>('get_audio_stream_port');
+    if (this.audioStreamInfo === null) {
+      this.audioStreamInfo = await invoke<{ port: number; token: string }>('get_audio_stream_info');
     }
     await invoke('set_audio_allowed_path', { path });
-    return `http://127.0.0.1:${this.audioStreamPort}/${encodeURIComponent(path)}`;
+    return `http://127.0.0.1:${this.audioStreamInfo.port}/${encodeURIComponent(path)}?token=${this.audioStreamInfo.token}`;
   }
 
   private revokePreviewObjectUrl(): void {

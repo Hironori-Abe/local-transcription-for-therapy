@@ -11,11 +11,13 @@
   ; アップデート（バックグラウンド更新 /UPDATE）時は校正設定を保持する。
   StrCmp $UpdateMode "1" nsis_skip_editor_cleanup 0
 
-  ; アプリ固有データ (校正設定キャッシュ等) を削除する。
+  ; チェックONの場合だけアプリ固有データ（後付けモデル・設定等）を削除する。
   ; ${BUNDLEID} は net.gakkousya.lott-editor（Tauri NSIS テンプレートが提供する define）。
   ; Full 版 (net.gakkousya.lott / net.gakkousya.lott-amd) のデータには影響しない。
+  StrCmp $DeleteAppDataCheckboxState "1" 0 nsis_skip_editor_app_data_cleanup
   DetailPrint "アプリデータ ($LOCALAPPDATA\${BUNDLEID}) を削除しています..."
   RMDir /r "$LOCALAPPDATA\${BUNDLEID}"
+  nsis_skip_editor_app_data_cleanup:
 
   nsis_skip_editor_cleanup:
 !macroend

@@ -35,6 +35,9 @@
         "languages": [
           "Japanese"
         ],
+        "customLanguageFiles": {
+          "Japanese": "nsis/Japanese.nsh"
+        },
         "displayLanguageSelector": false
       }
     }

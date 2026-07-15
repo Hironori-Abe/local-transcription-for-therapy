@@ -6315,7 +6315,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.setupRunning()) return;
 
     // 話者分離トークンの形式チェック（送信前に明らかな打ち間違いを弾く）
-    const tokenForValidation = this.diarizationInstallToken().trim();
+    let tokenForValidation = this.diarizationInstallToken().trim();
     if (tokenForValidation) {
       const tokenError = this.validateHfTokenFormat(tokenForValidation);
       if (tokenError) {
@@ -6329,9 +6329,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.setupRunning.set(true);
     this.setupProgressMap.set({});
     try {
-      await invoke<boolean>('run_full_setup', {
-        hfToken: this.diarizationInstallToken().trim() || null,
+      const setupTask = invoke<boolean>('run_full_setup', {
+        hfToken: tokenForValidation || null,
       });
+      // invokeへ渡した直後に入力欄から除去し、長時間のモデル取得中に保持しない。
+      this.diarizationInstallToken.set('');
+      tokenForValidation = '';
+      await setupTask;
 
       // GPU バックエンドのインストール（local_gguf モードかつ未インストールの場合）
       if (this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.llmBackend) {
@@ -6405,7 +6409,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         _error: { component: '_error', status: 'error', message: msg },
       }));
     } finally {
-      this.ngZone.run(() => this.setupRunning.set(false));
+      // アクセストークンはダウンロード処理にだけ使い、成功・失敗にかかわらず
+      // Angular の状態と入力欄に保持し続けない。
+      this.ngZone.run(() => {
+        this.diarizationInstallToken.set('');
+        this.setupRunning.set(false);
+      });
       await this.checkAllSetupStatus();
       await this.checkTranscriptionRuntimeSupport();
       this.ngZone.run(() => {

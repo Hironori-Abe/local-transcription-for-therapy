@@ -11826,7 +11826,41 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
     }
 }
 
+/// 認証情報を保持する文字列を、スコープ終了時に上書きしてから解放する。
+/// 通常の `String::clear` だけでは確保済み領域に内容が残り得るため、volatile writeを使う。
+struct SensitiveOptionalString(Option<String>);
+
+impl SensitiveOptionalString {
+    fn new(value: Option<String>) -> Self {
+        Self(value)
+    }
+
+    fn trimmed(&self) -> &str {
+        self.0.as_deref().unwrap_or("").trim()
+    }
+
+    fn clear(&mut self) {
+        if let Some(value) = self.0.as_mut() {
+            // SAFETY: 0 is valid UTF-8. The string is not read again after this overwrite,
+            // and its length/capacity are unchanged until `clear` and normal drop.
+            unsafe {
+                for byte in value.as_mut_vec().iter_mut() {
+                    std::ptr::write_volatile(byte, 0);
+                }
+            }
+            value.clear();
+        }
+    }
+}
+
+impl Drop for SensitiveOptionalString {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<bool, String> {
+    let mut hf_token = SensitiveOptionalString::new(hf_token);
     let mut all_ok = true;
 
     // 0. Python venv（Windows のみ）
@@ -11868,12 +11902,12 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     if dia_ok {
         emit_setup_progress(&app, "diarization", "skipped", "インストール済みです");
     } else {
-        let token = hf_token.as_deref().unwrap_or("").trim().to_string();
+        let token = hf_token.trimmed();
         if token.is_empty() {
             emit_setup_progress(&app, "diarization", "skipped", "トークン未入力のためスキップ");
         } else {
             emit_setup_progress(&app, "diarization", "downloading", "話者分離モデルをダウンロード中...");
-            match install_diarization_model_impl(&app, &token) {
+            match install_diarization_model_impl(&app, token) {
                 Ok(r) if r.success => emit_setup_progress(&app, "diarization", "done", &r.message),
                 Ok(r) => {
                     emit_setup_progress(&app, "diarization", "error", &r.message);
@@ -11886,6 +11920,9 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
             }
         }
     }
+
+    // 話者分離モデルへの認証が終わった時点で消去する。後続のモデル取得には不要。
+    hf_token.clear();
 
     // 3. Gemma 4 E4B GGUF + MTP draft model
     let (gemma_ok, _) = get_gemma_gguf_info(&app);

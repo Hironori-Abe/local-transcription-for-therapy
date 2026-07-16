@@ -26,6 +26,7 @@
 - インターネット接続が必要なのは、初回セットアップ（依存パッケージ・モデル取得）のみです。
 - LLM 校正の「OpenAI 互換 API」対応はプロトコル互換を意味するだけで、接続先は localhost / loopback に限定しています。クラウド推論エンドポイントには接続できない設計です。
 - 本アプリ自身は通常運用時に外部へ通信しませんが、OS・WebView ランタイム（WebView2 / WebKitGTK）・GPU ドライバなどのシステム側コンポーネントは、本アプリとは無関係に外部と通信することがあります。組織として完全なオフライン運用を求める場合は、OS やファイアウォール側の設定（ネットワーク遮断、プロキシ制限など）を併用してください。
+- 技術者でない方向けの説明は [プライバシー説明（非エンジニア向け）](docs/privacy-guide.md)、利用者自身で送信がないことを確かめる手順は [オフライン動作の確認手順](docs/offline-verification.md) を参照してください。
 
 ### ローカルAIアプリ（LM Studio / Ollama）連携について
 
@@ -78,6 +79,9 @@
 
 ## ドキュメント
 
+- プライバシー説明（非エンジニア向け）: [docs/privacy-guide.md](docs/privacy-guide.md)
+- オフライン動作の確認手順: [docs/offline-verification.md](docs/offline-verification.md)
+- 倫理審査向け資料テンプレート: [docs/irb-template.md](docs/irb-template.md)
 - 開発環境セットアップ・内部仕様: [docs/development.md](docs/development.md)
 - トラブルシューティング（CUDA / AMD ROCm 含む）: [docs/troubleshooting.md](docs/troubleshooting.md)
 - 配布ビルド（Windows NSIS）: [docs/release-build-windows.md](docs/release-build-windows.md)

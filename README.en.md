@@ -30,6 +30,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - Internet access is needed only for the initial setup, including dependency and model downloads.
 - Support for an "OpenAI-compatible API" means protocol compatibility only. The connection target is restricted to localhost / loopback. The design does not allow cloud inference endpoints.
 - The app itself does not communicate with external servers during normal operation. However, system-level components such as the OS, the WebView runtime (WebView2 / WebKitGTK), and GPU drivers may communicate externally independently of this app. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
+- For non-engineers, see the [plain-language privacy guide](docs/privacy-guide.md) (Japanese). To verify for yourself that nothing is sent, see the [offline verification steps](docs/offline-verification.md) (Japanese).
 
 ### Local AI Apps (LM Studio / Ollama)
 
@@ -82,6 +83,9 @@ After the models are downloaded, the app can be used offline.
 
 ## Documentation
 
+- Plain-language privacy guide for non-engineers (Japanese): [docs/privacy-guide.md](docs/privacy-guide.md)
+- Offline verification steps (Japanese): [docs/offline-verification.md](docs/offline-verification.md)
+- Template for research ethics review (IRB) documents (Japanese): [docs/irb-template.md](docs/irb-template.md)
 - Development environment setup and internal notes: [docs/development.md](docs/development.md)
 - Troubleshooting, including CUDA and AMD ROCm: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Distribution builds, Windows NSIS: [docs/release-build-windows.md](docs/release-build-windows.md)

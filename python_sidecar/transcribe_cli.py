@@ -29,7 +29,10 @@ def str_to_bool(value: str) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline transcription sidecar")
-    parser.add_argument("--audio-path", required=True)
+    # 音声ファイルパスは環境変数 LOTT_AUDIO_PATH を優先する（Linux で /proc/<pid>/cmdline が
+    # 他ユーザーからも読めるため、argv にクライエント名を含み得るファイル名を載せない）。
+    # --audio-path は手動実行用フォールバックとして残す。
+    parser.add_argument("--audio-path", required=False, default="")
     parser.add_argument("--model", default="turbo")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--compute-type", default="int8_float16")
@@ -495,7 +498,8 @@ def main() -> int:
     audio_decode_backend = normalize_audio_decode_backend(
         args.audio_decode_backend or os.environ.get("LOTT_AUDIO_DECODE_BACKEND", "")
     )
-    initial_prompt_raw = args.initial_prompt.strip()
+    # initial-prompt も同様に env を優先する（固有名詞を含み得るため argv に載せない）。
+    initial_prompt_raw = os.environ.get("LOTT_INITIAL_PROMPT", "").strip() or args.initial_prompt.strip()
     glossary_path = resolve_glossary_path(args.glossary_path)
     glossary_initial_prompt, glossary_hotwords, glossary_error = load_glossary(glossary_path)
     initial_prompt = merge_initial_prompt(initial_prompt_raw, glossary_initial_prompt, glossary_hotwords)
@@ -506,8 +510,10 @@ def main() -> int:
         ja_prefix = "以下は日本語の会話です。"
         initial_prompt = (ja_prefix + " " + initial_prompt).strip() if initial_prompt else ja_prefix
 
-    audio_path = Path(args.audio_path)
-    if not audio_path.exists():
+    # 音声ファイルパスは env LOTT_AUDIO_PATH を優先し、なければ --audio-path を使う。
+    audio_path_str = os.environ.get("LOTT_AUDIO_PATH", "").strip() or args.audio_path.strip()
+    audio_path = Path(audio_path_str)
+    if not audio_path_str or not audio_path.exists():
         print(
             json.dumps(
                 {

@@ -9862,9 +9862,10 @@ fn execute_transcription(
         .env("HF_HUB_CACHE", hf_hub_cache.as_os_str())
         .env("HF_HUB_DISABLE_XET", "1")
         .env("HF_HUB_DOWNLOAD_TIMEOUT", "60")
+        // 音声ファイルパスは argv ではなく env で渡す。Linux では /proc/<pid>/cmdline が
+        // 他ユーザーからも読めるため、クライエント名を含み得るファイル名を露出させない。
+        .env("LOTT_AUDIO_PATH", audio_path)
         .arg(script_path)
-        .arg("--audio-path")
-        .arg(audio_path)
         .arg("--model")
         .arg(model)
         .arg("--device")
@@ -9893,7 +9894,8 @@ fn execute_transcription(
     if let Some(prompt) = initial_prompt {
         let trimmed = prompt.trim();
         if !trimmed.is_empty() {
-            cmd.arg("--initial-prompt").arg(trimmed);
+            // 固有名詞を含み得るため、こちらも argv ではなく env で渡す。
+            cmd.env("LOTT_INITIAL_PROMPT", trimmed);
         }
     }
 
@@ -9902,6 +9904,8 @@ fn execute_transcription(
     apply_ffmpeg_bin_env(&mut cmd, app);
     // 文字起こしは事前取得済みモデルをキャッシュから読む。実行時のネット取得を禁止する。
     apply_offline_model_env(&mut cmd);
+    // セッション音声の一時WAV等を保護ディレクトリへ誘導し、強制終了時の残留を軽減する。
+    apply_private_tmp_env(&mut cmd, app);
 
     if is_retry {
         emit_progress(
@@ -10034,9 +10038,10 @@ fn execute_diarization(
         .env("KMP_DUPLICATE_LIB_OK", "TRUE")
         .env("OMP_NUM_THREADS", "1")
         .env("MKL_NUM_THREADS", "1")
+        // 音声ファイルパスは argv ではなく env で渡す。Linux では /proc/<pid>/cmdline が
+        // 他ユーザーからも読めるため、クライエント名を含み得るファイル名を露出させない。
+        .env("LOTT_AUDIO_PATH", audio_path)
         .arg(script_path)
-        .arg("--audio-path")
-        .arg(audio_path)
         .arg("--device")
         .arg(device)
         .arg("--num-speakers")
@@ -10051,6 +10056,8 @@ fn execute_diarization(
     apply_ffmpeg_bin_env(&mut cmd, app);
     // 話者分離モデルはローカル配置。実行時のネット取得を禁止する。
     apply_offline_model_env(&mut cmd);
+    // セッション音声の一時WAV等を保護ディレクトリへ誘導し、強制終了時の残留を軽減する。
+    apply_private_tmp_env(&mut cmd, app);
 
     let mut child = cmd
         .spawn()
@@ -10221,6 +10228,16 @@ fn apply_offline_model_env(cmd: &mut Command) {
         .env("TRANSFORMERS_OFFLINE", "1")
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1");
+}
+
+/// 実行時サイドカー（文字起こし・話者分離）が作る一時WAV等を、OS共有の一時
+/// ディレクトリではなくアプリ専用の保護ディレクトリ（0700/0600）へ誘導する。
+/// 強制終了時に一時ファイルが残っても、他ユーザーから読めない場所に留める狙い。
+/// 解決できない場合はジョブを失敗させず、環境変数を設定しないだけに留める。
+fn apply_private_tmp_env(cmd: &mut Command, app: &AppHandle) {
+    if let Ok(dir) = private_llm_temp_dir(app) {
+        cmd.env("TMPDIR", &dir).env("TEMP", &dir).env("TMP", &dir);
+    }
 }
 
 fn apply_child_runtime_env(cmd: &mut Command, device: &str, _hip_device_index: Option<i32>) {

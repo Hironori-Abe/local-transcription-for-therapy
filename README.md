@@ -12,7 +12,7 @@
 ## 特徴
 
 - **完全ローカル実行** — 運用時はインターネット接続不要。会話・音声データを PC 外の API へ送信しません
-- **日本語の文字起こし** — faster-whisper（Whisper turbo モデル）
+- **日本語の文字起こし** — faster-whisper（既定は Whisper turbo。高精度の large-v3 を後からダウンロードして選択可能）
 - **話者分離** — pyannote.audio による話者の自動識別（既定ラベル: Th / Cl / IP …）
 - **校正** — ルールベース + ローカル LLM。氏名・地名など個人の特定につながりうる語の警告表示。校正AIは標準（Gemma 4 E4B）に加え、高精度モデル（Gemma 4 12B、NVIDIA / AMD 共通・後からダウンロード）を選択可能
 - **音声入力** — 編集画面の各行でマイク録音（最大15秒）すると、ローカル AI が聞き取って編集欄への挿入候補を最大3件提示（設定タブの「音声入力パック」を導入後に利用可能）
@@ -25,6 +25,7 @@
 - 文字起こし・話者分離・校正の実行時にインターネット上の API を呼びません。
 - インターネット接続が必要なのは、初回セットアップ（依存パッケージ・モデル取得）のみです。
 - LLM 校正の「OpenAI 互換 API」対応はプロトコル互換を意味するだけで、接続先は localhost / loopback に限定しています。クラウド推論エンドポイントには接続できない設計です。
+- 本アプリ自身は通常運用時に外部へ通信しませんが、OS・WebView ランタイム（WebView2 / WebKitGTK）・GPU ドライバなどのシステム側コンポーネントは、本アプリとは無関係に外部と通信することがあります。組織として完全なオフライン運用を求める場合は、OS やファイアウォール側の設定（ネットワーク遮断、プロキシ制限など）を併用してください。
 
 ### ローカルAIアプリ（LM Studio / Ollama）連携について
 
@@ -37,8 +38,8 @@
 | エディション | 内容 |
 | --- | --- |
 | **LoTT Full CUDA** | 主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離・校正のすべてを含む |
-| LoTT Full AMD (ROCm) | experimental。AMD GPU 向け。文字起こし・話者分離・LLM 校正の GPU 動作確認済み |
-| LoTT Editor | 校正・編集中心の軽量版（文字起こし / LLM ランタイムを省いた構成） |
+| LoTT Full AMD (ROCm / Vulkan) | experimental。AMD GPU 向け。文字起こし・話者分離・LLM 校正の GPU 動作確認済み（LLM は ROCm 優先・Vulkan フォールバック） |
+| LoTT Editor | 校正・編集中心の軽量版。全体の文字起こし・LLM 校正ランタイムは非搭載。音声入力パック（任意ダウンロード）を導入すると CPU 版ローカル AI による音声入力・区間聞き直しを利用可能（メモリ 16GB 未満では非推奨） |
 
 ## 動作環境（Full CUDA 版）
 
@@ -54,7 +55,7 @@
 1. NSIS インストーラー（`*_x64-setup.exe`）を実行します
 2. アプリ起動後、セットアップタブから「Python パッケージをインストール」を実行します（要ネット接続）
 3. 同じセットアップタブから必要なモデルをダウンロードします
-   - 文字起こしモデル（Whisper turbo）
+   - 文字起こしモデル（Whisper turbo。高精度の large-v3 は任意で後から追加可能）
    - 話者分離モデル（`pyannote-speaker-diarization-community-1`、Hugging Face トークンが必要）
    - 校正用 LLM（Gemma 4 E4B GGUF）
    - 音声入力パック（任意。音声入力・区間聞き直しを使う場合）
@@ -71,7 +72,8 @@
 ## 技術スタック
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
-- ASR: faster-whisper / Diarization: pyannote.audio
+- ASR: faster-whisper（turbo 既定 / large-v3 高精度・後付けダウンロード） / Diarization: pyannote.audio / 音声デコード: LGPL 構成 ffmpeg CLI
+- 音声入力・区間聞き直し: Gemma 4 E4B + 音声 mmproj（llama.cpp llama-server、OpenAI 互換 `input_audio`、loopback 限定）
 - LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
 
 ## ドキュメント

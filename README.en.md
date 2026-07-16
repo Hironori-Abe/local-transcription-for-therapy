@@ -16,7 +16,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 ## Features
 
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
-- **Japanese transcription** - faster-whisper with the Whisper turbo model
+- **Japanese transcription** - faster-whisper with the Whisper turbo model by default; the higher-accuracy large-v3 model can be downloaded and selected later
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
 - **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. The proofreading AI supports the standard model, Gemma 4 E4B, and an optional higher-accuracy model, Gemma 4 12B, which is available for both NVIDIA and AMD after download
 - **Voice input** - Record up to 15 seconds from the microphone on any transcript row, and a local AI transcribes it and suggests up to 3 candidates to insert into the edit field (available after installing the "voice input pack" from the Settings tab)
@@ -29,6 +29,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - The app does not call internet-hosted APIs while running transcription, speaker diarization, or proofreading.
 - Internet access is needed only for the initial setup, including dependency and model downloads.
 - Support for an "OpenAI-compatible API" means protocol compatibility only. The connection target is restricted to localhost / loopback. The design does not allow cloud inference endpoints.
+- The app itself does not communicate with external servers during normal operation. However, system-level components such as the OS, the WebView runtime (WebView2 / WebKitGTK), and GPU drivers may communicate externally independently of this app. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
 
 ### Local AI Apps (LM Studio / Ollama)
 
@@ -41,8 +42,8 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 | Edition | Description |
 | --- | --- |
 | **LoTT Full CUDA** | Main distribution. For NVIDIA RTX / CUDA. Includes transcription, speaker diarization, and proofreading |
-| LoTT Full AMD (ROCm) | Experimental. For AMD GPUs. GPU operation has been confirmed for transcription, speaker diarization, and LLM proofreading |
-| LoTT Editor | Lightweight edition focused on proofreading and editing, without the transcription or LLM runtime components |
+| LoTT Full AMD (ROCm / Vulkan) | Experimental. For AMD GPUs. GPU operation has been confirmed for transcription, speaker diarization, and LLM proofreading (the LLM runs on ROCm first, with Vulkan fallback) |
+| LoTT Editor | Lightweight edition focused on proofreading and editing. Full transcription and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
 
 ## Requirements (Full CUDA Edition)
 
@@ -58,7 +59,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 1. Run the NSIS installer, `*_x64-setup.exe`
 2. After launching the app, run "Install Python packages" from the Setup tab. This requires an internet connection
 3. Download the required models from the same Setup tab
-   - Transcription model: Whisper turbo
+   - Transcription model: Whisper turbo (the higher-accuracy large-v3 model can optionally be added later)
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
    - Proofreading LLM: Gemma 4 E4B GGUF
    - Voice input pack (optional, required for voice input and segment re-listen)
@@ -75,7 +76,8 @@ After the models are downloaded, the app can be used offline.
 ## Technology Stack
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
-- ASR: faster-whisper / Diarization: pyannote.audio
+- ASR: faster-whisper (turbo by default / optional higher-accuracy large-v3, downloaded later) / Diarization: pyannote.audio / Audio decoding: LGPL-configured ffmpeg CLI
+- Voice input & segment re-listen: Gemma 4 E4B with an audio mmproj (llama.cpp llama-server, OpenAI-compatible `input_audio`, loopback only)
 - LLM proofreading: Gemma 4 E4B by default / Gemma 4 12B QAT+MTP as the optional high-accuracy model, downloaded later. NVIDIA uses direct CUDA launch; AMD prefers ROCm with Vulkan fallback. The engine uses bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
 
 ## Documentation

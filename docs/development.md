@@ -113,6 +113,12 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
 - 校正システムプロンプトは、選択中のモデル / ローカルAPIプロファイルごとに保存します。既定 Gemma 4 向けの指示には影響させません。
 - 氏名・地名・組織名チェックの優先順位ポリシーは [AGENTS.md](../AGENTS.md) の「Named Entity Warning Priority」を参照してください。
 
+## 音声入力・区間聞き直し（編集画面のAI聞き取り）
+
+- 編集画面のマイク音声入力と区間聞き直しは、Gemma 4 E4B + 音声 mmproj を llama.cpp llama-server（loopback 限定）で動かし、OpenAI 互換 `input_audio` で音声を渡します。
+- プロンプトテンプレート: `python_sidecar/prompt_templates/voice_input/`
+- ビルド別の起動経路（Editor=CPU 直起動 / Full=GPU 直起動）、サーバーの保持・解放ライフサイクル、Editor 版のメモリ警告は [AGENTS.md](../AGENTS.md) の「音声入力」「区間聞き直し」の節を参照してください。
+
 ## 文字起こし用語辞書（initial_prompt 自動注入）
 
 - `python_sidecar/prompt_templates/transcribe/glossary.json` が存在する場合、文字起こし時に自動で読み込みます。
@@ -120,6 +126,11 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
 - 既定以外の辞書を使う場合:
   - `TRANSCRIBE_GLOSSARY_PATH` 環境変数
   - または `transcribe_cli.py --glossary-path <path>`
+
+## サイドカー手動実行時の環境変数
+
+- アプリは `transcribe_cli.py` / `diarize_cli.py` へ音声ファイルパスを環境変数 `LOTT_AUDIO_PATH` で渡します（argv にクライエント名を含み得るファイル名を載せないためのプライバシー対策）。手動実行では従来どおり `--audio-path <path>` も使えます（env が未設定の場合のフォールバック）。
+- `transcribe_cli.py` の initial prompt も同様に環境変数 `LOTT_INITIAL_PROMPT` が優先され、`--initial-prompt` はフォールバックです。
 
 ## 主要ファイル
 

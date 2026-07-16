@@ -20,7 +20,10 @@ def force_utf8_stdio() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline diarization sidecar")
-    parser.add_argument("--audio-path", required=True)
+    # 音声ファイルパスは環境変数 LOTT_AUDIO_PATH を優先する（Linux で /proc/<pid>/cmdline が
+    # 他ユーザーからも読めるため、argv にクライエント名を含み得るファイル名を載せない）。
+    # --audio-path は手動実行用フォールバックとして残す。
+    parser.add_argument("--audio-path", required=False, default="")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--diarization-model-path", default="")
     parser.add_argument("--num-speakers", type=int, default=2)
@@ -320,8 +323,10 @@ def main() -> int:
     args = parse_args()
     num_speakers = max(1, min(5, int(args.num_speakers)))
 
-    audio_path = Path(args.audio_path)
-    if not audio_path.exists():
+    # 音声ファイルパスは env LOTT_AUDIO_PATH を優先し、なければ --audio-path を使う。
+    audio_path_str = os.environ.get("LOTT_AUDIO_PATH", "").strip() or args.audio_path.strip()
+    audio_path = Path(audio_path_str)
+    if not audio_path_str or not audio_path.exists():
         return emit_json_error(
             f"音声ファイルが見つかりません: {audio_path}",
             "file_not_found",

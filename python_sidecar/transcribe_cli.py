@@ -550,22 +550,15 @@ def main() -> int:
 
     # CT2_CUDA_ALLOCATOR はライブラリロード時に参照されるため faster_whisper import より前に設定する。
     # ROCm 環境: MallocAsync アロケータが AMD GPU と非互換のため cub_caching へ切替（issue #2012）。
-    # gfx1102（RX 7600 系）は hipBLASLt カーネル欠落のため gfx1100 として動作させる。
-    is_rocm = False
+    # 公式 ctranslate2-rocm v4.7.x ホイールは gfx1102 をネイティブ収録しているため、
+    # HSA_OVERRIDE_GFX_VERSION で gfx1100 に偽装しない。将来の互換性切り分け手順は
+    # docs/troubleshooting.md に記録する。
     effective_compute_type = args.compute_type
     if args.device == "cuda":
         try:
             import torch as _torch
             if getattr(_torch.version, "hip", None):
-                is_rocm = True
                 os.environ.setdefault("CT2_CUDA_ALLOCATOR", "cub_caching")
-                try:
-                    if _torch.cuda.is_available():
-                        _gcn = getattr(_torch.cuda.get_device_properties(0), "gcnArchName", "")
-                        if _gcn.split(":")[0].strip().lower() == "gfx1102":
-                            os.environ.setdefault("HSA_OVERRIDE_GFX_VERSION", "11.0.0")
-                except Exception:
-                    pass
         except ImportError:
             pass
 

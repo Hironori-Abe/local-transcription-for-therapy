@@ -53,7 +53,18 @@ where.exe cudnn64_9.dll
 
 - RX 7600M XT（gfx1102）では ctranslate2-rocm による文字起こし中に `CUDA failed with error an illegal memory access` でクラッシュすることがありました。
 - 原因はデフォルトのメモリアロケータ（MallocAsync）が AMD GPU と非互換であること（OpenNMT/CTranslate2 issue #2012）。
-- 修正済み: `transcribe_cli.py` が gfx1102 検出時に `CT2_CUDA_ALLOCATOR=cub_caching` と `HSA_OVERRIDE_GFX_VERSION=11.0.0` を自動設定します（3分・10分ファイルで完走確認済み）。
+- 修正済み: `transcribe_cli.py` が ROCm 検出時に `CT2_CUDA_ALLOCATOR=cub_caching` を自動設定します。公式 ctranslate2-rocm v4.7.1 / v4.7.2 ホイールは gfx1102 をネイティブ収録しており、RX 7600M XT で `HSA_OVERRIDE_GFX_VERSION` なしの10分文字起こしが完走することを確認済みです。
+- `HSA_OVERRIDE_GFX_VERSION=11.0.0`（gfx1102 を gfx1100 として扱わせる設定）は通常運用では使用しません。`demo_data/10minutes` では、設定なしの方が既存JSONに対する文字編集距離が420から356へ約15%減り、セグメント数も既存JSONに近づきました。
+- **今後、CTranslate2 / ROCm / GPUドライバー更新後に gfx1102 でクラッシュ、著しい欠落、異常な文字起こしが発生した場合は、gfx1102ネイティブ経路の互換性を最初に疑ってください。** 最初の切り分けとして、同じ音声を次の一時設定で再実行し、症状が変化するか確認します。恒久設定にはせず、確認後は必ず解除してください。
+
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+bash scripts/run-dev.sh
+# 切り分け後
+unset HSA_OVERRIDE_GFX_VERSION
+```
+
+- 一時設定でだけ改善する場合は、使用中のCTranslate2ホイールにgfx1102コードが含まれるか、ROCm/hipBLASLtの対象archサポートに回帰がないかを確認します。ただし、このoverrideは認識結果を変え、品質を下げる可能性があるため、互換性問題の恒久対策にはしません。
 - 話者分離（pyannote + MIOpen）も gfx1102 で GPU 動作します。
 
 ## AMD: 高精度(12B)校正が ROCm にならず Vulkan（やや遅い）で動く

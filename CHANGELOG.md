@@ -7,6 +7,13 @@
 
 各リリースの詳細・ダウンロード手順は `docs/release-notes-vX.Y.Z.md` を参照してください。
 
+## [Unreleased]
+
+### 修正
+
+- AMD ROCmの文字起こしで、公式CTranslate2ホイールがネイティブ対応するgfx1102をgfx1100へ偽装していた `HSA_OVERRIDE_GFX_VERSION=11.0.0` の自動設定を削除。RX 7600M XTの10分データ比較で、既存JSONに対する文字編集距離が約15%減り、セグメント構成も参照結果に近づくことを確認した。MallocAsync回避用の `CT2_CUDA_ALLOCATOR=cub_caching` は維持する。
+- 将来のCTranslate2 / ROCm更新後にgfx1102で不具合が出た場合、ネイティブarch互換性を最初に切り分ける手順をトラブルシューティングへ追記した。
+
 ## [0.9.5] - 2026-07-16
 
 音声入力と区間聞き直しの速度・候補品質・低メモリ環境での案内を改善したリリース。

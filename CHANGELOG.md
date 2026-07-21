@@ -9,6 +9,11 @@
 
 ## [Unreleased]
 
+### 改善
+
+- NVIDIA Full CUDA版の同梱 llama.cppをb9571からb10075（CUDA 12.4公式ビルド）へ更新した。Gemma 4 E4B / 12B + MTPでFlashAttentionを再有効化し、RTX 4060 Laptop 8GBの12B長文テストで総処理時間を約37%短縮、VRAM使用量を約220MiB削減した。Editor版CPUバックエンドとAMD版のダウンロードビルドはb9631のまま変更しない。
+- NVIDIA同梱 llama-serverのCORSをlocalhost originへ制限した。
+
 ### 修正
 
 - AMD ROCmの文字起こしで、公式CTranslate2ホイールがネイティブ対応するgfx1102をgfx1100へ偽装していた `HSA_OVERRIDE_GFX_VERSION=11.0.0` の自動設定を削除。RX 7600M XTの10分データ比較で、既存JSONに対する文字編集距離が約15%減り、セグメント構成も参照結果に近づくことを確認した。MallocAsync回避用の `CT2_CUDA_ALLOCATOR=cub_caching` は維持する。

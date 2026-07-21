@@ -236,7 +236,10 @@ if /I not "%TORCH_BACKEND%"=="cuda" (
   echo [INFO] Skipping llama-server CUDA download for %TORCH_BACKEND% backend.
   goto :llama_server_done
 )
-set "LLAMA_BUILD=b9571"
+set "LLAMA_BUILD=b10075"
+set "LLAMA_BUILD_NUMBER=10075"
+set "LLAMA_CUDA_SHA256=acb782eb7d82b7aefaab4ea4f92f84793d11fdddacf888299ef3af9a63054744"
+set "LLAMA_CUDART_SHA256=8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
 set "LLAMA_CUDA_ZIP=llama-%LLAMA_BUILD%-bin-win-cuda-12.4-x64.zip"
 set "LLAMA_CUDART_ZIP=cudart-llama-bin-win-cuda-12.4-x64.zip"
 set "LLAMA_CUDA_URL=https://github.com/ggml-org/llama.cpp/releases/download/%LLAMA_BUILD%/%LLAMA_CUDA_ZIP%"
@@ -244,8 +247,12 @@ set "LLAMA_CUDART_URL=https://github.com/ggml-org/llama.cpp/releases/download/%L
 set "LLAMA_SERVER_DEST=src-tauri\resources\llama-server"
 set "LLAMA_TMP=%TEMP%\llama-server-cuda"
 if exist "%LLAMA_SERVER_DEST%\llama-server.exe" (
-  echo [OK] llama-server CUDA already present: %LLAMA_SERVER_DEST%\llama-server.exe
-  goto :llama_server_done
+  "%LLAMA_SERVER_DEST%\llama-server.exe" --version 2^>^&1 ^| findstr /c:"version: %LLAMA_BUILD_NUMBER% " >nul
+  if not errorlevel 1 if exist "%LLAMA_SERVER_DEST%\cudart64_12.dll" if exist "%LLAMA_SERVER_DEST%\cublas64_12.dll" if exist "%LLAMA_SERVER_DEST%\cublasLt64_12.dll" (
+    echo [OK] llama-server CUDA %LLAMA_BUILD% already present: %LLAMA_SERVER_DEST%\llama-server.exe
+    goto :llama_server_done
+  )
+  echo [INFO] Existing llama-server CUDA is outdated or incomplete; updating to %LLAMA_BUILD%.
 )
 where nvidia-smi >nul 2>&1
 if errorlevel 1 (
@@ -257,7 +264,7 @@ if not exist "%LLAMA_SERVER_DEST%" mkdir "%LLAMA_SERVER_DEST%"
 if exist "%LLAMA_TMP%" rmdir /s /q "%LLAMA_TMP%" >nul 2>&1
 if exist "%LLAMA_TMP%.zip" del /q "%LLAMA_TMP%.zip" >nul 2>&1
 powershell -NoProfile -NonInteractive -Command ^
-  "try { Invoke-WebRequest -Uri '%LLAMA_CUDA_URL%' -OutFile '%LLAMA_TMP%.zip' -UseBasicParsing; Expand-Archive -Path '%LLAMA_TMP%.zip' -DestinationPath '%LLAMA_TMP%' -Force; $files = Get-ChildItem -Path '%LLAMA_TMP%' -Recurse -File; foreach ($f in $files) { Copy-Item -Path $f.FullName -Destination '%LLAMA_SERVER_DEST%\' -Force }; Write-Host 'OK' } catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit 1 }" ^
+  "try { Invoke-WebRequest -Uri '%LLAMA_CUDA_URL%' -OutFile '%LLAMA_TMP%.zip' -UseBasicParsing; if ((Get-FileHash -Algorithm SHA256 '%LLAMA_TMP%.zip').Hash -ne '%LLAMA_CUDA_SHA256%') { throw 'llama.cpp CUDA archive SHA256 mismatch' }; Expand-Archive -Path '%LLAMA_TMP%.zip' -DestinationPath '%LLAMA_TMP%' -Force; $files = Get-ChildItem -Path '%LLAMA_TMP%' -Recurse -File; foreach ($f in $files) { Copy-Item -Path $f.FullName -Destination '%LLAMA_SERVER_DEST%\' -Force }; Write-Host 'OK' } catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit 1 }" ^
   > "%TEMP%\llama_dl_result.tmp" 2>&1
 if errorlevel 1 (
   if exist "%TEMP%\llama_dl_result.tmp" type "%TEMP%\llama_dl_result.tmp"
@@ -276,7 +283,7 @@ echo [INFO] Downloading CUDA runtime DLLs for llama-server...
 if exist "%LLAMA_TMP%" rmdir /s /q "%LLAMA_TMP%" >nul 2>&1
 if exist "%LLAMA_TMP%.zip" del /q "%LLAMA_TMP%.zip" >nul 2>&1
 powershell -NoProfile -NonInteractive -Command ^
-  "try { Invoke-WebRequest -Uri '%LLAMA_CUDART_URL%' -OutFile '%LLAMA_TMP%.zip' -UseBasicParsing; Expand-Archive -Path '%LLAMA_TMP%.zip' -DestinationPath '%LLAMA_TMP%' -Force; $files = Get-ChildItem -Path '%LLAMA_TMP%' -Recurse -File; foreach ($f in $files) { Copy-Item -Path $f.FullName -Destination '%LLAMA_SERVER_DEST%\' -Force }; Write-Host 'OK' } catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit 1 }" ^
+  "try { Invoke-WebRequest -Uri '%LLAMA_CUDART_URL%' -OutFile '%LLAMA_TMP%.zip' -UseBasicParsing; if ((Get-FileHash -Algorithm SHA256 '%LLAMA_TMP%.zip').Hash -ne '%LLAMA_CUDART_SHA256%') { throw 'llama.cpp CUDA runtime archive SHA256 mismatch' }; Expand-Archive -Path '%LLAMA_TMP%.zip' -DestinationPath '%LLAMA_TMP%' -Force; $files = Get-ChildItem -Path '%LLAMA_TMP%' -Recurse -File; foreach ($f in $files) { Copy-Item -Path $f.FullName -Destination '%LLAMA_SERVER_DEST%\' -Force }; Write-Host 'OK' } catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit 1 }" ^
   > "%TEMP%\llama_dl_result.tmp" 2>&1
 if errorlevel 1 (
   echo [WARN] CUDA runtime DLL download failed - optional, continuing.

@@ -1078,13 +1078,11 @@ fn try_start_llama_server_cuda(
     let ctx_s = ctx_size.to_string();
     let np_s = n_parallel.to_string();
     let port_s = port.to_string();
-    // FlashAttention の選択:
-    // MTP ドラフト併用時は CUDA FlashAttention カーネル (ggml-cuda/fattn.cu:110) が
-    // 一部 GPU/ビルドで致命的に落ち、サーバがポートを開く前にクラッシュする
-    // （RTX 4060 Laptop + 同梱 llama.cpp build 9571 で確認。--flash-attn auto でも同様）。
-    // そのため MTP 配線時は off にする（MTP の投機的デコードは維持）。
-    // MTP 非併用時は従来どおり on（KV キャッシュ/VRAM 節約のため）。
-    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    // NVIDIA 同梱版 b10075 では Gemma 4 E4B MTP の CUDA FlashAttention 不具合が
+    // upstream #25148 で修正済み。E4B/12B + MTP を RTX 4060 Laptop (8 GB) で検証し、
+    // b9571 比でクラッシュなし・長文処理の高速化・VRAM 使用量低下を確認したため常時 on。
+    // AMD のダウンロード型 ROCm/Vulkan 経路は別ビルドなので、そちらの選択は変更しない。
+    let flash_attn = "on";
     cmd.arg("-m").arg(model_path).arg("--port").arg(&port_s);
     if autofit {
         // auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置（-ngl は指定しない）。
@@ -1100,7 +1098,11 @@ fn try_start_llama_server_cuda(
         .arg("-np")
         .arg(&np_s) // 並列スロット数（継続バッチングで GPU のアイドル時間を埋める）
         .arg("--host")
-        .arg("127.0.0.1"); // ローカルループバックのみ
+        .arg("127.0.0.1") // ローカルループバックのみ
+        // b10075 で追加された CORS 制限。ブラウザ上の任意サイトから loopback API を
+        // 呼ばれないよう、同一マシンの localhost origin だけを許可する。
+        .arg("--cors-origins")
+        .arg("localhost");
     if let Some(mtp_path) = mtp_model_path {
         // draft 側 KV キャッシュは既定 (f16) のまま指定しない
         // （MTP ヘッドは小さく KV も小さいため、量子化の節約効果はほぼない）。

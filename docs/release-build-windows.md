@@ -125,6 +125,8 @@ cargo tauri build --bundles nsis --features local-llm-apps --config tauri.build.
 
 `resources/llama-server/` に llama-server と CUDA DLL が含まれるため、インストーラーは約 1 GB 前後になります。将来的にはセットアップ UI からのポストインストールダウンロードに切り替える予定です。
 
+NVIDIA版の同梱 llama.cpp は公式 Windows CUDA 12.4 build **b10075** を使用します。`scripts/setup-dev.bat` は既存の `llama-server.exe --version` を確認し、b10075以外なら同じ公式リリースのCUDAバイナリとCUDA 12.4ランタイムを再取得します。Editor版CPUバックエンドおよびAMD版のダウンロード型バックエンドはb9631のままで、NVIDIA同梱版とは更新系統を分離します。
+
 ### インストール後の Python 環境（venv）
 
 NSIS インストーラーには venv が含まれません。代わりに Python embeddable と `setup_venv_cli.py` を同梱し、初回起動後にセットアップ UI からパッケージをインストールします（詳細は前節「インストール後の Python 設定」参照）。
@@ -135,6 +137,7 @@ NSIS インストーラーには venv が含まれません。代わりに Pytho
 - [ ] `scripts/setup-build-tools.bat` の `PYTHON_VERSION` が最新か確認
 - [ ] `src-tauri/resources/ffmpeg/ffmpeg.exe` が LGPL build で、`--enable-gpl` を含まないことを確認
 - [ ] `src-tauri/resources/ffmpeg/FFMPEG_BUILD_INFO.txt` と `LICENSE.txt` が生成されていることを確認
+- [ ] `src-tauri/resources/llama-server/llama-server.exe --version` が `10075` で、CUDA 12.4公式アセット一式から配置されていることを確認
 - [ ] `av` / `imageio-ffmpeg` が配布用 Python 環境に入っていないことを確認
 - [ ] `scripts\verify_lgpl_ffmpeg_no_pyav.py` が配布用 Python 環境で pass することを確認
 - [ ] `scripts\collect_licenses.py --venv .venv312 --frontend frontend --tauri src-tauri --out licenses` が実行され、`licenses\THIRD_PARTY_FULL.txt` が更新されていることを確認（「不明」が `licenses/manual/` でカバーされない項目を出していないこと）

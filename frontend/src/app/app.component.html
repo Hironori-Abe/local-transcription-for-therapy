@@ -153,7 +153,7 @@
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
             <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf' && !allSetupStatus()?.llmBackend">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf' && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
                 [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
@@ -167,7 +167,7 @@
                 *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma GGUF -->
-            <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf'">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf'">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaGguf"
@@ -182,7 +182,7 @@
                 *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="llmBackendMode() === 'local_gguf' && buildVariant() === 'cuda'">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf' && buildVariant() === 'cuda'">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
@@ -373,7 +373,7 @@
                   <mat-option value="under_split">話者の切り替わりが検出されない</mat-option>
                 </mat-select>
               </mat-form-field>
-              <mat-checkbox
+              <mat-checkbox *ngIf="aiProofreadBuild"
                 [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
                 [checked]="continueProofreadAfterTranscription()"
                 (change)="onContinueProofreadAfterTranscriptionChange($event.checked)">
@@ -662,7 +662,7 @@
                   </mat-form-field>
                 </div>
                 <div class="setup-component-list voice-input-pack-list">
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? editorOnlyBuild">
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? cpuVoiceInputBuild">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.cpuBackend"
                       [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.cpuBackend"
@@ -675,7 +675,7 @@
                       [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'skipped'"
                       *ngIf="editorVoiceInputPackComponentProgress('voice_cpu_backend') as p">{{ p.message }}</span>
                   </div>
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? editorOnlyBuild">
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? cpuVoiceInputBuild">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.ffmpeg"
                       [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.ffmpeg"
@@ -726,7 +726,7 @@
                 <p class="reader-hint voice-input-pack-note">
                   音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
-                <p *ngIf="editorOnlyBuild && editorVoiceInputMemoryWarning() as memoryWarning"
+                <p *ngIf="cpuVoiceInputBuild && editorVoiceInputMemoryWarning() as memoryWarning"
                   class="reader-hint voice-input-pack-note voice-input-memory-warning"
                   [class.voice-input-memory-warning-low]="editorVoiceInputMemoryTier() === 'low'">
                   {{ memoryWarning }}
@@ -764,7 +764,7 @@
                     <mat-icon class="material-symbols-outlined">download</mat-icon>
                     {{ editorVoiceInputPackStatus()?.installed ? '導入済み' : (editorVoiceInputPackInstalling() ? '導入中...' : '音声入力パックをダウンロード') }}
                   </button>
-                  <button *ngIf="editorOnlyBuild && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
+                  <button *ngIf="cpuVoiceInputBuild && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
                     mat-flat-button color="warn" (click)="enableEditorVoiceInputForLowMemory()">
                     <mat-icon class="material-symbols-outlined">warning</mat-icon>
                     非推奨環境で音声入力を有効にする
@@ -778,14 +778,14 @@
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="devDeleteEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">delete</mat-icon>
-                    {{ editorOnlyBuild ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
+                    {{ cpuVoiceInputBuild ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
               </div>
             </ng-container>
 
-            <ng-container *ngIf="!editorOnlyBuild">
+            <ng-container *ngIf="aiProofreadBuild">
               <div class="section-separator"><span>校正用AIモデル</span></div>
               <div class="actions-row settings-llm-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
@@ -1225,10 +1225,10 @@
   <ng-template #proofreadAndMergeSection let-source="source" let-requireImportReady="requireImportReady"
     let-rowClass="rowClass">
     <div class="section-separator"><span>校正</span></div>
-    <p class="reader-hint" style="padding-bottom: 20px;" *ngIf="!editorOnlyBuild">
+    <p class="reader-hint" style="padding-bottom: 20px;" *ngIf="aiProofreadBuild">
       まず、他のPCで確認・校正作業をするなら、文字起こし結果をjson出力して編集用PCにデータを移行してください。
     </p>
-    <ng-container *ngIf="!editorOnlyBuild || isDevModeBuild">
+    <ng-container *ngIf="aiProofreadBuild || (editorOnlyBuild && isDevModeBuild)">
       <p class="reader-hint" style="padding-bottom: 10px;">
         このPCで作業する場合、まずはAIに判別された話者が実際に正しいか、音声を聞きながら確認しましょう。残念ですが、話者の誤判別はよく起こります。句読点付与では、話者が切り替わる所には「。」が入りやすいため、誤判別が残ると作業の追加に繋がります。
       </p>
@@ -1238,7 +1238,7 @@
     </ng-container>
     <p class="reader-hint" style="padding-bottom: 10px;">
       同時に、人名や地名など個人情報が含まれていないか確認してください。機械による名前の検出は難易度が高いため、見逃されることや過剰に検出されることがあります。必ず自身で確認してください。</p>
-    <ng-container *ngIf="!editorOnlyBuild || isDevModeBuild">
+    <ng-container *ngIf="aiProofreadBuild || (editorOnlyBuild && isDevModeBuild)">
       <div
         [class]="(source === 'transcription' ? 'actions-row run-controls-row proofread-controls-row' : 'actions-row run-controls-row proofread-controls-row ' + rowClass)">
 
@@ -1295,7 +1295,7 @@
         <p class="reader-hint">AIによる句読点追加は、文字起こし所要時間と同～2倍程度の時間がかかります。</p>
       </div>
     </ng-container>
-    <div class="actions-row run-controls-row proofread-controls-row" *ngIf="editorOnlyBuild || isDevModeBuild">
+    <div class="actions-row run-controls-row proofread-controls-row" *ngIf="editorOnlyBuild || cpuOnlyBuild || isDevModeBuild">
       <ng-container *ngIf="!proofreadRunning() && !llmProofreadRunning()">
         <button mat-flat-button class="run-exec-btn" color="primary"
           [disabled]="running() || diarizationRunning() || overallProofreadRunning() || (requireImportReady && !importJsonReady()) || !result()"
@@ -1331,7 +1331,7 @@
         発言の統合
       </button>
       <span class="copy-status" *ngIf="mergeStatus()">{{ mergeStatus() }}</span>
-      <div class="merge-overall-center" *ngIf="!editorOnlyBuild">
+      <div class="merge-overall-center" *ngIf="aiProofreadBuild">
         <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
           [disabled]="!overallProofreadHasPendingItems() && (running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady()))"
           (click)="openOrRunOverallProofread(proofreadDialogMode)">

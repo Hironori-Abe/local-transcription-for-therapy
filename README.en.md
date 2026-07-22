@@ -44,6 +44,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 | --- | --- |
 | **LoTT Full CUDA** | Main distribution. For NVIDIA RTX / CUDA. Includes transcription, speaker diarization, and proofreading |
 | LoTT Full AMD (ROCm / Vulkan) | Experimental. For AMD GPUs. GPU operation has been confirmed for transcription, speaker diarization, and LLM proofreading (the LLM runs on ROCm first, with Vulkan fallback) |
+| LoTT CPU | Trial edition. Runs transcription, speaker diarization, and simple punctuation on the CPU. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
 | LoTT Editor | Lightweight edition focused on proofreading and editing. Full transcription and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
 
 ## Requirements (Full CUDA Edition)
@@ -53,7 +54,24 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - **At least 8 GB VRAM**
 - About 1 GB for the installer, plus space for downloaded models
 
-> **CPU-only operation is not supported.** Transcription, speaker diarization, and LLM proofreading all assume GPU execution through CUDA or ROCm. Environments without a supported GPU may not work correctly.
+## CPU Edition (Trial Use)
+
+LoTT CPU provides fully local transcription on PCs without a supported GPU. It includes transcription, speaker diarization, and simple punctuation. Overall proofreading is not included. Installing the optional voice input pack also enables CPU-based voice input and segment re-listen.
+
+**Because processing takes considerably longer, this edition is not recommended for regular, continuous use.** It is intended for trying LoTT with a small amount of audio or as a supplementary option when a supported GPU is unavailable.
+
+| Item | Minimum | Recommended |
+| --- | --- | --- |
+| OS | Windows 10 / 11 64-bit | Windows 11 64-bit |
+| CPU | AVX2 support, 4 cores / 8 threads | 6 cores / 12 threads or more |
+| RAM | **16 GB** | **24 GB or more** |
+| Free disk space | About 10 GB | About 15 GB or more |
+| GPU | Not required | Not required |
+
+- 16 GB RAM is the practical minimum for transcription, diarization, and simple punctuation. Running many other applications at the same time may cause slowdowns or out-of-memory failures.
+- Voice input and segment re-listen also load the Gemma 4 E4B model and audio mmproj, so 24 GB RAM or more is recommended. On a 16 GB system, close other applications before using these features.
+- Systems with less than 16 GB RAM are unsupported because heavy swapping or out-of-memory failures are likely.
+- Expected processing time is approximately 1.5–2.5 times the audio duration, but slower CPUs or difficult audio may take longer. On the development PC (Ryzen AI 9 HX 370, 12 cores / 24 threads), transcription with CPU `float32` plus diarization took about 19 minutes 16 seconds for 11 minutes 43 seconds of audio, or 1.64 times the audio duration.
 
 ## Installation and Initial Setup
 
@@ -62,7 +80,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 3. Download the required models from the same Setup tab
    - Transcription model: Whisper turbo (the higher-accuracy large-v3 model can optionally be added later)
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
-   - Proofreading LLM: Gemma 4 E4B GGUF
+   - Proofreading LLM: Gemma 4 E4B GGUF (Full editions only)
    - Voice input pack (optional, required for voice input and segment re-listen)
 
 After the models are downloaded, the app can be used offline.

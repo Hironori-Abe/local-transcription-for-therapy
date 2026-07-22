@@ -24,6 +24,7 @@ from urllib.parse import unquote
 CT2_ROCM_VERSION = "4.7.1"
 PYTORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm7.2"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
 def emit(msg_type: str, message: str = "") -> None:
@@ -211,8 +212,8 @@ def main() -> None:
     parser.add_argument(
         "--variant",
         default="cuda",
-        choices=["cuda", "rocm"],
-        help="PyTorch バリアント: cuda (デフォルト) または rocm",
+        choices=["cuda", "rocm", "cpu"],
+        help="PyTorch バリアント: cuda (デフォルト)、rocm、cpu",
     )
     args = parser.parse_args()
 
@@ -239,7 +240,7 @@ def main() -> None:
 
         # CTranslate2 ROCm（警告のみ、失敗しても続行）
         _install_ctranslate2_rocm(python)
-    else:
+    elif args.variant == "cuda":
         emit("progress", "PyTorch (CUDA 12.8) をインストール中... 数分かかります")
         rc = run_and_stream([
             str(python), "-m", "pip", "install",
@@ -251,6 +252,18 @@ def main() -> None:
             emit("error", "PyTorch のインストールに失敗しました。インターネット接続を確認してください。")
             sys.exit(1)
         emit("progress", "PyTorch のインストールが完了しました")
+    else:
+        emit("progress", "PyTorch (CPU) をインストール中... 数分かかります")
+        rc = run_and_stream([
+            str(python), "-m", "pip", "install",
+            "--prefer-binary",
+            "--index-url", PYTORCH_CPU_INDEX,
+            "torch==2.10.0", "torchaudio==2.10.0",
+        ])
+        if rc != 0:
+            emit("error", "PyTorch (CPU) のインストールに失敗しました。インターネット接続を確認してください。")
+            sys.exit(1)
+        emit("progress", "PyTorch (CPU) のインストールが完了しました")
 
     # requirements ファイル
     if not req_file.exists():

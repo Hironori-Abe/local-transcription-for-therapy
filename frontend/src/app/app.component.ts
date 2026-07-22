@@ -509,10 +509,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   readonly editorOnlyBuild = environment.editorOnly === true;
+  readonly cpuOnlyBuild = environment.cpuOnly === true;
+  readonly aiProofreadBuild = !this.editorOnlyBuild && !this.cpuOnlyBuild;
+  readonly cpuVoiceInputBuild = this.editorOnlyBuild || this.cpuOnlyBuild;
   readonly isDevModeBuild = isDevMode();
   readonly appDisplayName = this.editorOnlyBuild
     ? 'Local Transcription for Therapy (LoTT) (Editor)'
-    : 'Local Transcription for Therapy (LoTT)';
+    : this.cpuOnlyBuild
+      ? 'Local Transcription for Therapy (LoTT) (CPU)'
+      : 'Local Transcription for Therapy (LoTT)';
   readonly appVersion = signal<string>('');
   readonly isTauriRuntime = signal<boolean>(this.detectTauriRuntime());
   readonly runtimeCheckDone = signal<boolean>(false);
@@ -545,11 +550,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly highpassFilter = signal<boolean>(false);
   readonly noiseReduction = signal<boolean>(false);
   readonly noiseReductionMode = signal<NoiseReductionMode>('weak');
-  readonly diarizationDevice = signal<TranscriptionDeviceOption>('cuda');
-  readonly computeType = signal<ComputeTypeOption>('auto');
+  readonly diarizationDevice = signal<TranscriptionDeviceOption>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
+  readonly computeType = signal<ComputeTypeOption>(this.cpuOnlyBuild ? 'float32' : 'auto');
   readonly whisperModel = signal<string>('turbo');
   readonly transcriptionLanguage = signal<string>('ja');
-  readonly transcriptionDevice = signal<TranscriptionDeviceOption>('cuda');
+  readonly transcriptionDevice = signal<TranscriptionDeviceOption>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
   // 編集UIの「+、」「+。」ボタンが挿入する句読点。日本語のときは全角（、。）、
   // それ以外の言語では半角（, .）。判定は結果が実際に文字起こしされた言語を優先し、
   // 無ければ現在の言語設定にフォールバックする。
@@ -586,7 +591,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** ROCm あり・CUDA なし = AMD GPU 環境と判定する。 */
   readonly isRocmGpu = computed(() => this.rocmAvailable() === true && this.cudaAvailable() === false);
   /** アプリ identifier から判定したビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版。 */
-  readonly buildVariant = signal<'cuda' | 'rocm'>('cuda');
+  readonly buildVariant = signal<'cuda' | 'rocm' | 'cpu'>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
   /**
    * ローカルAIアプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
    * 公式配布は無効（フェイルクローズ）。local-llm-apps feature 付きでソースから
@@ -641,7 +646,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // Editor 版は AI 校正機能を一切持たないため、Lemonade UI / 状態確認を常に抑止する。
     // これにより refreshLlmUiState()・ngOnDestroy の stopLlm・
     // llmInstallableGpuEntry など全参照箇所で Lemonade 挙動が発火しない。
-    !this.editorOnlyBuild && this.llmBackendMode() === 'local_gguf'
+    this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf'
   );
   // Lemonade が必要な場面でバックエンドバイナリが未インストールのとき非 null を返す。
   // GPU 検出結果に基づいて適切なバックエンドを自動選択する。
@@ -972,7 +977,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly editorVoiceInputMinimumMemoryBytes = 16 * 1024 ** 3;
   private readonly editorVoiceInputRecommendedMemoryBytes = 24 * 1024 ** 3;
   readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTier>(() => {
-    if (!this.editorOnlyBuild || !this.editorInstalledMemoryChecked()) return 'unknown';
+    if (!this.cpuVoiceInputBuild || !this.editorInstalledMemoryChecked()) return 'unknown';
     const bytes = this.editorInstalledMemoryBytes();
     if (bytes === null) return 'unknown';
     if (bytes < this.editorVoiceInputMinimumMemoryBytes) return 'low';
@@ -980,7 +985,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return 'normal';
   });
   readonly editorVoiceInputMemoryAllowed = computed(
-    () => !this.editorOnlyBuild
+    () => !this.cpuVoiceInputBuild
       || this.editorVoiceInputMemoryTier() !== 'low'
       || this.editorLowMemoryVoiceInputOptIn()
   );
@@ -998,7 +1003,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return null;
   });
   readonly editorVoiceInputDownloadButtonColor = computed<'primary' | 'warn'>(
-    () => this.editorOnlyBuild && (this.editorVoiceInputMemoryTier() === 'low' || this.editorVoiceInputMemoryTier() === 'caution')
+    () => this.cpuVoiceInputBuild && (this.editorVoiceInputMemoryTier() === 'low' || this.editorVoiceInputMemoryTier() === 'caution')
       ? 'warn'
       : 'primary'
   );
@@ -1047,16 +1052,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const needsPythonEnv = !s.pythonEnv;
     const needsWhisper = this.transcriptionTabVisible() && !s.whisperTurbo;
     const needsDia = this.transcriptionTabVisible() && !s.diarization;
-    const needsGemma = this.llmBackendMode() === 'local_gguf' && !s.gemmaGguf;
-    const needsGemmaMtp = this.llmBackendMode() === 'local_gguf' && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
-    const needsLlmBackend = this.llmBackendMode() === 'local_gguf' && !s.llmBackend;
+    const needsGemma = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !s.gemmaGguf;
+    const needsGemmaMtp = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
+    const needsLlmBackend = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !s.llmBackend;
     return needsPythonEnv || needsWhisper || needsDia || needsGemma || needsGemmaMtp || needsLlmBackend;
   });
   readonly transcriptionTabDisabled = computed(() => {
     if (!this.transcriptionTabVisible() || this.editorOnlyBuild) return false;
     if (!this.allSetupChecked()) return false;
     const devMode = this.normalizeDevEmulationMode(this.appSettings.devEmulation?.mode);
-    if (devMode === 'no_cuda') return true;
+    if (devMode === 'no_cuda' && !this.cpuOnlyBuild) return true;
     if (this.needsFullSetup()) return false;
     if (!this.allSetupStatus()?.pythonEnv) return false;
     return !this.transcriptionRuntimeAvailable();
@@ -1177,7 +1182,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 「AI校正バックエンド」セレクタ（llmBackendSelection）へ統合済み。
    */
   readonly proofreadModelTierVisible = computed<boolean>(() =>
-    !this.editorOnlyBuild && this.llmBackendMode() === 'local_gguf'
+    this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf'
   );
   readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => [
     { value: 'turbo', label: 'turbo（高速・既定）' },
@@ -1186,13 +1191,19 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // { value: 'small', label: 'small' },
     // { value: 'base', label: 'base（最軽量）' },
   ]);
-  readonly computeTypeOptions: ReadonlyArray<{ value: ComputeTypeOption; label: string }> = [
-    { value: 'auto', label: 'auto（自動推定）' },
-    { value: 'int8', label: 'int8（軽量だが精度低下）' },
-    { value: 'int8_float16', label: 'int8_float16（長尺の場合など）' },
-    { value: 'float16', label: 'float16（推奨）' },
-    { value: 'float32', label: 'float32（高精度だが重い）' }
-  ];
+  readonly computeTypeOptions: ReadonlyArray<{ value: ComputeTypeOption; label: string }> = this.cpuOnlyBuild
+    ? [
+        { value: 'auto', label: 'auto（CPU向け自動推定）' },
+        { value: 'int8', label: 'int8（軽量）' },
+        { value: 'float32', label: 'float32（高精度だが重い）' }
+      ]
+    : [
+        { value: 'auto', label: 'auto（自動推定）' },
+        { value: 'int8', label: 'int8（軽量だが精度低下）' },
+        { value: 'int8_float16', label: 'int8_float16（長尺の場合など）' },
+        { value: 'float16', label: 'float16（推奨）' },
+        { value: 'float32', label: 'float32（高精度だが重い）' }
+      ];
   readonly transcriptionDeviceOptions: ReadonlyArray<{ value: TranscriptionDeviceOption; label: string }> = [
     { value: 'cuda', label: 'GPU（CUDA / ROCm）' },
     { value: 'cpu', label: 'CPU' }
@@ -1223,7 +1234,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     ];
     // 高精度（12B）は CUDA（同梱 llama-server 直起動）/ AMD（Vulkan llama-server 直起動）の
     // 両方で提供する。Editor 版はこのセクション自体が非表示。
-    if (!this.editorOnlyBuild) {
+    if (this.aiProofreadBuild) {
       options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
     }
     if (this.localLlmAppsEnabled()) {
@@ -2204,7 +2215,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     // 校正AIモデル階層は localStorage を初期 UI 値にする（最終的な真実はバックエンドのマーカー。
     // initProofreadModelTier() が起動時に同期する）。AMD/Editor 版は 12B 非対応のため 'e4b' に丸める。
-    if ((llm?.proofreadModelTier === '12b') && !this.editorOnlyBuild) {
+    if ((llm?.proofreadModelTier === '12b') && this.aiProofreadBuild) {
       this.proofreadModelTier.set('12b');
     } else {
       this.proofreadModelTier.set('e4b');
@@ -2232,6 +2243,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private normalizeComputeType(valueRaw: string): ComputeTypeOption {
     const value = (valueRaw ?? '').trim().toLowerCase();
+    if (this.cpuOnlyBuild && value !== 'auto' && value !== 'int8' && value !== 'float32') {
+      return 'float32';
+    }
     switch (value) {
       case 'auto':
       case 'float16':
@@ -2240,7 +2254,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       case 'int8':
         return value;
       default:
-        return 'auto';
+        return this.cpuOnlyBuild ? 'float32' : 'auto';
     }
   }
 
@@ -2256,6 +2270,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeTranscriptionDevice(valueRaw: string): TranscriptionDeviceOption {
+    if (this.cpuOnlyBuild) {
+      return 'cpu';
+    }
     const value = (valueRaw ?? '').trim().toLowerCase();
     if (value === 'cpu') {
       return 'cpu';
@@ -2264,6 +2281,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeTranscriptionDeviceForEstimate(valueRaw: string): 'cuda' | 'cpu' {
+    if (this.cpuOnlyBuild) {
+      return 'cpu';
+    }
     const value = (valueRaw ?? '').trim().toLowerCase();
     if (value === 'cpu') {
       return 'cpu';
@@ -3015,7 +3035,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.ensureProgressListener();
     this.startRunningTicker();
     this.startSmoothProgress();
-    const shouldAutoProofread = this.continueProofreadAfterTranscription();
+    const shouldAutoProofread = this.aiProofreadBuild && this.continueProofreadAfterTranscription();
     let autoEntityCheckAfterTranscription = false;
 
     try {
@@ -3125,7 +3145,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.runningStepTotal.set(0);
       this.runningComputeType.set('');
       this.parallelDiarizationStatus.set('');
-      if (shouldAutoProofread || (!this.diarization() || this.parallelMode() === 'fast')) {
+      if (this.aiProofreadBuild && (shouldAutoProofread || !this.diarization() || this.parallelMode() === 'fast')) {
         await this.startAutoLlmProofread();
       }
       this.dismissProgressSnackbar();
@@ -4726,7 +4746,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return '文字起こし（要設定）';
     }
     if (this.isTranscriptionTabDisabled()) {
-      return '文字起こし（要GPU設定）';
+      return this.cpuOnlyBuild ? '文字起こし（要設定）' : '文字起こし（要GPU設定）';
     }
     return '文字起こし';
   }
@@ -4818,6 +4838,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.cudaAvailable.set(result.cudaAvailable);
         this.rocmAvailable.set(result.rocmAvailable);
         if (result.buildVariant === 'rocm') this.buildVariant.set('rocm');
+        if (result.buildVariant === 'cpu') this.buildVariant.set('cpu');
         // 明示的に true のときだけ有効化（欠落・false はフェイルクローズで無効のまま）
         this.localLlmAppsEnabled.set(result.localLlmAppsEnabled === true);
         // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
@@ -4879,7 +4900,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   /** 起動時に、バックエンドのマーカー（真実）と 12B 導入状態をフロントへ同期する。CUDA版のみ。 */
   private async initProofreadModelTier(): Promise<void> {
-    if (!this.isTauriRuntime() || this.editorOnlyBuild) return;
+    if (!this.isTauriRuntime() || !this.aiProofreadBuild) return;
     try {
       const tier = await invoke<string>('get_proofread_model_tier');
       this.ngZone.run(() => {
@@ -6040,14 +6061,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.isTauriRuntime()) {
       this.editorVoiceInputPackStatus.set({
         installed: false,
-        cpuBackendRequired: this.editorOnlyBuild,
+        cpuBackendRequired: this.cpuVoiceInputBuild,
         cpuBackend: false,
         cpuBackendExpectedPath: '',
         gemmaGguf: false,
         gemmaGgufExpectedPath: '',
         mmprojGguf: false,
         mmprojGgufExpectedPath: '',
-        ffmpegRequired: this.editorOnlyBuild,
+        ffmpegRequired: this.cpuVoiceInputBuild,
         ffmpeg: false,
         ffmpegExpectedPath: '',
       });
@@ -6069,7 +6090,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async checkEditorInstalledMemory(): Promise<void> {
-    if (!this.editorOnlyBuild || !this.isTauriRuntime()) {
+    if (!this.cpuVoiceInputBuild || !this.isTauriRuntime()) {
       this.editorInstalledMemoryBytes.set(null);
       this.editorInstalledMemoryChecked.set(true);
       return;
@@ -6098,7 +6119,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async installEditorVoiceInputPack(): Promise<void> {
     if (this.editorVoiceInputPackInstalling()) return;
-    if (this.editorOnlyBuild
+    if (this.cpuVoiceInputBuild
       && this.editorVoiceInputMemoryTier() === 'low'
       && !this.editorLowMemoryVoiceInputOptIn()) {
       this.openConfirmDialog({
@@ -6116,7 +6137,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   enableEditorVoiceInputForLowMemory(): void {
-    if (!this.editorOnlyBuild || this.editorVoiceInputMemoryTier() !== 'low' || this.editorLowMemoryVoiceInputOptIn()) {
+    if (!this.cpuVoiceInputBuild || this.editorVoiceInputMemoryTier() !== 'low' || this.editorLowMemoryVoiceInputOptIn()) {
       return;
     }
     this.openConfirmDialog({
@@ -6157,7 +6178,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private loadEditorLowMemoryVoiceInputOptIn(): void {
-    if (!this.editorOnlyBuild) return;
+    if (!this.cpuVoiceInputBuild) return;
     try {
       this.editorLowMemoryVoiceInputOptIn.set(
         window.localStorage.getItem(this.editorLowMemoryVoiceInputOptInStorageKey) === '1'
@@ -6179,7 +6200,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   async devDeleteEditorVoiceInputPack(): Promise<void> {
     if (!this.editorVoiceInputDevControlsVisible() || this.editorVoiceInputPackDeleting()) return;
     const ok = window.confirm(
-      this.editorOnlyBuild
+      this.cpuVoiceInputBuild
         ? 'llama.cpp CPU バックエンドと mmproj、ダウンロード済み ffmpeg を削除します。Gemma 4 E4B 本体GGUFは削除しません。'
         : 'mmprojを削除します。Gemma 4 E4B 本体GGUFは削除しません。'
     );
@@ -6338,7 +6359,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await setupTask;
 
       // GPU バックエンドのインストール（local_gguf モードかつ未インストールの場合）
-      if (this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.llmBackend) {
+      if (this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.llmBackend) {
         // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
         // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
@@ -7832,7 +7853,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return '区間の聞き直しを使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
     }
     if (!this.segmentRetranscribeSupported()) {
-      return this.editorOnlyBuild
+      return this.cpuVoiceInputBuild
         ? '区間の聞き直しに必要な ffmpeg が未導入です。設定タブの「音声入力パック」からダウンロードしてください。'
         : 'この構成では区間の聞き直しを利用できません。';
     }

@@ -5686,7 +5686,7 @@ async fn check_transcription_runtime_support(
 fn check_transcription_runtime_support_blocking(
     app: AppHandle,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
-    if should_emulate_no_cuda() {
+    if should_emulate_no_cuda() && !is_cpu_only_build(&app) {
         return Ok(TranscriptionRuntimeStatusResponse {
             available: false,
             reason:
@@ -5719,6 +5719,35 @@ fn check_transcription_runtime_support_blocking(
 
     let default_python_bin = resolve_default_python_bin();
     let python_bin = resolve_diarization_python_bin(&app, &default_python_bin);
+
+    if is_cpu_only_build(&app) {
+        let mut cmd = Command::new(&python_bin);
+        apply_windows_no_window(&mut cmd);
+        cmd.env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .arg("-c")
+            .arg("import ctranslate2, torch, pyannote.audio; print('ok')")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = cmd.output().map_err(|e| {
+            format!("CPU ランタイム確認の実行に失敗しました (python={}): {e}", python_bin)
+        })?;
+        if output.status.success() {
+            return Ok(TranscriptionRuntimeStatusResponse {
+                available: true,
+                reason: "CPU 推論ランタイムが利用可能です。".to_string(),
+            });
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Ok(TranscriptionRuntimeStatusResponse {
+            available: false,
+            reason: if stderr.is_empty() {
+                "CPU 推論ランタイムが未セットアップです。".to_string()
+            } else {
+                format!("CPU 推論ランタイムの確認でエラーが発生しました: {stderr}")
+            },
+        });
+    }
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
@@ -6070,8 +6099,12 @@ fn editor_voice_mmproj_candidate_paths(app: &AppHandle) -> Vec<PathBuf> {
     vec![gemma_mmproj_gguf_path(&dir)]
 }
 
+fn is_cpu_only_build(app: &AppHandle) -> bool {
+    app.config().identifier.contains("lott-cpu")
+}
+
 fn editor_voice_input_allowed(app: &AppHandle) -> bool {
-    app.config().identifier.contains("editor")
+    app.config().identifier.contains("editor") || is_cpu_only_build(app)
 }
 
 fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInputPackStatus {
@@ -7065,7 +7098,9 @@ fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
         .unwrap_or(false);
     let rocm_available = rocm_kfd || rocm_smi_ok;
 
-    let build_variant = if app.config().identifier.contains("amd") {
+    let build_variant = if is_cpu_only_build(&app) {
+        "cpu"
+    } else if app.config().identifier.contains("amd") {
         "rocm"
     } else {
         "cuda"
@@ -9126,11 +9161,15 @@ fn run_diarization_blocking(
     }
 
     let speaker_count = request.speaker_count.unwrap_or(2).clamp(1, 5);
-    let requested_device = request
-        .device
-        .unwrap_or_else(|| "cuda".to_string())
-        .trim()
-        .to_lowercase();
+    let requested_device = if is_cpu_only_build(&app) {
+        "cpu".to_string()
+    } else {
+        request
+            .device
+            .unwrap_or_else(|| "cuda".to_string())
+            .trim()
+            .to_lowercase()
+    };
     let requested_device = match requested_device.as_str() {
         "cuda" | "cpu" => requested_device,
         _ => {
@@ -9333,9 +9372,17 @@ fn run_transcription_blocking(
     let requested_compute_type = request
         .compute_type
         .as_deref()
-        .unwrap_or("auto")
+        .unwrap_or(if is_cpu_only_build(&app) {
+            "float32"
+        } else {
+            "auto"
+        })
         .to_lowercase();
-    let requested_device = request.device.as_deref().unwrap_or("cuda").to_lowercase();
+    let requested_device = if is_cpu_only_build(&app) {
+        "cpu".to_string()
+    } else {
+        request.device.as_deref().unwrap_or("cuda").to_lowercase()
+    };
     let transcription_device = match requested_device.as_str() {
         "cuda" | "cpu" => requested_device,
         _ => {
@@ -11800,7 +11847,13 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
         let python_bin = get_python_bin(_app);
         let script_path = resolve_setup_venv_script_path(_app)?;
         let req_path = resolve_requirements_runtime_path(_app)?;
-        let variant = if _app.config().identifier.contains("amd") { "rocm" } else { "cuda" };
+        let variant = if is_cpu_only_build(_app) {
+            "cpu"
+        } else if _app.config().identifier.contains("amd") {
+            "rocm"
+        } else {
+            "cuda"
+        };
         let mut cmd = Command::new(&python_bin);
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
@@ -11834,11 +11887,14 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
 
         let mut cmd = Command::new(&bundled_python);
         apply_windows_no_window(&mut cmd);
+        let variant = if is_cpu_only_build(_app) { "cpu" } else { "cuda" };
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .args([
                 script_path.to_str().unwrap_or(""),
                 req_path.to_str().unwrap_or(""),
+                "--variant",
+                variant,
             ]);
 
         run_venv_setup_streaming(_app, &mut cmd)
@@ -11942,6 +11998,12 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
 
     // 話者分離モデルへの認証が終わった時点で消去する。後続のモデル取得には不要。
     hf_token.clear();
+
+    // CPUお試し版の基本セットアップは文字起こし・話者分離まで。
+    // Gemma は音声入力パックを明示的に導入した場合だけ取得する。
+    if is_cpu_only_build(&app) {
+        return Ok(all_ok);
+    }
 
     // 3. Gemma 4 E4B GGUF + MTP draft model
     let (gemma_ok, _) = get_gemma_gguf_info(&app);

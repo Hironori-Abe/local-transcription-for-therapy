@@ -1,0 +1,37 @@
+{
+  "productName": "Local Transcription for Therapy (CPU)",
+  "identifier": "net.gakkousya.lott-cpu",
+  "app": {
+    "windows": [
+      {
+        "title": "Local Transcription for Therapy (CPU)",
+        "width": 1024,
+        "height": 820,
+        "maximized": true,
+        "resizable": true
+      }
+    ]
+  },
+  "build": {
+    "beforeBuildCommand": "npm --prefix frontend run build -- --configuration cpuProduction"
+  },
+  "bundle": {
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "../python_sidecar/transcribe_cli.py",
+      "../python_sidecar/diarize_cli.py",
+      "../python_sidecar/detect_env_cli.py",
+      "../python_sidecar/download_whisper_model_cli.py",
+      "../python_sidecar/download_diarization_model_cli.py",
+      "../python_sidecar/encrypt_office_cli.py",
+      "../python_sidecar/prompt_templates",
+      "../python_sidecar/setup_venv_cli.py",
+      "../python_sidecar/requirements-runtime.txt",
+      "resources/proofread/punctuation_rules",
+      "resources/ffmpeg"
+    ]
+  }
+}

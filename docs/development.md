@@ -48,6 +48,33 @@ bash scripts/run-dev.sh
 CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再現できます。
 詳細は [dev-runtime-emulation.md](dev-runtime-emulation.md) を参照してください。
 
+#### CPU版の起動時警告
+
+デバッグビルドでは、環境変数 `LOTT_DEV_CPU_STARTUP_SCENARIO` に次の値を指定すると、実際のPCスペックに関係なくCPU版の起動時ダイアログを再現できます。通常版の開発起動でも有効ですが、リリースビルドではこの環境変数を無視します。
+
+| 値 | 再現する状態 |
+| --- | --- |
+| `memory` | RAM 8GBとしてメモリ不足のみを表示し、OK後に終了 |
+| `avx2` | AVX2非対応のみを表示し、OK後に終了 |
+| `threads` | 4論理スレッドとしてスレッド不足のみを表示し、OK後に終了 |
+| `all` | 上記3項目をすべて不足として表示し、OK後に終了 |
+| `notice` | 最低要件を満たす場合のお試し用注意を表示し、OK後に利用可能 |
+
+Ubuntu / Linux:
+
+```sh
+LOTT_DEV_CPU_STARTUP_SCENARIO=memory bash scripts/run-dev.sh
+```
+
+Windows:
+
+```bat
+set LOTT_DEV_CPU_STARTUP_SCENARIO=memory
+scripts\run-dev.bat
+```
+
+環境変数を設定しなければ、CPU版では実際の搭載メモリ・AVX2対応・論理スレッド数を判定し、通常版の開発起動ではこのダイアログを表示しません。
+
 ## ディレクトリ構成
 
 - `frontend/` Angular UI

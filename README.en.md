@@ -71,6 +71,7 @@ LoTT CPU provides fully local transcription on PCs without a supported GPU. It i
 - 16 GB RAM is the practical minimum for transcription, diarization, and simple punctuation. Running many other applications at the same time may cause slowdowns or out-of-memory failures.
 - Voice input and segment re-listen also load the Gemma 4 E4B model and audio mmproj, so 24 GB RAM or more is recommended. On a 16 GB system, close other applications before using these features.
 - Systems with less than 16 GB RAM are unsupported because heavy swapping or out-of-memory failures are likely.
+- At startup, the CPU edition checks its minimum requirements (at least 16 GB RAM, AVX2, and eight logical threads). If a requirement is not met, it identifies the shortage and exits. On supported systems, it still displays the trial-use and processing-time notice at every launch.
 - Expected processing time is approximately 1.5–2.5 times the audio duration, but slower CPUs or difficult audio may take longer. On the development PC (Ryzen AI 9 HX 370, 12 cores / 24 threads), transcription with CPU `float32` plus diarization took about 19 minutes 16 seconds for 11 minutes 43 seconds of audio, or 1.64 times the audio duration.
 
 ## Installation and Initial Setup

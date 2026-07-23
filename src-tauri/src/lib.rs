@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 #[cfg(target_os = "windows")]
@@ -3305,16 +3306,200 @@ fn get_voice_input_server_status(state: tauri::State<'_, LlmServer>) -> bool {
 
 #[tauri::command]
 fn get_installed_memory_bytes() -> Option<u64> {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
-        let mut total_kib = 0u64;
-        let ok = unsafe { GetPhysicallyInstalledSystemMemory(&mut total_kib) };
-        if ok != 0 {
-            return total_kib.checked_mul(1024);
-        }
+    installed_memory_bytes()
+}
+
+#[cfg(target_os = "windows")]
+fn installed_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::GetPhysicallyInstalledSystemMemory;
+    let mut total_kib = 0u64;
+    let ok = unsafe { GetPhysicallyInstalledSystemMemory(&mut total_kib) };
+    if ok != 0 {
+        return total_kib.checked_mul(1024);
     }
     None
+}
+
+#[cfg(target_os = "linux")]
+fn installed_memory_bytes() -> Option<u64> {
+    // /proc/meminfo の MemTotal は予約領域を除いた値なので、搭載量として一般的な
+    // GiB 単位へ切り上げる（16GB機を15.xGiBとして誤判定しないため）。
+    let meminfo = fs::read_to_string("/proc/meminfo").ok()?;
+    let total_kib = meminfo.lines().find_map(|line| {
+        let value = line.strip_prefix("MemTotal:")?.trim();
+        value.split_whitespace().next()?.parse::<u64>().ok()
+    })?;
+    let bytes = total_kib.checked_mul(1024)?;
+    let gib = 1024_u64.pow(3);
+    bytes.checked_add(gib - 1).map(|value| (value / gib) * gib)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn installed_memory_bytes() -> Option<u64> {
+    None
+}
+
+const CPU_MINIMUM_MEMORY_BYTES: u64 = 16 * 1024_u64.pow(3);
+const CPU_MINIMUM_LOGICAL_THREADS: usize = 8;
+
+#[derive(Debug, PartialEq)]
+enum CpuStartupRequirementFailure {
+    Memory { installed_bytes: u64 },
+    Avx2,
+    LogicalThreads { detected: usize },
+}
+
+#[cfg(any(debug_assertions, test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DevCpuStartupScenario {
+    Memory,
+    Avx2,
+    Threads,
+    All,
+    Notice,
+}
+
+#[cfg(any(debug_assertions, test))]
+fn parse_dev_cpu_startup_scenario(value: &str) -> Option<DevCpuStartupScenario> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "memory" => Some(DevCpuStartupScenario::Memory),
+        "avx2" => Some(DevCpuStartupScenario::Avx2),
+        "threads" => Some(DevCpuStartupScenario::Threads),
+        "all" => Some(DevCpuStartupScenario::All),
+        "notice" => Some(DevCpuStartupScenario::Notice),
+        _ => None,
+    }
+}
+
+fn dev_cpu_startup_scenario_inputs_from_env() -> Option<(Option<u64>, bool, usize)> {
+    #[cfg(debug_assertions)]
+    {
+        env::var("LOTT_DEV_CPU_STARTUP_SCENARIO")
+            .ok()
+            .and_then(|value| parse_dev_cpu_startup_scenario(&value))
+            .map(dev_cpu_startup_scenario_inputs)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+#[cfg(any(debug_assertions, test))]
+fn dev_cpu_startup_scenario_inputs(
+    scenario: DevCpuStartupScenario,
+) -> (Option<u64>, bool, usize) {
+    let supported_memory = Some(CPU_MINIMUM_MEMORY_BYTES);
+    match scenario {
+        DevCpuStartupScenario::Memory => (Some(8 * 1024_u64.pow(3)), true, 8),
+        DevCpuStartupScenario::Avx2 => (supported_memory, false, 8),
+        DevCpuStartupScenario::Threads => (supported_memory, true, 4),
+        DevCpuStartupScenario::All => (Some(8 * 1024_u64.pow(3)), false, 4),
+        DevCpuStartupScenario::Notice => (supported_memory, true, 8),
+    }
+}
+
+fn cpu_avx2_supported() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        std::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
+fn cpu_startup_requirement_failures(
+    installed_memory: Option<u64>,
+    avx2_supported: bool,
+    logical_threads: usize,
+) -> Vec<CpuStartupRequirementFailure> {
+    let mut failures = Vec::new();
+    if let Some(installed_bytes) = installed_memory {
+        if installed_bytes < CPU_MINIMUM_MEMORY_BYTES {
+            failures.push(CpuStartupRequirementFailure::Memory { installed_bytes });
+        }
+    }
+    if !avx2_supported {
+        failures.push(CpuStartupRequirementFailure::Avx2);
+    }
+    if logical_threads < CPU_MINIMUM_LOGICAL_THREADS {
+        failures.push(CpuStartupRequirementFailure::LogicalThreads {
+            detected: logical_threads,
+        });
+    }
+    failures
+}
+
+fn show_cpu_startup_dialog(app: &tauri::App, window: &tauri::WebviewWindow) {
+    let dev_inputs = dev_cpu_startup_scenario_inputs_from_env();
+    if !is_cpu_only_build(app.handle()) && dev_inputs.is_none() {
+        return;
+    }
+
+    let real_inputs = (
+        installed_memory_bytes(),
+        cpu_avx2_supported(),
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1),
+    );
+    let (installed_memory, avx2_supported, logical_threads) = dev_inputs.unwrap_or(real_inputs);
+    let failures =
+        cpu_startup_requirement_failures(installed_memory, avx2_supported, logical_threads);
+
+    if failures.is_empty() {
+        app.dialog()
+            .message(
+                "CPU版は挙動確認などのお試し用です。\n\
+このバージョンでは一連の作業のために、音声ファイルの1.5〜2.5倍程度の処理時間がかかります。\n\
+頻繁・継続的な利用には、GPUを利用するバージョンを使うことをお勧めします。",
+            )
+            .title("CPU版について")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCustom("OK".to_string()))
+            .parent(window)
+            .show(|_| {});
+        return;
+    }
+
+    let memory_is_insufficient = failures
+        .iter()
+        .any(|failure| matches!(failure, CpuStartupRequirementFailure::Memory { .. }));
+    let details = failures
+        .iter()
+        .map(|failure| match failure {
+            CpuStartupRequirementFailure::Memory { installed_bytes } => format!(
+                "・搭載メモリが16GB未満（検出値: {:.1}GB）",
+                *installed_bytes as f64 / 1024_f64.powi(3)
+            ),
+            CpuStartupRequirementFailure::Avx2 => "・CPUがAVX2に対応していません".to_string(),
+            CpuStartupRequirementFailure::LogicalThreads { detected } => {
+                format!("・CPUの論理スレッド数が8未満（検出値: {detected}）")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let opening = if memory_is_insufficient {
+        "搭載されているメモリが不足しています。"
+    } else {
+        "このPCはCPU版の最低要件を満たしていません。"
+    };
+    let message = format!(
+        "{opening}\n\n\
+本アプリの最低要件は、メモリ16GB以上、AVX2対応CPU（4コア／8スレッド以上）です。\n\n\
+不足している項目:\n{details}\n\n\
+OKを押すとアプリを終了します。"
+    );
+    let app_handle = app.handle().clone();
+    app.dialog()
+        .message(message)
+        .title("動作要件を満たしていません")
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::OkCustom("OK".to_string()))
+        .parent(window)
+        .show(move |_| app_handle.exit(0));
 }
 
 fn generate_editor_voice_input_candidates_blocking(
@@ -8810,6 +8995,94 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cpu_startup_requirements_accept_exact_minimum() {
+        assert!(cpu_startup_requirement_failures(
+            Some(CPU_MINIMUM_MEMORY_BYTES),
+            true,
+            CPU_MINIMUM_LOGICAL_THREADS,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn cpu_startup_requirements_report_each_fundamental_shortage() {
+        let failures = cpu_startup_requirement_failures(
+            Some(CPU_MINIMUM_MEMORY_BYTES - 1),
+            false,
+            CPU_MINIMUM_LOGICAL_THREADS - 1,
+        );
+        assert_eq!(
+            failures,
+            vec![
+                CpuStartupRequirementFailure::Memory {
+                    installed_bytes: CPU_MINIMUM_MEMORY_BYTES - 1,
+                },
+                CpuStartupRequirementFailure::Avx2,
+                CpuStartupRequirementFailure::LogicalThreads {
+                    detected: CPU_MINIMUM_LOGICAL_THREADS - 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cpu_startup_requirements_do_not_block_when_memory_cannot_be_read() {
+        assert!(cpu_startup_requirement_failures(
+            None,
+            true,
+            CPU_MINIMUM_LOGICAL_THREADS,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn dev_cpu_startup_scenario_parser_accepts_documented_values() {
+        assert_eq!(
+            parse_dev_cpu_startup_scenario(" memory "),
+            Some(DevCpuStartupScenario::Memory)
+        );
+        assert_eq!(
+            parse_dev_cpu_startup_scenario("AVX2"),
+            Some(DevCpuStartupScenario::Avx2)
+        );
+        assert_eq!(
+            parse_dev_cpu_startup_scenario("threads"),
+            Some(DevCpuStartupScenario::Threads)
+        );
+        assert_eq!(
+            parse_dev_cpu_startup_scenario("all"),
+            Some(DevCpuStartupScenario::All)
+        );
+        assert_eq!(
+            parse_dev_cpu_startup_scenario("notice"),
+            Some(DevCpuStartupScenario::Notice)
+        );
+        assert_eq!(parse_dev_cpu_startup_scenario("unknown"), None);
+    }
+
+    #[test]
+    fn dev_cpu_startup_scenarios_produce_expected_failures() {
+        let memory = dev_cpu_startup_scenario_inputs(DevCpuStartupScenario::Memory);
+        assert_eq!(
+            cpu_startup_requirement_failures(memory.0, memory.1, memory.2),
+            vec![CpuStartupRequirementFailure::Memory {
+                installed_bytes: 8 * 1024_u64.pow(3),
+            }]
+        );
+
+        let all = dev_cpu_startup_scenario_inputs(DevCpuStartupScenario::All);
+        assert_eq!(
+            cpu_startup_requirement_failures(all.0, all.1, all.2).len(),
+            3
+        );
+
+        let notice = dev_cpu_startup_scenario_inputs(DevCpuStartupScenario::Notice);
+        assert!(
+            cpu_startup_requirement_failures(notice.0, notice.1, notice.2).is_empty()
+        );
+    }
+
+    #[test]
     fn localhost_openai_url_is_normalized_to_literal_loopback() {
         assert_eq!(
             validate_local_openai_base_url("http://localhost:1234/v1").unwrap(),
@@ -12544,6 +12817,7 @@ pub fn run() {
                         }
                     }
                 });
+                show_cpu_startup_dialog(app, &window);
             }
             Ok(())
         })

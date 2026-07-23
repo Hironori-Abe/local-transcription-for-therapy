@@ -11,6 +11,7 @@
 | ファイル | 対象 | 備考 |
 | --- | --- | --- |
 | `LoTT-vX.Y.Z-windows-x64-cuda-setup.exe` | NVIDIA GPU (CUDA 12.x) | 主配布・安定版 |
+| `LoTT-vX.Y.Z-windows-x64-cpu-setup.exe` | GPU 不要 | 動作確認・試用向け（常用非推奨） |
 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | 校正中心の軽量版（文字起こし・話者分離なし） |
 | `SHA256SUMS.txt` | — | 各ファイルの SHA-256 チェックサム |
 
@@ -68,3 +69,5 @@ sha256sum -c SHA256SUMS.txt
 
 - 本体: Apache-2.0（同梱の `LICENSE` / `NOTICE` 参照）
 - 第三者ライセンス: 同梱の `THIRD_PARTY_LICENSES.md` / `licenses/` 参照
+
+> **CPU版について:** CPU版は動作確認・試用向けです。頻繁または継続的に利用する場合は、対応するGPU版の利用を推奨します。ダウンロードするファイル名と対象環境をご確認ください。

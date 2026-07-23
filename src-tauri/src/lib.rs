@@ -3209,7 +3209,7 @@ fn run_editor_voice_audio_llm_blocking(
     max_candidates: usize,
 ) -> Result<EditorVoiceInputResponse, String> {
     let result = (|| {
-        // Editor版: 従来どおり CPU 直起動。Full版（CUDA/AMD）: GPU 直起動。
+        // Editor版・CPU版: CPU 直起動。Full版（CUDA/AMD）: GPU 直起動。
         // リクエスト構築・応答解析・起動済みサーバーの再利用はビルドを問わず共通。
         let port = if editor_voice_input_allowed(app) {
             start_editor_voice_input_server_blocking(
@@ -4607,7 +4607,7 @@ struct AllSetupStatus {
 #[serde(rename_all = "camelCase")]
 struct EditorVoiceInputPackStatus {
     installed: bool,
-    // Editor版のみ true。CPU バックエンド（llama.cpp CPU ビルド）の導入が installed 判定に
+    // Editor版・CPU版では true。CPU バックエンド（llama.cpp CPU ビルド）の導入が installed 判定に
     // 必要かどうかをフロントに伝える（Full版は GPU 直起動のため CPU バックエンド不要）。
     cpu_backend_required: bool,
     cpu_backend: bool,
@@ -4616,7 +4616,7 @@ struct EditorVoiceInputPackStatus {
     gemma_gguf_expected_path: String,
     mmproj_gguf: bool,
     mmproj_gguf_expected_path: String,
-    // Editor版のみ true。区間聞き直し用 ffmpeg（LGPL・後付けDL）の導入が
+    // Editor版・CPU版では true。区間聞き直し用 ffmpeg（LGPL・後付けDL）の導入が
     // installed 判定に必要かどうか（Full版は同梱 ffmpeg があるため不要）。
     ffmpeg_required: bool,
     ffmpeg: bool,
@@ -6296,8 +6296,8 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
     let (cpu_backend, cpu_backend_expected_path) = get_editor_voice_cpu_backend_info(app);
     let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
     let (mmproj_gguf, mmproj_gguf_expected_path) = get_gemma_mmproj_gguf_info(app);
-    // Editor版: 従来どおり CPU バックエンドも installed 判定に含める。区間聞き直し用の
-    // ffmpeg（後付けDL）も Editor版のみ判定に含める。
+    // Editor版・CPU版: CPU バックエンドと区間聞き直し用の
+    // ffmpeg（後付けDL）も installed 判定に含める。
     // Full版（CUDA/AMD）: 音声入力は GPU 直起動のみ・ffmpeg は同梱のため、
     // 本体 GGUF + mmproj の有無だけで判定する。
     let cpu_backend_required = editor_voice_input_allowed(app);
@@ -7035,7 +7035,7 @@ fn install_editor_voice_ffmpeg_blocking(app: &AppHandle) -> Result<(), String> {
 }
 
 fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, String> {
-    // Editor版のみ CPU バックエンド（llama.cpp CPU ビルド）と区間聞き直し用 ffmpeg が必要。
+    // Editor版・CPU版は CPU バックエンド（llama.cpp CPU ビルド）と区間聞き直し用 ffmpeg が必要。
     // Full版（CUDA/AMD）は音声入力も GPU 直起動・ffmpeg は同梱のため、
     // これらの導入ステップ自体をスキップする（進捗イベントも出さない）。
     if editor_voice_input_allowed(&app) {
@@ -7148,7 +7148,7 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
     let mut errors = Vec::new();
 
     // Full版（CUDA/AMD）は音声入力もGPU直起動のためCPUバックエンドを持たず、ffmpegも同梱。
-    // Editor版のみCPUバックエンドとDL済みffmpegの削除対象がある。
+    // Editor版・CPU版にはCPUバックエンドとDL済みffmpegの削除対象がある。
     if editor_voice_input_allowed(&app) {
         let cpu_dir = editor_voice_cpu_backend_dir(&app);
         delete_dir_recording(&cpu_dir, &mut deleted, &mut not_found, &mut errors);
@@ -7365,6 +7365,15 @@ fn detect_compute_env_blocking(app: AppHandle) -> serde_json::Value {
         }
     }
     result
+}
+
+#[tauri::command]
+fn check_whisper_model_installed(app: AppHandle, model_name: String) -> bool {
+    let hf_hub_cache = get_app_hf_hub_cache(&app);
+    match model_name.as_str() {
+        "large-v3" => check_whisper_large_v3_cached_at(&hf_hub_cache),
+        _ => check_whisper_turbo_cached_at(&hf_hub_cache),
+    }
 }
 
 #[tauri::command]
@@ -12854,6 +12863,7 @@ pub fn run() {
             check_diarization_model_status,
             check_gpu_availability,
             detect_compute_env,
+            check_whisper_model_installed,
             get_dev_emulation_status,
             get_llm_server_status,
             get_llm_server_port,

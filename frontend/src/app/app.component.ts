@@ -4783,8 +4783,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.runtimeCheckDone.set(false);
     void this.loadAppVersion();
     await this.probeAndPersistDevEmulationState();
-    void this.checkGpuAvailability();
-    void this.loadComputeEnv();
+    if (this.cpuOnlyBuild) {
+      void this.loadLargeV3InstallStatus();
+    } else {
+      void this.checkGpuAvailability();
+      void this.loadComputeEnv();
+    }
     await this.checkTranscriptionRuntimeSupport();
     void this.ensureSetupProgressListener();
     await this.checkAllSetupStatus();
@@ -4797,17 +4801,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // 確実に走らせる。これをしないと spinner → タブ表示の切替が描画されず、
     // ウィンドウ再フォーカス等で CD が走るまで古い（未確定の）画面が残る。
     this.ngZone.run(() => this.activeTabIndex.set(0));
-    await this.loadProofreadSystemPrompt();
-    await this.loadOverallProofreadSystemPrompt();
+    if (this.aiProofreadBuild) {
+      await this.loadProofreadSystemPrompt();
+      await this.loadOverallProofreadSystemPrompt();
+    }
     this.ngZone.run(() => this.runtimeCheckDone.set(true));
     // ここまでで GPU/セットアップ判定の signal は確定している。eventCoalescing 構成では
     // 変更検知がフレーム単位にまとめられ、ウィンドウが前面化されるまで描画が遅延しうる
     // （GPU 未検出バナーが古いまま残り、最前面化で初めて消える）。確定値を即座に反映させる
     // ため、同期的な変更検知を一度だけ強制する。
     this.appRef.tick();
-    void this.initDefaultLlmModelPath();
-    void this.initProofreadModelTier();
-    void this.refreshLlmUiState();
+    if (this.aiProofreadBuild) {
+      void this.initDefaultLlmModelPath();
+      void this.initProofreadModelTier();
+      void this.refreshLlmUiState();
+    }
   }
 
   /**
@@ -4873,6 +4881,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       });
     } catch {
       // 取得失敗時は既存の状態を維持
+    }
+  }
+
+  private async loadLargeV3InstallStatus(): Promise<void> {
+    if (!this.isTauriRuntime()) return;
+    try {
+      const installed = await invoke<boolean>('check_whisper_model_installed', { modelName: 'large-v3' });
+      this.ngZone.run(() => this.largeV3Installed.set(installed));
+    } catch {
+      // 取得失敗時は未確認の状態を維持
     }
   }
 

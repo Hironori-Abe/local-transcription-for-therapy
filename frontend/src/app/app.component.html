@@ -45,7 +45,7 @@
       <div class="tab-content">
         <!-- GPU未検出バナー（CUDA/ROCm未インストール時） -->
         <!-- 開発用プレビュー: OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda で表示 -->
-        <div *ngIf="isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
+        <div *ngIf="!cpuOnlyBuild && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
             <span class="gpu-setup-title">GPU（CUDA / ROCm）が検出されませんでした</span>
@@ -455,7 +455,7 @@
               </div>
             </div>
 
-            <div *ngIf="gpuSetupHint" class="gpu-hint-block">
+            <div *ngIf="!cpuOnlyBuild && gpuSetupHint" class="gpu-hint-block">
               <p class="gpu-hint-title">GPU設定ヒント</p>
               <pre class="gpu-hint">{{ gpuSetupHint }}</pre>
             </div>
@@ -534,7 +534,7 @@
                     <mat-option value="whisper_turbo">Whisper turbo</mat-option>
                     <mat-option value="whisper_large_v3">Whisper large-v3</mat-option>
                     <mat-option value="diarization">話者分離モデル</mat-option>
-                    <mat-option value="llm">LLMモデル</mat-option>
+                    <mat-option *ngIf="aiProofreadBuild" value="llm">LLMモデル</mat-option>
                     <mat-option value="all">すべて</mat-option>
                   </mat-select>
                 </mat-form-field>
@@ -590,30 +590,35 @@
                     <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
                   </div>
                 </div>
-                <ng-container *ngIf="computeEnvInfo(); else envLoading">
-                  <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
-                    [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
-                    [class.backend-none]="computeEnvInfo()!.backendType === 'none'">
-                    {{ computeEnvBackendLabel() }}
-                  </span> -->
-                  <mat-form-field *ngIf="computeEnvInfo()!.devices.length > 0" appearance="outline"
-                    class="settings-llm-field settings-field-device">
-                    <mat-label>使用デバイス</mat-label>
-                    <mat-select [disabled]="running() || diarizationRunning()" [value]="selectedHipDeviceIndex()"
-                      (valueChange)="onHipDeviceChange($event)">
-                      <mat-option [value]="-1">自動（デフォルト）</mat-option>
-                      <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
-                        {{ gpuDeviceLabel(d) }}
-                      </mat-option>
-                    </mat-select>
-                  </mat-form-field>
-                  <span *ngIf="computeEnvInfo()!.devices.length === 0" class="compute-env-no-dev">
-                    GPU デバイス未検出
-                  </span>
-                  <div *ngIf="selectedGpuAsrWarning()" class="gpu-asr-warning">
-                    <mat-icon class="material-symbols-outlined">warning</mat-icon>
-                    {{ selectedGpuAsrWarning() }}
-                  </div>
+                <ng-container *ngIf="!cpuOnlyBuild">
+                  <ng-container *ngIf="computeEnvInfo(); else envLoading">
+                    <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
+                      [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
+                      [class.backend-none]="computeEnvInfo()!.backendType === 'none'">
+                      {{ computeEnvBackendLabel() }}
+                    </span> -->
+                    <mat-form-field *ngIf="computeEnvInfo()!.devices.length > 0" appearance="outline"
+                      class="settings-llm-field settings-field-device">
+                      <mat-label>使用デバイス</mat-label>
+                      <mat-select [disabled]="running() || diarizationRunning()" [value]="selectedHipDeviceIndex()"
+                        (valueChange)="onHipDeviceChange($event)">
+                        <mat-option [value]="-1">自動（デフォルト）</mat-option>
+                        <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
+                          {{ gpuDeviceLabel(d) }}
+                        </mat-option>
+                      </mat-select>
+                    </mat-form-field>
+                    <span *ngIf="computeEnvInfo()!.devices.length === 0" class="compute-env-no-dev">
+                      GPU デバイス未検出
+                    </span>
+                    <div *ngIf="selectedGpuAsrWarning()" class="gpu-asr-warning">
+                      <mat-icon class="material-symbols-outlined">warning</mat-icon>
+                      {{ selectedGpuAsrWarning() }}
+                    </div>
+                  </ng-container>
+                  <ng-template #envLoading>
+                    <span class="compute-env-no-dev">演算環境を確認中...</span>
+                  </ng-template>
                 </ng-container>
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>対象言語</mat-label>
@@ -624,9 +629,6 @@
                     </mat-option>
                   </mat-select>
                 </mat-form-field>
-                <ng-template #envLoading>
-                  <span class="compute-env-no-dev">演算環境を確認中...</span>
-                </ng-template>
                 <!-- <button mat-icon-button (click)="loadComputeEnv()" aria-label="演算環境を再確認" matTooltip="演算環境を再確認"
                   matTooltipPosition="above">
                   <mat-icon class="material-symbols-outlined">refresh</mat-icon>
@@ -645,7 +647,7 @@
               </div>
             </ng-container>
 
-            <!-- 音声入力パック: 全ビルドで表示。Editor版はCPUバックエンド込み、Full版はGPU直起動のため
+            <!-- 音声入力パック: 全ビルドで表示。Editor版・CPU版はCPUバックエンド込み、Full版はGPU直起動のため
                  mmproj（+未導入ならE4B本体）のみ導入する。 -->
             <ng-container>
               <div class="section-separator"><span>音声入力パック</span></div>

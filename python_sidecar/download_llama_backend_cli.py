@@ -11,7 +11,7 @@ configuration the app's direct-launch and 12B paths already rely on. MIT-license
 this is a setup-time download only (no conversation/audio data is sent anywhere).
 
 Usage:
-    python download_llama_backend_cli.py --backend rocm|vulkan|cpu --dest <dir> [--build b9631]
+    python download_llama_backend_cli.py --backend rocm|vulkan|cpu --dest <dir> [--build bNNNN]
 
 Extracts the archive's top-level `llama-b<N>/` contents (llama-server + lib*.so/.dll) directly
 into <dest>, so the legacy-cache resolver can find the ROCm/Vulkan llama-server unchanged. Prints
@@ -27,10 +27,10 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-# Pinned upstream llama.cpp build. b9631 ships ubuntu-rocm-7.2 / ubuntu-vulkan / ubuntu-x64
-# and the matching win-hip-radeon / win-vulkan assets (verified). Bump in lockstep with the
-# bundled backend version when updating llama.cpp.
+# Pinned upstream llama.cpp builds. AMD ROCm / Vulkan remain on the build validated on the
+# supported AMD paths. CPU follows the NVIDIA bundled engine version.
 DEFAULT_BUILD = "b9631"
+CPU_DEFAULT_BUILD = "b10075"
 REPO = "ggml-org/llama.cpp"
 
 # (backend, os) -> release asset filename template ({b} = build tag, e.g. b9631)
@@ -114,7 +114,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=["rocm", "vulkan", "cpu"])
     ap.add_argument("--dest", required=True)
-    ap.add_argument("--build", default=DEFAULT_BUILD)
+    ap.add_argument("--build")
     args = ap.parse_args()
 
     os_key = _os_key()
@@ -123,10 +123,11 @@ def main() -> int:
         _emit(f"未対応の組み合わせです: backend={args.backend} os={os_key}")
         return 2
 
-    asset = tmpl.format(b=args.build)
-    url = f"https://github.com/{REPO}/releases/download/{args.build}/{asset}"
+    build = args.build or (CPU_DEFAULT_BUILD if args.backend == "cpu" else DEFAULT_BUILD)
+    asset = tmpl.format(b=build)
+    url = f"https://github.com/{REPO}/releases/download/{build}/{asset}"
     dest = Path(args.dest)
-    label = f"{_LABELS[args.backend]} (llama.cpp {args.build})"
+    label = f"{_LABELS[args.backend]} (llama.cpp {build})"
     exe = "llama-server.exe" if os_key == "windows" else "llama-server"
 
     work = Path(tempfile.mkdtemp(prefix="llbk_dl_"))

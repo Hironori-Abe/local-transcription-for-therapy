@@ -1504,8 +1504,9 @@ const GEMMA_MMPROJ_GGUF_FILENAME: &str = "mmproj-BF16.gguf";
 const GEMMA_E4B_HF_REPO: &str = "unsloth/gemma-4-E4B-it-qat-GGUF";
 const GEMMA_E4B_MAIN_APPROX_BYTES: u64 = 4_215_693_760;
 const GEMMA_E4B_MMPROJ_APPROX_BYTES: u64 = 992_000_000;
-const LLAMA_CPP_DEFAULT_BUILD: &str = "b9631";
-const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 120_000_000;
+const LLAMA_CPP_CPU_BUILD: &str = "b10075";
+const LLAMA_CPP_CPU_BUILD_NUMBER: u32 = 10075;
+const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 20_000_000;
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
 const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
 /// 区間聞き直しの切り出し上限秒数。超過分は先頭からこの秒数だけ処理する
@@ -2712,6 +2713,8 @@ fn try_start_llama_server_cpu_audio(
         .arg("1")
         .arg("--host")
         .arg("127.0.0.1")
+        .arg("--cors-origins")
+        .arg("localhost")
         .arg("--port")
         .arg(&port_s)
         .stdout(Stdio::null())
@@ -3453,8 +3456,8 @@ fn show_cpu_startup_dialog(app: &tauri::App, window: &tauri::WebviewWindow) {
         app.dialog()
             .message(
                 "CPU版は挙動確認などのお試し用です。\n\
-このバージョンでは一連の作業のために、音声ファイルの1.5〜2.5倍程度の処理時間がかかります。\n\
-頻繁・継続的な利用には、GPUを利用するバージョンを使うことをお勧めします。",
+このバージョンでは一連の作業のために、音声ファイルの1.5〜2.5倍程度の処理時間がかかります（1時間音声なら1.5〜2.5時間）。\n\
+頻繁・継続的な利用には、GPUバージョンをお勧めします。",
             )
             .title("CPU版について")
             .kind(MessageDialogKind::Warning)
@@ -6251,7 +6254,10 @@ fn get_gemma_mmproj_gguf_info(app: &AppHandle) -> (bool, String) {
 
 fn get_editor_voice_cpu_backend_info(app: &AppHandle) -> (bool, String) {
     if let Some(path) = find_llm_cpu_llama_server(app) {
-        return (true, path);
+        let current = llama_server_build_number(Path::new(&path))
+            .map(|build| build == LLAMA_CPP_CPU_BUILD_NUMBER)
+            .unwrap_or(false);
+        return (current, path);
     }
     let exe = std::env::consts::EXE_SUFFIX;
     let expected = get_llm_engine_cache_dir(app)
@@ -6365,9 +6371,9 @@ fn editor_voice_hf_resolve_url(filename: &str) -> String {
 
 fn llama_cpu_backend_asset_name() -> Result<String, String> {
     if cfg!(target_os = "windows") {
-        Ok(format!("llama-{LLAMA_CPP_DEFAULT_BUILD}-bin-win-cpu-x64.zip"))
+        Ok(format!("llama-{LLAMA_CPP_CPU_BUILD}-bin-win-cpu-x64.zip"))
     } else if cfg!(target_os = "linux") {
-        Ok(format!("llama-{LLAMA_CPP_DEFAULT_BUILD}-bin-ubuntu-x64.tar.gz"))
+        Ok(format!("llama-{LLAMA_CPP_CPU_BUILD}-bin-ubuntu-x64.tar.gz"))
     } else {
         Err("このOSのCPU版 llama.cpp バックエンド取得は未対応です。".to_string())
     }
@@ -6375,8 +6381,29 @@ fn llama_cpu_backend_asset_name() -> Result<String, String> {
 
 fn llama_cpu_backend_url(asset: &str) -> String {
     format!(
-        "https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_DEFAULT_BUILD}/{asset}"
+        "https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_CPU_BUILD}/{asset}"
     )
+}
+
+fn parse_llama_server_build_number(output: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("version:")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|value| value.parse::<u32>().ok())
+    })
+}
+
+fn llama_server_build_number(bin: &Path) -> Option<u32> {
+    let mut cmd = Command::new(bin);
+    apply_windows_no_window(&mut cmd);
+    let output = cmd.arg("--version").output().ok()?;
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_llama_server_build_number(&combined)
 }
 
 fn powershell_single_quoted(value: &str) -> String {
@@ -6750,7 +6777,11 @@ fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), 
 }
 
 fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), String> {
-    if find_llm_cpu_llama_server(app).is_some() {
+    if find_llm_cpu_llama_server(app)
+        .as_deref()
+        .and_then(|path| llama_server_build_number(Path::new(path)))
+        == Some(LLAMA_CPP_CPU_BUILD_NUMBER)
+    {
         emit_voice_input_pack_progress(
             app,
             "voice_cpu_backend",
@@ -6764,6 +6795,10 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
     let cache = get_llm_engine_cache_dir(app)
         .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
     let dest = cache.join("bin").join("llamacpp").join("cpu");
+    let staging_dest = cache
+        .join("bin")
+        .join("llamacpp")
+        .join(format!("cpu-{LLAMA_CPP_CPU_BUILD}.tmp"));
     let downloads = cache.join("downloads");
     let asset = llama_cpu_backend_asset_name()?;
     let archive = downloads.join(&asset);
@@ -6785,9 +6820,32 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
         None,
         Some(LLAMA_CPU_BACKEND_APPROX_BYTES),
     );
-    extract_llama_cpu_backend_archive(&archive, &dest)?;
-    if find_llm_cpu_llama_server(app).is_none() {
-        return Err("展開後に llama-server が見つかりませんでした。".to_string());
+    if staging_dest.exists() {
+        fs::remove_dir_all(&staging_dest)
+            .map_err(|e| format!("CPU バックエンドの一時配置先を削除できませんでした: {e}"))?;
+    }
+    extract_llama_cpu_backend_archive(&archive, &staging_dest)?;
+    let staged_server = staging_dest.join(format!(
+        "llama-server{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let staged_build = llama_server_build_number(&staged_server);
+    if staged_build != Some(LLAMA_CPP_CPU_BUILD_NUMBER) {
+        let _ = fs::remove_dir_all(&staging_dest);
+        let _ = fs::remove_file(&archive);
+        return Err(format!(
+            "CPU バックエンドのバージョン確認に失敗しました（期待: {LLAMA_CPP_CPU_BUILD_NUMBER}, 検出: {staged_build:?}）。"
+        ));
+    }
+    if dest.exists() {
+        fs::remove_dir_all(&dest)
+            .map_err(|e| format!("既存のCPUバックエンドを置き換えられませんでした: {e}"))?;
+    }
+    fs::rename(&staging_dest, &dest)
+        .map_err(|e| format!("CPUバックエンドを配置できませんでした: {e}"))?;
+    let installed_server = dest.join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
+    if llama_server_build_number(&installed_server) != Some(LLAMA_CPP_CPU_BUILD_NUMBER) {
+        return Err("配置後の llama-server バージョン確認に失敗しました。".to_string());
     }
     emit_voice_input_pack_progress(
         app,
@@ -9002,6 +9060,17 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llama_server_build_number_parser_accepts_upstream_output() {
+        assert_eq!(
+            parse_llama_server_build_number(
+                "version: 10075 (76f46ad29)\nbuilt with GNU 11.4.0 for Linux x86_64"
+            ),
+            Some(10075)
+        );
+        assert_eq!(parse_llama_server_build_number("version: unknown"), None);
+    }
 
     #[test]
     fn cpu_startup_requirements_accept_exact_minimum() {

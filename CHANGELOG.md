@@ -11,8 +11,9 @@
 
 ### 改善
 
-- NVIDIA Full CUDA版の同梱 llama.cppをb9571からb10075（CUDA 12.4公式ビルド）へ更新した。Gemma 4 E4B / 12B + MTPでFlashAttentionを再有効化し、RTX 4060 Laptop 8GBの12B長文テストで総処理時間を約37%短縮、VRAM使用量を約220MiB削減した。Editor版CPUバックエンドとAMD版のダウンロードビルドはb9631のまま変更しない。
-- NVIDIA同梱 llama-serverのCORSをlocalhost originへ制限した。
+- NVIDIA Full CUDA版の同梱 llama.cppをb9571からb10075（CUDA 12.4公式ビルド）へ更新した。Gemma 4 E4B / 12B + MTPでFlashAttentionを再有効化し、RTX 4060 Laptop 8GBの12B長文テストで総処理時間を約37%短縮、VRAM使用量を約220MiB削減した。
+- Editor版・CPU版の音声入力用 llama.cpp CPUバックエンドもb9631からb10075へ更新した。導入済みバックエンドのビルド番号を確認し、旧版なら音声入力パックから更新する。AMD版のROCm / Vulkanバックエンドはb9631を維持する。
+- NVIDIA同梱版とEditor版・CPU版の llama-serverのCORSをlocalhost originへ制限した。
 
 ### 修正
 

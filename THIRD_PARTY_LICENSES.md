@@ -121,7 +121,7 @@
 
 調査結果:
 - 同梱: `cudart64_12.dll`（CUDA Runtime）/ `cublas64_12.dll` / `cublasLt64_12.dll`（cuBLAS）。
-- NVIDIA Full CUDA版の llama.cpp は公式リリース **b10075** の `llama-b10075-bin-win-cuda-12.4-x64.zip`（SHA-256 `acb782eb7d82b7aefaab4ea4f92f84793d11fdddacf888299ef3af9a63054744`）と `cudart-llama-bin-win-cuda-12.4-x64.zip`（SHA-256 `8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6`）から配置する。Editor CPU版とAMD版のダウンロード型バックエンドはb9631のまま別管理とする。
+- NVIDIA Full CUDA版の llama.cpp は公式リリース **b10075** の `llama-b10075-bin-win-cuda-12.4-x64.zip`（SHA-256 `acb782eb7d82b7aefaab4ea4f92f84793d11fdddacf888299ef3af9a63054744`）と `cudart-llama-bin-win-cuda-12.4-x64.zip`（SHA-256 `8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6`）から配置する。Editor版・CPU版のCPUバックエンドも同じ公式リリースの `llama-b10075-bin-win-cpu-x64.zip`（SHA-256 `67ccd320365193e5fa5e2778773a30ee3fc19802b2a9f324023641d160a1e802`）を取得する。AMD版のダウンロード型ROCm / Vulkanバックエンドはb9631のまま別管理とする。
 - CUDA Toolkit EULA の **Attachment A（再頒布可能ファイル一覧）に cudart・cublas・cublasLt はすべて収録**。→ 同梱・再頒布は許可される。
 - ただし cuBLAS には EULA **Attachment B** の **第三者 BSD 系帰属表示**が必要。代表例:
   - UC Regents（Vasily Volkov 由来コード）: `Copyright (c) 2007-2009, Regents of the University of California. All rights reserved.` ＋ BSD 系条件・免責。

@@ -125,7 +125,7 @@ cargo tauri build --bundles nsis --features local-llm-apps --config tauri.build.
 
 `resources/llama-server/` に llama-server と CUDA DLL が含まれるため、インストーラーは約 1 GB 前後になります。将来的にはセットアップ UI からのポストインストールダウンロードに切り替える予定です。
 
-NVIDIA版の同梱 llama.cpp は公式 Windows CUDA 12.4 build **b10075** を使用します。`scripts/setup-dev.bat` は既存の `llama-server.exe --version` を確認し、b10075以外なら同じ公式リリースのCUDAバイナリとCUDA 12.4ランタイムを再取得します。Editor版CPUバックエンドおよびAMD版のダウンロード型バックエンドはb9631のままで、NVIDIA同梱版とは更新系統を分離します。
+NVIDIA版の同梱 llama.cpp と、Editor版・CPU版が後から取得するCPUバックエンドは **b10075** を使用します。`scripts/setup-dev.bat` はNVIDIA同梱版の既存 `llama-server.exe --version` を確認し、b10075以外なら同じ公式リリースのCUDAバイナリとCUDA 12.4ランタイムを再取得します。音声入力パックもCPUバックエンドのビルド番号を確認し、旧版ならb10075へ更新します。AMD版のダウンロード型ROCm / Vulkanバックエンドはb9631のまま維持します。
 
 ### インストール後の Python 環境（venv）
 

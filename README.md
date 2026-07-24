@@ -49,6 +49,13 @@ AMD GPU版は、GPU世代・OS・ROCm/ドライバーの組み合わせによる
 
 AMD GPU版の文字起こし・話者分離・内蔵AI処理はGPU実行を必須とし、GPU処理に失敗した場合はCPUへフォールバックせず、そのジョブを終了してダイアログで通知します。内蔵LLMのROCm経路だけは、ROCmで起動できない場合にVulkanへフォールバックします。
 
+WindowsのAMD開発環境は、NVIDIA用`.venv312`と分離された`.venv312-amd`へROCmを導入します。
+
+```bat
+scripts\setup-dev-amd.bat
+scripts\run-dev-amd.bat
+```
+
 ## 動作環境（Full CUDA 版）
 
 - Windows 10 / 11 64bit

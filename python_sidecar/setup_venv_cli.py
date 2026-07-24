@@ -243,11 +243,35 @@ def main() -> None:
             ).strip() or PYTORCH_ROCM_WINDOWS_INDEX
             emit(
                 "progress",
+                f"ROCm Core {PYTORCH_ROCM_WINDOWS_VERSION} ({gfx_target}, Windows) "
+                "をAMD専用環境へインストール中...",
+            )
+            rc = run_and_stream([
+                str(python), "-m", "pip", "install",
+                "--upgrade",
+                "--prefer-binary",
+                "--index-url", rocm_index,
+                (
+                    f"rocm[libraries,device-{gfx_target}]=="
+                    f"{PYTORCH_ROCM_WINDOWS_VERSION}"
+                ),
+            ])
+            if rc != 0:
+                emit(
+                    "error",
+                    "ROCm Coreライブラリのインストールに失敗しました。"
+                    "NVIDIA環境には変更を加えていません。",
+                )
+                sys.exit(1)
+
+            emit(
+                "progress",
                 f"PyTorch (ROCm {PYTORCH_ROCM_WINDOWS_VERSION}, {gfx_target}, Windows) "
                 "をインストール中... 数分かかります",
             )
             rc = run_and_stream([
                 str(python), "-m", "pip", "install",
+                "--upgrade",
                 "--prefer-binary",
                 "--index-url", rocm_index,
                 (

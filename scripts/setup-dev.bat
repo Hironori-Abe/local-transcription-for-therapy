@@ -83,16 +83,28 @@ if /I not "%TORCH_BACKEND%"=="cuda" if /I not "%TORCH_BACKEND%"=="rocm" if /I no
 )
 
 REM Keep the experimental AMD/ROCm Python packages isolated from the stable
-REM NVIDIA/CUDA development environment. An explicit override is available for
-REM developers who keep their venvs outside the repository.
-if defined LOTT_DEV_VENV_DIR (
+REM NVIDIA/CUDA development environment. AMD deliberately ignores the generic
+REM LOTT_DEV_VENV_DIR override so a shell-wide setting cannot redirect ROCm
+REM packages into .venv312. Use the AMD-specific override when needed.
+if /I "%TORCH_BACKEND%"=="rocm" (
+  if defined LOTT_AMD_DEV_VENV_DIR (
+    set "DEV_VENV_DIR=%LOTT_AMD_DEV_VENV_DIR%"
+  ) else (
+    set "DEV_VENV_DIR=.venv312-amd"
+  )
+) else if defined LOTT_DEV_VENV_DIR (
   set "DEV_VENV_DIR=%LOTT_DEV_VENV_DIR%"
-) else if /I "%TORCH_BACKEND%"=="rocm" (
-  set "DEV_VENV_DIR=.venv312-amd"
 ) else (
   set "DEV_VENV_DIR=.venv312"
 )
 for %%I in ("!DEV_VENV_DIR!") do set "DEV_VENV_DIR_ABS=%%~fI"
+for %%I in ("%cd%\.venv312") do set "NVIDIA_VENV_DIR_ABS=%%~fI"
+if /I "%TORCH_BACKEND%"=="rocm" if /I "!DEV_VENV_DIR_ABS!"=="!NVIDIA_VENV_DIR_ABS!" (
+  echo [ERROR] Refusing to install ROCm packages into the NVIDIA venv:
+  echo         !NVIDIA_VENV_DIR_ABS!
+  echo         Use .venv312-amd or set LOTT_AMD_DEV_VENV_DIR to another directory.
+  exit /b 2
+)
 
 REM Some development PCs no longer have Python 3.12 registered in py.exe even
 REM though the existing NVIDIA venv still uses it. For AMD setup, that Python
@@ -493,8 +505,10 @@ echo Environment:
 echo   LOTT_TORCH_BACKEND            Same as --torch-backend.
 echo   LOTT_PYTORCH_ROCM_INDEX_URL   PyTorch ROCm wheel index for --torch-backend rocm.
 echo   LOTT_ROCM_GFX_TARGET           Windows ROCm target. Default: gfx1103 ^(Radeon 780M^).
-echo   LOTT_DEV_VENV_DIR             Override the venv directory.
-echo                                 Default: .venv312-amd for rocm, .venv312 otherwise.
+echo   LOTT_AMD_DEV_VENV_DIR         AMD-only venv override. Cannot be .venv312.
+echo                                 Default for rocm: .venv312-amd
+echo   LOTT_DEV_VENV_DIR             Non-AMD venv override. Ignored for rocm.
+echo                                 Default for cuda/cpu: .venv312
 goto :eof
 
 :fail

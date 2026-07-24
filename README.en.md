@@ -53,6 +53,13 @@ Compatibility varies substantially across GPU generations, operating systems, RO
 
 The AMD GPU edition requires GPU execution for transcription, speaker diarization, and built-in AI processing. If GPU processing fails, the job stops and a dialog reports the failure; it does not fall back to CPU. The only permitted fallback is from ROCm to Vulkan for the built-in LLM when its ROCm path cannot start.
 
+On Windows, the AMD development setup installs ROCm into `.venv312-amd`, isolated from the NVIDIA `.venv312`.
+
+```bat
+scripts\setup-dev-amd.bat
+scripts\run-dev-amd.bat
+```
+
 ## Requirements (Full CUDA Edition)
 
 - Windows 10 / 11 64-bit

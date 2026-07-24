@@ -39,9 +39,15 @@
 | エディション | 内容 |
 | --- | --- |
 | **LoTT Full CUDA** | 主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離・校正のすべてを含む |
-| LoTT Full AMD (ROCm / Vulkan) | experimental。AMD GPU 向け。文字起こし・話者分離・LLM 校正の GPU 動作確認済み（LLM は ROCm 優先・Vulkan フォールバック） |
+| LoTT Full AMD (ROCm / Vulkan) | experimental / 自己ビルド向け。AMD GPU 向け（LLM は ROCm 優先・Vulkan フォールバック） |
 | LoTT CPU | お試し版。CPUで文字起こし・話者分離・単純な句読点付与を行う。全体校正は非搭載。音声入力パックを導入すると音声入力・区間聞き直しも利用可能。処理時間の目安は音声時間の約1.5〜2.5倍 |
 | LoTT Editor | 校正・編集中心の軽量版。全体の文字起こし・LLM 校正ランタイムは非搭載。音声入力パック（任意ダウンロード）を導入すると CPU 版ローカル AI による音声入力・区間聞き直しを利用可能（メモリ 16GB 未満では非推奨） |
+
+### AMD GPU版について
+
+AMD GPU版は、GPU世代・OS・ROCm/ドライバーの組み合わせによる互換性差が大きく、現時点では一般向けインストーラーを配布しません。**AMD GPUで利用する場合は、ソースコードから使用するGPUに対応した環境を用意し、自身でビルドしてください。** experimental扱いであり、すべてのAMD GPUでの動作は保証していません。Windowsでの開発セットアップとビルド構成は [Windows リリースビルド](docs/release-build-windows.md) を参照してください。
+
+AMD GPU版の文字起こし・話者分離・内蔵AI処理はGPU実行を必須とし、GPU処理に失敗した場合はCPUへフォールバックせず、そのジョブを終了してダイアログで通知します。内蔵LLMのROCm経路だけは、ROCmで起動できない場合にVulkanへフォールバックします。
 
 ## 動作環境（Full CUDA 版）
 

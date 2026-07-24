@@ -379,6 +379,12 @@ def main() -> int:
         raw_device = str(args.device).strip().lower()
         requested_device = "cuda" if raw_device in ("cuda", "rocm") else "cpu"
         use_cuda = requested_device == "cuda" and torch.cuda.is_available()
+        require_gpu = os.environ.get("LOTT_REQUIRE_GPU", "").strip().lower() in ("1", "true", "yes")
+        if requested_device == "cuda" and require_gpu and not use_cuda:
+            raise RuntimeError(
+                "AMD GPU runtime could not be initialized. "
+                "CPU fallback is disabled for the AMD GPU edition."
+            )
         actual_device = "cuda" if use_cuda else "cpu"
         if use_cuda:
             pipeline.to(torch.device("cuda"))
@@ -406,7 +412,7 @@ def main() -> int:
             _is_gpu_err = use_cuda and any(
                 k in _err_lower for k in ("miopen", "rocm", "hip", "cuda failed", "no rocm")
             )
-            if not _is_gpu_err:
+            if not _is_gpu_err or require_gpu:
                 raise
             # ROCm/MIOpen がこの GPU アーキテクチャをサポートしていない場合は CPU で再試行する。
             sys.stderr.write(

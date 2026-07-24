@@ -15,8 +15,7 @@
 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | 校正中心の軽量版（文字起こし・話者分離なし） |
 | `SHA256SUMS.txt` | — | 各ファイルの SHA-256 チェックサム |
 
-<!-- AMD 版は別 Release（pre-release）にする場合はここから削除し、AMD 側 Release に記載する -->
-<!-- | `LoTT-vX.Y.Z-windows-x64-rocm-setup.exe` | AMD GPU (ROCm) | **experimental / pre-release** | -->
+<!-- AMD GPU版はexperimentalかつ自己ビルド向け。一般向けReleaseにはインストーラーを添付しない。 -->
 
 ダウンロード後の検証（任意）:
 

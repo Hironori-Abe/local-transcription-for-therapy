@@ -3,12 +3,15 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "HAS_WARN=0"
 set "PYTHON_BIN=py"
 set "PYTHON_BOOTSTRAP=py"
+set "PYTHON_BOOTSTRAP_ARGS=-3.12"
 set "ASSUME_YES=0"
 
 REM GPU backend: cuda (default, stable) / rocm (experimental) / cpu
 set "TORCH_BACKEND=%LOTT_TORCH_BACKEND%"
-REM PyTorch ROCm wheel index. Windows ROCm wheels are limited; override if needed.
-if not defined LOTT_PYTORCH_ROCM_INDEX_URL set "LOTT_PYTORCH_ROCM_INDEX_URL=https://download.pytorch.org/whl/rocm6.4"
+REM Windows AMD defaults: ROCm 7.14 multi-arch wheels for Radeon 780M (gfx1103).
+REM These variables are consumed only by the isolated AMD/ROCm branch.
+if not defined LOTT_PYTORCH_ROCM_INDEX_URL set "LOTT_PYTORCH_ROCM_INDEX_URL=https://repo.amd.com/rocm/whl-multi-arch/"
+if not defined LOTT_ROCM_GFX_TARGET set "LOTT_ROCM_GFX_TARGET=gfx1103"
 
 cd /d "%~dp0\.."
 
@@ -78,11 +81,34 @@ if /I not "%TORCH_BACKEND%"=="cuda" if /I not "%TORCH_BACKEND%"=="rocm" if /I no
   echo [ERROR] Invalid GPU backend: %TORCH_BACKEND%. Use cuda, rocm, or cpu.
   goto :hold_error
 )
+
+REM Keep the experimental AMD/ROCm Python packages isolated from the stable
+REM NVIDIA/CUDA development environment. An explicit override is available for
+REM developers who keep their venvs outside the repository.
+if defined LOTT_DEV_VENV_DIR (
+  set "DEV_VENV_DIR=%LOTT_DEV_VENV_DIR%"
+) else if /I "%TORCH_BACKEND%"=="rocm" (
+  set "DEV_VENV_DIR=.venv312-amd"
+) else (
+  set "DEV_VENV_DIR=.venv312"
+)
+for %%I in ("!DEV_VENV_DIR!") do set "DEV_VENV_DIR_ABS=%%~fI"
+
+REM Some development PCs no longer have Python 3.12 registered in py.exe even
+REM though the existing NVIDIA venv still uses it. For AMD setup, that Python
+REM executable may safely create a new empty venv; installed CUDA packages are
+REM not copied into the new environment.
+if /I "%TORCH_BACKEND%"=="rocm" if exist "%cd%\.venv312\Scripts\python.exe" (
+  set "PYTHON_BOOTSTRAP=%cd%\.venv312\Scripts\python.exe"
+  set "PYTHON_BOOTSTRAP_ARGS="
+)
+
 echo [INFO] GPU backend: %TORCH_BACKEND%
+echo [INFO] Python venv: !DEV_VENV_DIR_ABS!
 if /I "%TORCH_BACKEND%"=="rocm" (
-  echo [WARN] ROCm backend is EXPERIMENTAL and unverified on Windows.
-  echo        faster-whisper GPU ASR will NOT run on ROCm because ctranslate2-rocm
-  echo        has no Windows wheel. PyTorch ROCm wheels for Windows may be unavailable.
+  echo [WARN] ROCm backend is EXPERIMENTAL on Windows.
+  echo        ROCm 7.14 / %LOTT_ROCM_GFX_TARGET% packages will be installed only into:
+  echo        !DEV_VENV_DIR_ABS!
   set "HAS_WARN=1"
 )
 echo.
@@ -97,11 +123,11 @@ where %PYTHON_BIN% >nul 2>&1 || (
   goto :hold_error
 )
 
-if exist ".venv312\Scripts\python.exe" (
-  set "PYTHON_BIN=%cd%\.venv312\Scripts\python.exe"
+if exist "%DEV_VENV_DIR_ABS%\Scripts\python.exe" (
+  set "PYTHON_BIN=%DEV_VENV_DIR_ABS%\Scripts\python.exe"
   echo [INFO] Using existing Python 3.12 venv: !PYTHON_BIN!
 ) else (
-  %PYTHON_BOOTSTRAP% -3.12 -c "import sys; print(sys.version)" >nul 2>&1
+  call "%PYTHON_BOOTSTRAP%" %PYTHON_BOOTSTRAP_ARGS% -c "import sys; print(sys.version)" >nul 2>&1
   if errorlevel 1 (
     echo [WARN] Python 3.12 was not found.
     echo        Speaker diarization is most stable on Python 3.12.
@@ -109,9 +135,9 @@ if exist ".venv312\Scripts\python.exe" (
     echo        Fallback to current launcher: %PYTHON_BIN%
     set "HAS_WARN=1"
   ) else (
-    echo [INFO] Creating .venv312 with Python 3.12...
-    %PYTHON_BOOTSTRAP% -3.12 -m venv .venv312 || goto :fail
-    set "PYTHON_BIN=%cd%\.venv312\Scripts\python.exe"
+    echo [INFO] Creating !DEV_VENV_DIR_ABS! with Python 3.12...
+    call "%PYTHON_BOOTSTRAP%" %PYTHON_BOOTSTRAP_ARGS% -m venv "%DEV_VENV_DIR_ABS%" || goto :fail
+    set "PYTHON_BIN=%DEV_VENV_DIR_ABS%\Scripts\python.exe"
     echo [OK] Created venv: !PYTHON_BIN!
   )
 )
@@ -145,16 +171,13 @@ call %PYTHON_BIN% -m pip install --upgrade --force-reinstall --prefer-binary --i
 goto :torch_done
 
 :torch_rocm
-echo [WARN] Installing ROCm PyTorch wheels (EXPERIMENTAL, unverified on Windows).
+echo [WARN] Installing Windows ROCm 7.14 packages into the isolated AMD venv.
 echo        Index: %LOTT_PYTORCH_ROCM_INDEX_URL%
+echo        GFX target: %LOTT_ROCM_GFX_TARGET%
 set "HAS_WARN=1"
-call %PYTHON_BIN% -m pip install --upgrade --force-reinstall --prefer-binary --index-url "%LOTT_PYTORCH_ROCM_INDEX_URL%" "torch" "torchaudio"
-if errorlevel 1 (
-  echo [WARN] ROCm PyTorch install failed. Windows ROCm wheels may not be published yet.
-  echo        Override the index with LOTT_PYTORCH_ROCM_INDEX_URL or install torch manually.
-  set "HAS_WARN=1"
-)
-goto :torch_done
+call %PYTHON_BIN% python_sidecar\setup_venv_cli.py python_sidecar\requirements-amd.txt --variant rocm
+if errorlevel 1 goto :fail
+goto :python_modules_check
 
 :torch_cpu
 echo [WARN] Installing default CPU PyTorch wheels. The app default remains CUDA.
@@ -169,9 +192,7 @@ set "REQ_TMP=%TEMP%\lott-requirements-runtime-no-fw-%RANDOM%.txt"
 findstr /V /B /C:"faster-whisper" python_sidecar\requirements-runtime.txt > "%REQ_TMP%" || goto :fail
 call %PYTHON_BIN% -m pip install --prefer-binary --only-binary=contourpy -r "%REQ_TMP%" || goto :fail
 del "%REQ_TMP%" >nul 2>&1
-if /I "%TORCH_BACKEND%"=="rocm" (
-  echo [INFO] On ROCm, the standard ctranslate2 wheel provides CPU-only ASR - no ROCm GPU support on Windows.
-)
+:python_modules_check
 call %PYTHON_BIN% -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" || (
   echo [ERROR] Python module import failed.
   echo         Retry: %PYTHON_BIN% -m pip install --no-deps faster-whisper==1.2.1
@@ -446,9 +467,16 @@ echo [INFO] Runtime Python: %PYTHON_BIN%
 echo [INFO] If needed for this terminal:
 echo        set PYTHON_BIN=%PYTHON_BIN%
 echo.
-echo [INFO] To rebuild the venv from scratch:
-echo        scripts\rebuild-runtime-venv.bat
-echo Next: scripts\run-dev.bat
+if /I "%TORCH_BACKEND%"=="rocm" (
+  echo [INFO] AMD venv is isolated from the NVIDIA venv:
+  echo        AMD:    %DEV_VENV_DIR_ABS%
+  echo        NVIDIA: %cd%\.venv312
+  echo Next: npm run tauri:dev:amd
+) else (
+  echo [INFO] To rebuild the venv from scratch:
+  echo        scripts\rebuild-runtime-venv.bat
+  echo Next: scripts\run-dev.bat
+)
 goto :hold_success
 
 :show_help
@@ -464,6 +492,9 @@ echo.
 echo Environment:
 echo   LOTT_TORCH_BACKEND            Same as --torch-backend.
 echo   LOTT_PYTORCH_ROCM_INDEX_URL   PyTorch ROCm wheel index for --torch-backend rocm.
+echo   LOTT_ROCM_GFX_TARGET           Windows ROCm target. Default: gfx1103 ^(Radeon 780M^).
+echo   LOTT_DEV_VENV_DIR             Override the venv directory.
+echo                                 Default: .venv312-amd for rocm, .venv312 otherwise.
 goto :eof
 
 :fail

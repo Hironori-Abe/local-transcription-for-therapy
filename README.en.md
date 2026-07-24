@@ -43,9 +43,15 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 | Edition | Description |
 | --- | --- |
 | **LoTT Full CUDA** | Main distribution. For NVIDIA RTX / CUDA. Includes transcription, speaker diarization, and proofreading |
-| LoTT Full AMD (ROCm / Vulkan) | Experimental. For AMD GPUs. GPU operation has been confirmed for transcription, speaker diarization, and LLM proofreading (the LLM runs on ROCm first, with Vulkan fallback) |
+| LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. For AMD GPUs (the LLM prefers ROCm with Vulkan fallback) |
 | LoTT CPU | Trial edition. Runs transcription, speaker diarization, and simple punctuation on the CPU. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
 | LoTT Editor | Lightweight edition focused on proofreading and editing. Full transcription and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
+
+### AMD GPU Edition
+
+Compatibility varies substantially across GPU generations, operating systems, ROCm versions, and drivers, so an AMD installer is not currently distributed for general use. **To use LoTT with an AMD GPU, prepare an environment that supports the target GPU and build the AMD edition from source.** This edition remains experimental, and operation on every AMD GPU is not guaranteed. See the [Windows release build guide](docs/release-build-windows.md) for the Windows development setup and build configuration.
+
+The AMD GPU edition requires GPU execution for transcription, speaker diarization, and built-in AI processing. If GPU processing fails, the job stops and a dialog reports the failure; it does not fall back to CPU. The only permitted fallback is from ROCm to Vulkan for the built-in LLM when its ROCm path cannot start.
 
 ## Requirements (Full CUDA Edition)
 

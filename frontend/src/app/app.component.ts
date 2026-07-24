@@ -329,6 +329,11 @@ interface ConfirmDialogState {
   cancelRunKind?: CancelRunKind;
 }
 
+interface AmdGpuFailureDialogState {
+  operation: string;
+  message: string;
+}
+
 interface AppSettingsV1 {
   transcription?: {
     device?: string;
@@ -592,6 +597,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly isRocmGpu = computed(() => this.rocmAvailable() === true && this.cudaAvailable() === false);
   /** アプリ identifier から判定したビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版。 */
   readonly buildVariant = signal<'cuda' | 'rocm' | 'cpu'>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
+  /** Rustが返す実行OS。GPU導入案内をLinux/Windowsで分離するために使う。 */
+  readonly runtimePlatform = signal<'windows' | 'linux' | 'macos' | 'other' | 'unknown'>('unknown');
   /**
    * ローカルAIアプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
    * 公式配布は無効（フェイルクローズ）。local-llm-apps feature 付きでソースから
@@ -861,6 +868,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly errorWasCancelledByUser = signal<boolean>(false);
   readonly proofreadCanceling = signal<boolean>(false);
   readonly pendingConfirmDialog = signal<ConfirmDialogState | null>(null);
+  readonly amdGpuFailureDialog = signal<AmdGpuFailureDialogState | null>(null);
   readonly proofreadHintBySegmentId = signal<Record<number, string>>({});
   readonly proofreadMetadataBySegmentId = signal<Record<number, ExportProofreadMetadata>>({});
   readonly proofreadUpdatedCount = signal<number>(0);
@@ -3114,7 +3122,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         String((response.result.settings as { device?: unknown })?.device ?? this.transcriptionDevice());
       autoEntityCheckAfterTranscription = true;
     } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
+      const message = this.normalizeErrorMessage(error);
+      this.error.set(message);
+      this.showAmdGpuProcessingFailure('文字起こし・話者分離', message);
     } finally {
       const elapsed = this.runningSeconds();
       this.lastRunElapsedSeconds.set(elapsed);
@@ -3235,8 +3245,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.diarizationStatus.set(`話者分離が完了しました。（所要: ${this.diarizationRunningSeconds()} 秒 / 実行: ${shownDevice}）`);
       autoEntityCheckSource = 'transcription';
     } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
+      const message = this.normalizeErrorMessage(error);
+      this.error.set(message);
       this.diarizationStatus.set('');
+      this.showAmdGpuProcessingFailure('話者分離', message);
     } finally {
       this.stopDiarizationTicker();
       this.diarizationRunning.set(false);
@@ -3511,6 +3523,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             this.llmProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
           } else {
             this.llmProofreadStatus.set('AI校正エンジンの起動に失敗しました。');
+            this.showAmdGpuProcessingFailure(
+              'AI校正',
+              this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
+            );
           }
           return;
         }
@@ -3520,6 +3536,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         if (this.llmLoadedDevice() === 'cpu') {
           const msg = 'CPU 専用バックエンドが検出されました。AI校正を中止しました。設定タブから GPU バックエンドを再インストールしてください。';
           this.llmProofreadStatus.set(msg);
+          this.showAmdGpuProcessingFailure('AI校正', msg);
           return;
         }
       }
@@ -3613,6 +3630,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.error.set(msg);
         // runProofread が this.error をクリアしてもエラーを確認できるよう status にも残す
         this.llmProofreadStatus.set(`AI校正エラー: ${msg}`);
+        if (backend !== 'openai_compatible') {
+          this.showAmdGpuProcessingFailure('AI校正', msg);
+        }
       }
     } finally {
       this.stopLlmProofreadTicker();
@@ -4001,7 +4021,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
           } else {
             this.overallProofreadError.set('AI校正エンジンの起動に失敗しました。');
-            this.overallProofreadDialogOpen.set(true);
+            this.showAmdGpuProcessingFailure(
+              '全体校正',
+              this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
+            );
+            if (this.buildVariant() !== 'rocm') {
+              this.overallProofreadDialogOpen.set(true);
+            }
           }
           return;
         }
@@ -4050,6 +4076,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
         } else {
           this.overallProofreadError.set(msg);
+          if (backend === 'lemonade') {
+            this.showAmdGpuProcessingFailure('全体校正', msg);
+          }
         }
       } else {
         this.overallProofreadResult.set(response.result);
@@ -4062,12 +4091,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
       } else {
         this.overallProofreadError.set(msg);
+        if (backend === 'lemonade') {
+          this.showAmdGpuProcessingFailure('全体校正', msg);
+        }
       }
     } finally {
       const wasCanceled = this.overallProofreadCanceling();
       this.overallProofreadRunning.set(false);
       this.overallProofreadCanceling.set(false);
-      if (!wasCanceled && !oomHandled) {
+      if (!wasCanceled && !oomHandled && !this.amdGpuFailureDialog()) {
         this.overallProofreadDialogOpen.set(true);
       }
     }
@@ -4840,13 +4872,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async checkGpuAvailability(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const result = await invoke<{ cudaAvailable: boolean; rocmAvailable: boolean; buildVariant?: string; localLlmAppsEnabled?: boolean }>('check_gpu_availability');
+      const result = await invoke<{
+        cudaAvailable: boolean;
+        rocmAvailable: boolean;
+        buildVariant?: string;
+        runtimePlatform?: string;
+        localLlmAppsEnabled?: boolean;
+      }>('check_gpu_availability');
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
         this.cudaAvailable.set(result.cudaAvailable);
         this.rocmAvailable.set(result.rocmAvailable);
         if (result.buildVariant === 'rocm') this.buildVariant.set('rocm');
         if (result.buildVariant === 'cpu') this.buildVariant.set('cpu');
+        if (result.runtimePlatform === 'windows' || result.runtimePlatform === 'linux' || result.runtimePlatform === 'macos') {
+          this.runtimePlatform.set(result.runtimePlatform);
+        } else if (result.runtimePlatform) {
+          this.runtimePlatform.set('other');
+        }
         // 明示的に true のときだけ有効化（欠落・false はフェイルクローズで無効のまま）
         this.localLlmAppsEnabled.set(result.localLlmAppsEnabled === true);
         // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
@@ -7948,9 +7991,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         .filter((candidate) => candidate.length > 0)
         .slice(0, 3);
       if (candidates.length === 0) {
-        this.voiceInputError.set('候補を生成できませんでした。');
+        const message = '候補を生成できませんでした。';
+        this.voiceInputError.set(message);
         this.voiceInputCandidates.set(null);
         this.voiceInputStatus.set('');
+        this.showAmdGpuProcessingFailure('区間の聞き直し', message);
       } else {
         this.voiceInputCandidates.set({ segmentId: segment.id, candidates, mode: 'replace' });
         this.voiceInputStatus.set('');
@@ -7958,7 +8003,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.voiceInputCandidates.set(null);
       this.voiceInputStatus.set('');
-      this.voiceInputError.set(this.normalizeErrorMessage(error));
+      const message = this.normalizeErrorMessage(error);
+      this.voiceInputError.set(message);
+      this.showAmdGpuProcessingFailure('区間の聞き直し', message);
     } finally {
       this.voiceInputProcessingSegmentId.set(null);
     }
@@ -8091,8 +8138,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         .filter((candidate) => candidate.length > 0)
         .slice(0, 3);
       if (candidates.length === 0) {
-        this.voiceInputError.set('候補を生成できませんでした。');
+        const message = '候補を生成できませんでした。';
+        this.voiceInputError.set(message);
         this.voiceInputCandidates.set(null);
+        this.showAmdGpuProcessingFailure('音声入力', message);
       } else {
         this.voiceInputCandidates.set({ segmentId, candidates, mode: 'insert' });
         this.voiceInputStatus.set('');
@@ -8101,7 +8150,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.voiceInputCandidates.set(null);
       this.voiceInputStatus.set('');
-      this.voiceInputError.set(this.normalizeVoiceInputErrorMessage(error));
+      const message = this.normalizeVoiceInputErrorMessage(error);
+      this.voiceInputError.set(message);
+      this.showAmdGpuProcessingFailure('音声入力', message);
     } finally {
       this.voiceInputProcessingSegmentId.set(null);
     }
@@ -8481,6 +8532,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private openConfirmDialog(dialog: ConfirmDialogState): void {
     this.pendingConfirmDialog.set(dialog);
+  }
+
+  closeAmdGpuFailureDialog(): void {
+    this.amdGpuFailureDialog.set(null);
+  }
+
+  private showAmdGpuProcessingFailure(operation: string, message: string): void {
+    if (this.buildVariant() !== 'rocm') return;
+    const normalized = String(message ?? '').trim() || `${operation}に失敗しました。`;
+    if (/中止しました|cancel(?:led|ed)?/i.test(normalized)) return;
+    this.amdGpuFailureDialog.set({ operation, message: normalized });
   }
 
   confirmDialogButtonClass(color: ConfirmDialogColor, role: 'confirm' | 'cancel'): string {

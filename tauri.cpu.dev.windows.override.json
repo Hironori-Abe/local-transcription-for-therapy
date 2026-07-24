@@ -1,0 +1,7 @@
+{
+  "build": {
+    "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev-cpu.bat",
+    "devUrl": "http://127.0.0.1:4202",
+    "frontendDist": "../frontend"
+  }
+}

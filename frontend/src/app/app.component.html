@@ -48,7 +48,10 @@
         <div *ngIf="!cpuOnlyBuild && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
-            <span class="gpu-setup-title">GPU（CUDA / ROCm）が検出されませんでした</span>
+            <span class="gpu-setup-title">
+              {{ buildVariant() === 'rocm' ? 'AMD GPU ランタイム' : buildVariant() === 'cuda' ? 'CUDA' : 'GPU ランタイム' }}
+              が検出されませんでした
+            </span>
           </div>
           <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
           <p class="gpu-setup-desc">文字起こし・話者分離には GPU ランタイムが必要です。以下のツールキットをインストールして、アプリを再起動してください。</p>
@@ -77,13 +80,46 @@
                 <mat-icon class="material-symbols-outlined gpu-setup-brand-icon">developer_board</mat-icon>
                 AMD GPU の場合
               </div>
-              <p class="gpu-setup-section-note">ROCm 7.2.2 以降が必要です。</p>
-              <div class="gpu-setup-links">
-                <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html')">
-                  <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                  ROCm クイックスタート（Linux）
-                </button>
-              </div>
+              <ng-container *ngIf="runtimePlatform() === 'windows'; else rocmNonWindowsSetup">
+                <p class="gpu-setup-section-note">
+                  Windows と Linux では対応GPU・ドライバー・導入方法が異なります。
+                  Windows向けの最新対応表でGPUとOSの組み合わせを確認してください。
+                </p>
+                <div class="gpu-setup-links">
+                  <button mat-stroked-button class="gpu-setup-link-btn"
+                    (click)="openExternalUrl('https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    ROCm 対応表（Windows / Ryzen）
+                  </button>
+                  <button mat-stroked-button class="gpu-setup-link-btn"
+                    (click)="openExternalUrl('https://rocm.docs.amd.com/en/latest/install/rocm.html')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    ROCm インストール（Windows）
+                  </button>
+                </div>
+              </ng-container>
+              <ng-template #rocmNonWindowsSetup>
+                <p class="gpu-setup-section-note" *ngIf="runtimePlatform() === 'linux'">
+                  Linux版の文字起こしにはROCm 7.2.2以降が必要です。
+                </p>
+                <p class="gpu-setup-section-note" *ngIf="runtimePlatform() !== 'linux'">
+                  お使いのOSに対応するROCm環境を公式対応表で確認してください。
+                </p>
+                <div class="gpu-setup-links" *ngIf="runtimePlatform() === 'linux'">
+                  <button mat-stroked-button class="gpu-setup-link-btn"
+                    (click)="openExternalUrl('https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    ROCm クイックスタート（Linux）
+                  </button>
+                </div>
+                <div class="gpu-setup-links" *ngIf="runtimePlatform() !== 'linux'">
+                  <button mat-stroked-button class="gpu-setup-link-btn"
+                    (click)="openExternalUrl('https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    ROCm 対応表
+                  </button>
+                </div>
+              </ng-template>
             </div>
           </div>
 
@@ -91,7 +127,8 @@
 
           <div class="gpu-setup-recheck">
             <p class="gpu-setup-recheck-note">
-              CUDA がすでにインストール済みにもかかわらず、この画面（CUDA インストールを求める表示）が出る場合は、下の「GPU を再確認」ボタンを押してください。直らないときは、別のタブをクリックして戻ってください。
+              GPUランタイムがすでにインストール済みにもかかわらずこの画面が出る場合は、
+              下の「GPU を再確認」ボタンを押してください。直らないときは、別のタブをクリックして戻ってください。
             </p>
             <button mat-flat-button color="primary" class="gpu-setup-recheck-btn" [disabled]="gpuRechecking()"
               (click)="recheckGpuRuntime()">
@@ -1725,6 +1762,21 @@
     </mat-card-content>
     <mat-card-actions align="end" class="overall-proofread-actions">
       <button mat-flat-button (click)="closeOverallProofreadDialog()">閉じる</button>
+    </mat-card-actions>
+  </mat-card>
+</div>
+
+<div class="confirm-overlay" *ngIf="amdGpuFailureDialog() as dialog" role="alertdialog" aria-modal="true"
+  aria-label="AMD GPU処理エラーダイアログ">
+  <mat-card class="confirm-card">
+    <mat-card-title>AMD GPU処理を終了しました</mat-card-title>
+    <mat-card-content>
+      <p>{{ dialog.operation }}をGPUで完了できなかったため、この処理を終了しました。</p>
+      <p>AMD GPU版ではCPUへフォールバックしません。GPU・ROCm環境と、このGPU向けにビルドした依存関係を確認してください。</p>
+      <p>{{ dialog.message }}</p>
+    </mat-card-content>
+    <mat-card-actions align="end">
+      <button mat-flat-button color="primary" (click)="closeAmdGpuFailureDialog()">閉じる</button>
     </mat-card-actions>
   </mat-card>
 </div>

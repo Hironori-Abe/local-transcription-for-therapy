@@ -21,8 +21,13 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
-CT2_ROCM_VERSION = "4.7.1"
+CT2_ROCM_VERSION = "4.7.2"
 PYTORCH_ROCM_INDEX = "https://download.pytorch.org/whl/rocm7.2"
+PYTORCH_ROCM_WINDOWS_INDEX = "https://repo.amd.com/rocm/whl-multi-arch/"
+PYTORCH_ROCM_WINDOWS_VERSION = "7.14.0"
+PYTORCH_ROCM_WINDOWS_TORCH_VERSION = "2.12.0"
+PYTORCH_ROCM_WINDOWS_TORCHVISION_VERSION = "0.27.0"
+PYTORCH_ROCM_WINDOWS_TORCHAUDIO_VERSION = "2.11.0"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
@@ -111,9 +116,10 @@ def _bootstrap_pip(python: Path) -> None:
 def _install_ctranslate2_rocm(python: Path) -> None:
     """CTranslate2 ROCm ホイールを GitHub Releases からダウンロードしてインストールする。"""
     py_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+    platform_name = "Windows" if os.name == "nt" else "Linux"
     zip_url = (
         f"https://github.com/OpenNMT/CTranslate2/releases/download/"
-        f"v{CT2_ROCM_VERSION}/rocm-python-wheels-Linux.zip"
+        f"v{CT2_ROCM_VERSION}/rocm-python-wheels-{platform_name}.zip"
     )
 
     emit("progress", f"CTranslate2 ROCm {CT2_ROCM_VERSION} ホイールをダウンロード中...")
@@ -226,13 +232,46 @@ def main() -> None:
 
     # PyTorch インストール
     if args.variant == "rocm":
-        emit("progress", "PyTorch (ROCm 7.2) をインストール中... 数分かかります")
-        rc = run_and_stream([
-            str(python), "-m", "pip", "install",
-            "--prefer-binary",
-            "--index-url", PYTORCH_ROCM_INDEX,
-            "torch==2.11.0", "torchaudio==2.11.0",
-        ])
+        if os.name == "nt":
+            # Windows AMD はLinux用rocm7.2 indexを使わない。ROCm 7.14で
+            # 公式対象になったRyzen APU (Radeon 780M = gfx1103) 向けwheelを
+            # AMDのmulti-arch indexから導入する。別GPUは環境変数で上書き可能。
+            gfx_target = os.environ.get("LOTT_ROCM_GFX_TARGET", "gfx1103").strip() or "gfx1103"
+            rocm_index = os.environ.get(
+                "LOTT_PYTORCH_ROCM_INDEX_URL",
+                PYTORCH_ROCM_WINDOWS_INDEX,
+            ).strip() or PYTORCH_ROCM_WINDOWS_INDEX
+            emit(
+                "progress",
+                f"PyTorch (ROCm {PYTORCH_ROCM_WINDOWS_VERSION}, {gfx_target}, Windows) "
+                "をインストール中... 数分かかります",
+            )
+            rc = run_and_stream([
+                str(python), "-m", "pip", "install",
+                "--prefer-binary",
+                "--index-url", rocm_index,
+                (
+                    f"torch[device-{gfx_target}]=="
+                    f"{PYTORCH_ROCM_WINDOWS_TORCH_VERSION}+rocm{PYTORCH_ROCM_WINDOWS_VERSION}"
+                ),
+                (
+                    f"torchvision[device-{gfx_target}]=="
+                    f"{PYTORCH_ROCM_WINDOWS_TORCHVISION_VERSION}+rocm{PYTORCH_ROCM_WINDOWS_VERSION}"
+                ),
+                (
+                    f"torchaudio=={PYTORCH_ROCM_WINDOWS_TORCHAUDIO_VERSION}"
+                    f"+rocm{PYTORCH_ROCM_WINDOWS_VERSION}"
+                ),
+            ])
+        else:
+            # 実績のあるLinux ROCm経路は従来どおり維持する。
+            emit("progress", "PyTorch (ROCm 7.2) をインストール中... 数分かかります")
+            rc = run_and_stream([
+                str(python), "-m", "pip", "install",
+                "--prefer-binary",
+                "--index-url", PYTORCH_ROCM_INDEX,
+                "torch==2.11.0", "torchaudio==2.11.0",
+            ])
         if rc != 0:
             emit("error", "PyTorch (ROCm) のインストールに失敗しました。インターネット接続を確認してください。")
             sys.exit(1)

@@ -1,5 +1,10 @@
 #!/bin/bash
-# Ubuntu 26.04 コンテナで .deb ビルドや動作確認を行うためのランチャー。
+# Ubuntu コンテナで .deb / .AppImage ビルドや動作確認を行うためのランチャー。
+# 既定ベースは ubuntu:24.04。リリースビルドの glibc 下限を 24.04 に合わせるため、
+# ここより古い/同等の Ubuntu で焼くと 24.04 以降 + CachyOS で動く .deb / .AppImage になる。
+# （新しい 26.04 等で焼くと 24.04 で起動しないので注意）。
+# 別イメージを使う場合は LOTT_UBUNTU_IMAGE 環境変数で上書きする。
+#   例: LOTT_UBUNTU_IMAGE=ubuntu:22.04 bash scripts/run-dev-docker-ubuntu.sh
 # cargo ツールチェーンを Docker volume (lott-ubuntu-cargo) に永続化して毎回の再インストールを防ぐ。
 # --gpu  AMD GPU パススルー（ROCm）を有効化（/dev/kfd が必要）。
 # --gui  X11/Wayland を転送して Tauri GUI テストを有効化。
@@ -10,7 +15,7 @@
 #    bash scripts/run-dev-docker-ubuntu.sh
 #    # コンテナ内で:
 #    bash scripts/setup-dev.sh --skip-gemma -y   # 初回のみ（Rust/Node/Python 導入）
-#    bash scripts/setup-build-tools-ubuntu.sh    # .deb を生成
+#    bash scripts/setup-build-tools-linux.sh    # .deb を生成
 #    # → src-tauri/target/release/bundle/deb/ に .deb が出る
 #
 #  【Tauri GUI テスト】（Wayland/X11 表示転送）
@@ -32,6 +37,9 @@
 
 set -euo pipefail
 
+# リリースビルドの glibc 下限を 24.04 に合わせる。LOTT_UBUNTU_IMAGE で上書き可。
+UBUNTU_IMAGE="${LOTT_UBUNTU_IMAGE:-ubuntu:24.04}"
+
 USE_GPU=0
 USE_GUI=0
 for arg in "$@"; do
@@ -40,7 +48,8 @@ for arg in "$@"; do
     --gui) USE_GUI=1 ;;
     --help|-h)
       echo "Usage: $0 [--gpu] [--gui]"
-      echo "  (デフォルト)  .deb ビルド専用（GPU・GUI なし）。"
+      echo "  (デフォルト)  .deb / .AppImage ビルド専用（GPU・GUI なし）。"
+      echo "  ベースイメージは LOTT_UBUNTU_IMAGE で上書き可（既定 ubuntu:24.04）。"
       echo "  --gpu         /dev/kfd・/dev/dri を渡して AMD GPU テストを有効化。"
       echo "  --gui         X11/Wayland を転送して Tauri GUI テストを有効化。"
       exit 0
@@ -96,10 +105,12 @@ if [[ "$USE_GUI" == "1" ]]; then
   fi
 fi
 
+echo "[INFO] ベースイメージ: ${UBUNTU_IMAGE}"
+
 exec docker run -it --rm \
   "${GPU_ARGS[@]}" \
   "${DISPLAY_ARGS[@]}" \
   -v "$(pwd):/workspace" \
   -v "lott-ubuntu-cargo:/root/.cargo" \
   -w /workspace \
-  ubuntu:26.04 bash
+  "$UBUNTU_IMAGE" bash

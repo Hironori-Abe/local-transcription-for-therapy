@@ -180,7 +180,7 @@ if exist "%TAURI_RELEASE_UP%" (
 echo [INFO] Building installer (frontend build is included)...
 echo [INFO] This may take several minutes.
 echo.
-cargo tauri build --bundles nsis --config tauri.build.nvidia-windows.override.json
+cargo tauri build --bundles nsis --config tauri.nvidia.windows.override.json
 if errorlevel 1 (
   echo.
   echo [ERROR] Build failed.

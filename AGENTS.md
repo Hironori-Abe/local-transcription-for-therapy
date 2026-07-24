@@ -322,28 +322,29 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 - PyTorch は CUDA build と ROCm build を同一 venv に共存させず、配布ラインごとに venv を分ける
 - 1つの配布パッケージへ CUDA / ROCm の両 runtime を同梱しない
 - NSIS版は venv 非同梱のため、配布先でインストール先フォルダ直下に `.venv312\`（フォルダ全体）を配置するか、`PYTHON_BIN` 環境変数を設定する必要がある
-- pyannote-speaker-diarization-community-1 はインストール後ダウンロード。NSIS ビルド（`tauri.build.nvidia-windows.override.json`）には含めない。リリースの保存先は `%LOCALAPPDATA%\{identifier}\models\`（resource_dir ではない）
+- pyannote-speaker-diarization-community-1 はインストール後ダウンロード。NSIS ビルド（`tauri.nvidia.windows.override.json`）には含めない。リリースの保存先は `%LOCALAPPDATA%\{identifier}\models\`（resource_dir ではない）
 - llama-server（`resources/llama-server/`）は現状 NSIS インストーラーに同梱（~1GB）。将来的にはセットアップ UI からのポストインストールダウンロードに切り替え予定
 
 Tauri build override 方針:
 
-- `tauri.build.nvidia-windows.override.json` は Full CUDA / Windows NSIS ビルド用（`scripts/setup-build-tools.bat` から使用）
-- `tauri.build.nvidia-ubuntu.override.json` は NVIDIA / Ubuntu ビルド用（後日詳細調整予定）
-- `tauri.build.amd-windows.override.json` は AMD / Windows NSIS ビルド用（後日詳細調整予定）
-- `tauri.build.amd-ubuntu.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する
+- override ファイル名は `tauri.<variant>.<platform>.override.json`（リリース）/ `tauri.<variant>.dev.<platform>.override.json`（dev。全体 dev は variant 無しの `tauri.dev.<platform>`）で統一する。`variant` = `nvidia` / `amd` / `cpu` / `editor`、`platform` = `windows` / `linux`。旧 `tauri.build.*-ubuntu` 形式・`build.` 接頭辞・`ubuntu` トークンは廃止済み（`linux` は deb + AppImage 両対応で Ubuntu 限定ではない）
+- `tauri.nvidia.windows.override.json` は Full CUDA / Windows NSIS ビルド用（`scripts/setup-build-tools.bat` から使用）
+- `tauri.nvidia.linux.override.json` は Full CUDA / Linux（deb + AppImage）ビルド用。venv・`python312` embeddable を同梱せず、venv は初回起動後のセットアップで構築する（`scripts/setup-build-tools-linux.sh` から使用）。Linux CUDA 用 llama-server の同梱/DL 経路は未確立で、現状 LLM 校正ランタイムは含めない
+- `tauri.amd.windows.override.json` は AMD / Windows NSIS ビルド用（後日詳細調整予定）
+- `tauri.amd.linux.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する
 - `tauri.editor.windows.override.json` は軽量 Editor 版 / Windows NSIS ビルド用。`identifier` を `net.gakkousya.lott-editor` に分離し、LLM 校正ランタイム非搭載のため `installerHooks` を `nsis/editor-hooks.nsh` に差し替える（Full 版は `nsis/nvidia-hooks.nsh`）
-- `tauri.editor.ubuntu.override.json` は軽量 Editor 版 / Ubuntu deb ビルド用（GPU runtime を持たないため OS 差のみ）
+- `tauri.editor.linux.override.json` は軽量 Editor 版 / Linux（deb + AppImage）ビルド用（GPU runtime を持たないため OS 差のみ。NSIS フックは Linux では不要）
 - CUDA版・ROCm版・CPU版・Editor版は `identifier` を分け、同一PCに併存できるようにする（CUDA: `net.gakkousya.lott`、AMD: `net.gakkousya.lott-amd`、CPU: `net.gakkousya.lott-cpu`、Editor: `net.gakkousya.lott-editor`）
 
 ### NSIS ビルド時の注意点
 
 - **ビルドは `scripts/setup-build-tools.bat` を実行するだけ**。前提確認・Python embeddable 取得・`cargo tauri build` を一括で行う（NVIDIA 版は AI 校正に同梱 CUDA llama-server を使うため Lemonade は同梱しない）
 - **ビルド時にインターネット接続が必要**（Python embeddable zip と get-pip.py を自動ダウンロード）。取得済みの場合はスキップされる
-- **`--config tauri.build.nvidia-windows.override.json` を必ず使う**。`tauri.conf.json` の resources には `.venv312` や話者分離モデルが含まれており、NSIS ビルドで使うと venv やモデルをインストーラーに同梱してしまう
+- **`--config tauri.nvidia.windows.override.json` を必ず使う**。`tauri.conf.json` の resources には `.venv312` や話者分離モデルが含まれており、NSIS ビルドで使うと venv やモデルをインストーラーに同梱してしまう
 - **バージョン番号は `src-tauri/tauri.conf.json` の `version` フィールドで管理**。ビルド出力ファイル名（`*_x64-setup.exe`）に反映されるためリリース前に更新する
 - **`PYTHON_VERSION` は `scripts/setup-build-tools.bat` 内で管理**。更新時はこのファイルの変数を書き換え、`src-tauri/resources/python312/` を削除してから再ビルドする
 - **インストーラーは llama-server 同梱で約 1GB 前後**。将来的にはポストインストールダウンロードに切り替え予定
-- **NSIS フックは `src-tauri/nsis/nvidia-hooks.nsh`**（Full 版）/ `editor-hooks.nsh`（Editor 版）。`lemonade-hooks.nsh` は撤去済み。公式インストーラーではローカルAIアプリ（LM Studio / Ollama）連携の選択肢を表示せず、連携は常に無効。連携コードは残し、Cargo feature `local-llm-apps` 付きでソースからビルドした専用構成だけで有効にする。旧実行時ポリシーマーカーは廃止済み。フックを変更した場合は `tauri.build.nvidia-windows.override.json` / `tauri.build.amd-windows.override.json` 側の `nsis` ブロックにも `installerHooks` を明示して基底設定が上書きされないよう注意する
+- **NSIS フックは `src-tauri/nsis/nvidia-hooks.nsh`**（Full 版）/ `editor-hooks.nsh`（Editor 版）。`lemonade-hooks.nsh` は撤去済み。公式インストーラーではローカルAIアプリ（LM Studio / Ollama）連携の選択肢を表示せず、連携は常に無効。連携コードは残し、Cargo feature `local-llm-apps` 付きでソースからビルドした専用構成だけで有効にする。旧実行時ポリシーマーカーは廃止済み。フックを変更した場合は `tauri.nvidia.windows.override.json` / `tauri.amd.windows.override.json` 側の `nsis` ブロックにも `installerHooks` を明示して基底設定が上書きされないよう注意する
 - 詳細は `docs/release-build-windows.md` を参照
 
 ## Hardware Policy

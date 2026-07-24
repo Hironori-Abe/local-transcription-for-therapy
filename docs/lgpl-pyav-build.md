@@ -100,10 +100,10 @@ ASR / 話者分離を含む配布ラインでは `resources/ffmpeg/` を Tauri r
 取得・検査は `scripts/setup_ffmpeg_lgpl.py` が担当する。
 
 - `src-tauri/tauri.conf.json`
-- `tauri.build.nvidia-windows.override.json`
-- `tauri.build.amd-windows.override.json`
-- `tauri.build.nvidia-ubuntu.override.json`
-- `tauri.build.amd-ubuntu.override.json`
+- `tauri.nvidia.windows.override.json`
+- `tauri.amd.windows.override.json`
+- `tauri.nvidia.linux.override.json`
+- `tauri.amd.linux.override.json`
 
 Editor 版は文字起こし・話者分離を含まないため必須ではない。
 
@@ -177,7 +177,7 @@ Windows CUDA 版は通常どおり次を使う。
 scripts\setup-build-tools.bat
 ```
 
-このスクリプトが使う `tauri.build.nvidia-windows.override.json` には `resources/ffmpeg` が含まれている。
+このスクリプトが使う `tauri.nvidia.windows.override.json` には `resources/ffmpeg` が含まれている。
 AMD Windows / Ubuntu 版も対応する override に `resources/ffmpeg` を含める。
 
 `tauri.conf.json` の基底 resources は dev / portable 寄りの設定を含むため、NSIS リリースでは
@@ -330,4 +330,4 @@ Windows では以下の検証スクリプトを使う。これはパッケージ
 - `THIRD_PARTY_LICENSES.md` / `NOTICE` / About 側に FFmpeg LGPL、ソース入手手段、BtbN build 情報、no-PyAV 方針を反映済み。
 - `LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` / `licenses/` を Full CUDA / Full AMD / Editor の Tauri resources に追加済み。
 - `scripts/collect_licenses.py --venv .venv312 --frontend frontend --tauri src-tauri --out licenses` を実行済み。収集結果は Python 147 本文 / 2 不明、Rust 478 本文 / 2 不明、Node 19 本文 / 0 不明。
-- `scripts/setup-build-tools.bat` と `scripts/setup-build-tools-ubuntu.sh` は `.venv312` がある場合、ビルド前に `licenses/` を再生成する。
+- `scripts/setup-build-tools.bat` と `scripts/setup-build-tools-linux.sh` は `.venv312` がある場合、ビルド前に `licenses/` を再生成する。

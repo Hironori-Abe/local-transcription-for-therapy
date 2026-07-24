@@ -3,6 +3,10 @@
     "beforeBuildCommand": "npm --prefix frontend run build -- --configuration production"
   },
   "bundle": {
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "resources": [
       "../LICENSE",
       "../NOTICE",

@@ -9,11 +9,24 @@
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-07-29
+
+CPUだけで文字起こし・話者分離・編集を試せるCPU版を追加し、NVIDIA版のAI校正を高速化したリリース。
+
+### 追加
+
+- GPU不要のCPU版を追加した。文字起こし、話者分離、単純な句読点付与、編集、音声再生、Word / Excel / JSON保存に対応する。
+- CPU版・Editor版で、後付けの音声入力パックによるマイク音声入力と区間聞き直しに対応した。
+- CPU版の起動時にRAM・AVX2・論理スレッド数を確認し、最低要件と試用向けエディションであることを案内する。
+
 ### 改善
 
 - NVIDIA Full CUDA版の同梱 llama.cppをb9571からb10075（CUDA 12.4公式ビルド）へ更新した。Gemma 4 E4B / 12B + MTPでFlashAttentionを再有効化し、RTX 4060 Laptop 8GBの12B長文テストで総処理時間を約37%短縮、VRAM使用量を約220MiB削減した。
 - Editor版・CPU版の音声入力用 llama.cpp CPUバックエンドもb9631からb10075へ更新した。導入済みバックエンドのビルド番号を確認し、旧版なら音声入力パックから更新する。AMD版のROCm / Vulkanバックエンドはb9631を維持する。
 - NVIDIA同梱版とEditor版・CPU版の llama-serverのCORSをlocalhost originへ制限した。
+- 話者分離処理でpyannoteのメトリクス送信を強制的に無効化した。
+- Windows版でWebView2クラッシュダンプのMicrosoftへの自動送信を無効化した。OS・WebView・GPUドライバ等のシステム側通信はアプリの制御外であることをプライバシー文書へ明記した。
+- README末尾に日本語・英語の免責事項を追加した。
 
 ### 修正
 
@@ -177,6 +190,8 @@ v0.9.0 からのメンテナンスリリース。アプリの基本機能（文�
 - セグメント表の編集・句点での分割・セグメント単位の音声再生。
 - Word（.docx）/ Excel（.xlsx）/ JSON 形式での保存。
 
+[Unreleased]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.2...v0.9.3

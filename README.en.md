@@ -29,7 +29,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - The app does not call internet-hosted APIs while running transcription, speaker diarization, or proofreading.
 - Internet access is needed only for the initial setup, including dependency and model downloads.
 - Support for an "OpenAI-compatible API" means protocol compatibility only. The connection target is restricted to localhost / loopback. The design does not allow cloud inference endpoints.
-- The app itself does not communicate with external servers during normal operation. However, system-level components such as the OS, the WebView runtime (WebView2 / WebKitGTK), and GPU drivers may communicate externally independently of this app. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
+- The app itself does not communicate with external servers during normal operation. On Windows, WebView2 is configured not to automatically send crash dumps to Microsoft. However, the app cannot completely control required diagnostics, update checks, or other communications performed by system-level components such as the OS, the WebView runtime (WebView2 / WebKitGTK), and GPU drivers. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
 - For non-engineers, see the [plain-language privacy guide](docs/privacy-guide.md) (Japanese). To verify for yourself that nothing is sent, see the [offline verification steps](docs/offline-verification.md) (Japanese).
 
 ### Local AI Apps (LM Studio / Ollama)
@@ -127,3 +127,10 @@ After the models are downloaded, the app can be used offline.
 
 This app is distributed under the [Apache License 2.0](LICENSE).
 The bundled FFmpeg uses an LGPL build. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for third-party license information.
+
+## Disclaimer
+
+- This software is a tool for assisting with transcription and record preparation. It is not a medical device and is not a substitute for diagnosis, treatment, clinical judgment, emergency response, or any other professional judgment.
+- Outputs from transcription, speaker diarization, proofreading, voice input, segment re-listen, and related features may contain recognition errors, omissions, speaker misattributions, or inappropriate corrections. Before relying on an output for an important record or decision, the user or an appropriately qualified professional must compare it with the original audio and review and correct it.
+- Before processing audio or conversation data, obtain any required notice and consent and comply with applicable laws, professional ethics, and organizational policies. The user is responsible for securely managing the device, output files, backups, models, and credentials.
+- This software is provided under the [Apache License 2.0](LICENSE), without warranties or conditions of any kind, express or implied. To the extent permitted by applicable law, the developers and contributors are not liable for decisions, records, losses, or other consequences arising from use of, or inability to use, this software.

@@ -9191,6 +9191,30 @@ mod tests {
     }
 
     #[test]
+    fn offline_model_env_disables_huggingface_and_pyannote_telemetry() {
+        let mut cmd = Command::new("python");
+        apply_offline_model_env(&mut cmd);
+        let envs = cmd
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            envs.get("HF_HUB_DISABLE_TELEMETRY"),
+            Some(&Some("1".to_string()))
+        );
+        assert_eq!(
+            envs.get("PYANNOTE_METRICS_ENABLED"),
+            Some(&Some("0".to_string()))
+        );
+    }
+
+    #[test]
     fn audio_stream_token_comparison_rejects_missing_or_changed_tokens() {
         let expected = "0123456789abcdef";
         assert!(constant_time_token_eq(expected, expected));
@@ -10678,7 +10702,11 @@ fn apply_offline_model_env(cmd: &mut Command) {
     cmd.env("HF_HUB_OFFLINE", "1")
         .env("TRANSFORMERS_OFFLINE", "1")
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
-        .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1");
+        .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+        // pyannote.audio 4.x は Hugging Face の telemetry 設定とは別に、
+        // パイプライン種別・音声時間・話者数などの利用統計を既定で送信する。
+        // 臨床音声に付随するメタデータも PC 外へ出さないため明示的に無効化する。
+        .env("PYANNOTE_METRICS_ENABLED", "0");
 }
 
 /// 実行時サイドカー（文字起こし・話者分離）が作る一時WAV等を、OS共有の一時

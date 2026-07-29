@@ -41,6 +41,10 @@ def emit_progress(stage: str, message: str, progress: float | None = None) -> No
 
 def configure_runtime_env() -> None:
     # Must be set before importing torch/pyannote modules.
+    # pyannote.audio 4.x enables anonymous OpenTelemetry metrics by default.
+    # File duration and requested speaker counts are conversation metadata, so
+    # keep telemetry disabled even when this CLI is launched outside Tauri.
+    os.environ["PYANNOTE_METRICS_ENABLED"] = "0"
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")

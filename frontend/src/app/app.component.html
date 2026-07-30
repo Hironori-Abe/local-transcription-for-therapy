@@ -1564,9 +1564,10 @@
                     </button>
                     <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
                       cdkAutosizeMaxRows="12" class="segment-content-input"
-                      [value]="getEditableTextFromMap(segment, editedSegmentTextMap())"
+                      [attr.data-segment-id]="segment.id"
+                      [lottPreserveUndoValue]="getEditableTextFromMap(segment, editedSegmentTextMap())"
                       [disabled]="isProofreadLocked || llmStatus === 'processing'"
-                      (input)="setEditableText(segment.id, $any($event.target).value)"></textarea>
+                      (input)="onSegmentTextInput(segment.id, $event)"></textarea>
                     <mat-hint *ngIf="proofreadHintBySegmentId()[segment.id] as proofreadHint"
                       class="proofread-hint-row">
                       <span>{{ proofreadHint }}</span>

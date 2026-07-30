@@ -18,6 +18,7 @@ import { MatSnackBar, MatSnackBarModule, MatSnackBarRef } from '@angular/materia
 import { PasswordDialogComponent } from './password-dialog.component';
 import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.component';
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
+import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -478,6 +479,20 @@ interface SetupProgressEvent {
   totalBytes?: number;
 }
 
+interface SegmentTextHistoryEntry {
+  before: string;
+  after: string;
+  beforeCaret: number;
+  afterCaret: number;
+  inputKind: string;
+  timestamp: number;
+}
+
+interface SegmentTextHistory {
+  undo: SegmentTextHistoryEntry[];
+  redo: SegmentTextHistoryEntry[];
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -501,6 +516,7 @@ interface SetupProgressEvent {
     TextFieldModule,
     ScrollingModule,
     ScrollingModuleExperimental,
+    PreserveUndoValueDirective,
   ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
@@ -961,6 +977,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly speakerAliasMap = signal<Record<string, string>>({});
   readonly selectedSpeakerBySegmentId = signal<Record<number, string>>({});
   readonly editedSegmentTextMap = signal<Record<number, string>>({});
+  private readonly segmentTextHistory = new Map<number, SegmentTextHistory>();
+  private readonly segmentTextHistoryLimit = 200;
+  private readonly segmentTextHistoryMergeWindowMs = 1000;
   readonly playingSegmentId = signal<number | null>(null);
   readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6 /*, 1.8, 2.0 */];
   readonly playbackRate = signal<number>(1.0);
@@ -2580,6 +2599,43 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     event.preventDefault();
     this.openFindReplaceDialog();
+  }
+
+  @HostListener('window:keydown', ['$event'])
+  onWindowTextUndoRedo(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || event.altKey) {
+      return;
+    }
+    const primaryModifier = event.ctrlKey !== event.metaKey && (event.ctrlKey || event.metaKey);
+    if (!primaryModifier) {
+      return;
+    }
+    const key = (event.key ?? '').toLowerCase();
+    const undo = key === 'z' && !event.shiftKey;
+    const redo = (key === 'y' && !event.shiftKey) || (key === 'z' && event.shiftKey);
+    if (!undo && !redo) {
+      return;
+    }
+    const textarea = event.target;
+    if (
+      !(textarea instanceof HTMLTextAreaElement) ||
+      !textarea.classList.contains('segment-content-input') ||
+      textarea.disabled ||
+      textarea.readOnly
+    ) {
+      return;
+    }
+    const segmentId = Number(textarea.dataset['segmentId']);
+    if (!Number.isInteger(segmentId)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (undo) {
+      this.undoSegmentTextEdit(segmentId, textarea);
+    } else {
+      this.redoSegmentTextEdit(segmentId, textarea);
+    }
   }
 
   private isEditableEventTarget(target: EventTarget | null): boolean {
@@ -7489,10 +7545,150 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   setEditableText(segmentId: number, value: string): void {
+    this.segmentTextHistory.delete(segmentId);
+    this.updateEditableText(segmentId, value);
+  }
+
+  onSegmentTextInput(segmentId: number, event: Event): void {
+    const textarea = event.target;
+    if (!(textarea instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    const before = this.getEditableTextById(segmentId);
+    const after = textarea.value;
+    if (before === after) {
+      return;
+    }
+    const inputKind = event instanceof InputEvent ? event.inputType : '';
+    this.recordSegmentTextEdit(
+      segmentId,
+      before,
+      after,
+      textarea.selectionStart ?? after.length,
+      inputKind,
+    );
+    this.updateEditableText(segmentId, after);
+  }
+
+  private updateEditableText(segmentId: number, value: string): void {
     const next = { ...this.editedSegmentTextMap() };
     next[segmentId] = value;
     this.editedSegmentTextMap.set(next);
     this.clearProofreadMetadataIfTextDiverged(segmentId, value);
+  }
+
+  private recordSegmentTextEdit(
+    segmentId: number,
+    before: string,
+    after: string,
+    afterCaret: number,
+    inputKind: string,
+  ): void {
+    const history = this.segmentTextHistory.get(segmentId) ?? { undo: [], redo: [] };
+    const timestamp = Date.now();
+    const normalizedKind = this.coalescingInputKind(inputKind);
+    const beforeCaret = this.changedRangeEnd(before, after);
+    const previous = history.undo.at(-1);
+    const canMerge = !!previous
+      && normalizedKind.length > 0
+      && previous.inputKind === normalizedKind
+      && previous.after === before
+      && timestamp - previous.timestamp <= this.segmentTextHistoryMergeWindowMs;
+
+    if (canMerge && previous) {
+      previous.after = after;
+      previous.afterCaret = afterCaret;
+      previous.timestamp = timestamp;
+    } else {
+      if (previous && previous.after !== before) {
+        history.undo = [];
+      }
+      history.undo.push({
+        before,
+        after,
+        beforeCaret,
+        afterCaret,
+        inputKind: normalizedKind,
+        timestamp,
+      });
+      if (history.undo.length > this.segmentTextHistoryLimit) {
+        history.undo.splice(0, history.undo.length - this.segmentTextHistoryLimit);
+      }
+    }
+    history.redo = [];
+    this.segmentTextHistory.set(segmentId, history);
+  }
+
+  private coalescingInputKind(inputKind: string): string {
+    if (inputKind === 'insertText' || inputKind === 'insertCompositionText') {
+      return 'typing';
+    }
+    if (inputKind === 'deleteContentBackward') {
+      return 'delete-backward';
+    }
+    if (inputKind === 'deleteContentForward') {
+      return 'delete-forward';
+    }
+    return '';
+  }
+
+  private changedRangeEnd(before: string, after: string): number {
+    const maxPrefix = Math.min(before.length, after.length);
+    let prefix = 0;
+    while (prefix < maxPrefix && before[prefix] === after[prefix]) {
+      prefix += 1;
+    }
+    let suffix = 0;
+    while (
+      suffix < before.length - prefix &&
+      suffix < after.length - prefix &&
+      before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+    return before.length - suffix;
+  }
+
+  private undoSegmentTextEdit(segmentId: number, textarea: HTMLTextAreaElement): void {
+    const history = this.segmentTextHistory.get(segmentId);
+    const entry = history?.undo.at(-1);
+    if (!history || !entry) {
+      return;
+    }
+    if (this.getEditableTextById(segmentId) !== entry.after) {
+      this.segmentTextHistory.delete(segmentId);
+      return;
+    }
+    history.undo.pop();
+    history.redo.push(entry);
+    this.applySegmentTextHistoryValue(segmentId, entry.before, entry.beforeCaret, textarea);
+  }
+
+  private redoSegmentTextEdit(segmentId: number, textarea: HTMLTextAreaElement): void {
+    const history = this.segmentTextHistory.get(segmentId);
+    const entry = history?.redo.at(-1);
+    if (!history || !entry) {
+      return;
+    }
+    if (this.getEditableTextById(segmentId) !== entry.before) {
+      this.segmentTextHistory.delete(segmentId);
+      return;
+    }
+    history.redo.pop();
+    history.undo.push(entry);
+    this.applySegmentTextHistoryValue(segmentId, entry.after, entry.afterCaret, textarea);
+  }
+
+  private applySegmentTextHistoryValue(
+    segmentId: number,
+    value: string,
+    caret: number,
+    textarea: HTMLTextAreaElement,
+  ): void {
+    textarea.value = value;
+    this.updateEditableText(segmentId, value);
+    const safeCaret = Math.max(0, Math.min(value.length, caret));
+    textarea.setSelectionRange(safeCaret, safeCaret);
   }
 
   mergeConsecutiveSpeakerUtterances(): void {

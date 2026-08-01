@@ -761,6 +761,36 @@
   color: #212121;
 }
 
+/*
+ * 5秒ごとに文字数の違うヒントへ差し替わるため、幅を固定しないと両隣（「内容」ラベルと
+ * 表示切替トグル）が毎回動いてしまう。空き幅を全部このspanに吸わせて中央寄せにすることで、
+ * ヒントの長短にかかわらず両隣の位置を固定する。min-width を持たせないので狭い窓でも縮む。
+ */
+.shortcut-hint {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.shortcut-hint-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shortcut-hint-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .reader-runtime-note {
   margin: 0 0 8px;
   color: #b26a00;

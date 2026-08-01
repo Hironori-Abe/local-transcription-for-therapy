@@ -403,6 +403,16 @@ Tauri build override 方針:
 - `[fontIcon]` バインディングは使わない（クラスベースのフォント設定と相性が悪い）
 - テキスト補間 `{{ }}` 内に改行・インデントを入れない（リガチャが解決されなくなる）
 
+### キーボードショートカットの追加方法
+
+**同じイベント名の `@HostListener` を複数のメソッドに付けてはいけない。** Angular はホストリスナーをイベント名をキーにしたマップで保持するため、`@HostListener('window:keydown')` を2つ以上宣言すると**最後の1つだけが登録され、それ以前のものはエラーも警告も出さずに無効化される**。「実装したのにキーが効かない」の主因はこれ。
+
+- keydown の入口は `app.component.ts` の `onWindowKeydown` **1つだけ**。ショートカットを増やすときは、そこから呼ぶハンドラを足す（`onWindowFindShortcut` / `onWindowTextUndoRedo` / `onWindowPlaybackShortcut` と同じ形）。先行ハンドラが `preventDefault()` したら後続は動かさない。
+- 判定は **`event.code` を優先**し、取れないときだけ `event.key`（小文字化）へフォールバックする。Ctrl+Shift 押下中や IME 変換中は `event.key` が大文字化・`Process`・`Unidentified` になることがあり、`key` だけ見ていると無反応になる。
+- 再生操作など文字入力でないショートカットは **`event.isComposing` で早期 return しない**。日本語変換中に効かなくなる。
+- 反応しないケースを作らない。条件を満たさないときは snackbar で理由を出す。ただし**再生中は再生コントロールの snackbar が出しっぱなし**（`PlaybackControlSnackbarComponent`、`duration: 0`）で、`MatSnackBar` は同時に1つしか表示しないため、再生中に発火しうるハンドラから `snackBar.open()` を呼ぶと再生コントロールが消える。
+- 動作確認用のプローブ: `demo_data/key-probe/`（コミット対象外）。Windows / Linux 両方で届くキーだけを採用する。
+
 ## Important References
 
 - Main UI: `frontend/src/app/app.component.ts`

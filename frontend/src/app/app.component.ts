@@ -983,6 +983,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly playingSegmentId = signal<number | null>(null);
   readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6 /*, 1.8, 2.0 */];
   readonly playbackRate = signal<number>(1.0);
+  readonly shortcutHints: ReadonlyArray<string> = [
+    'Ctrl+Shift+F（置換）',
+    'Ctrl+Shift+Space（連続再生 / 停止）',
+    'Ctrl+Shift+A（5秒戻す）',
+    'Ctrl+Shift+D（5秒進める）',
+    'Ctrl+Shift+E（話者を切替）'
+  ];
+  readonly shortcutHintIndex = signal<number>(0);
+  readonly currentShortcutHint = computed(() => this.shortcutHints[this.shortcutHintIndex()]);
   readonly hiddenSegmentIds = signal<Record<number, boolean>>({});
   readonly diarizationModelChecked = signal<boolean>(false);
   readonly diarizationModelExists = signal<boolean>(true);
@@ -1370,6 +1379,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly voiceInputMaxRecordingSeconds = 15;
   private previewAudio: HTMLAudioElement | null = null;
   private lastLoadedAudioSrc: string | null = null;
+  // Ctrl+Shift+Space による一時停止状態。stop（完全停止）とは別に扱う。
+  private previewPaused = false;
+  private readonly shortcutSeekSeconds = 5;
+  private shortcutFocusRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private shortcutHintIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
   private previewLoopEnabled = false;
   private previewSequenceSegmentIds: number[] = [];
@@ -2542,6 +2556,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.loadEstimateSamples();
     void this.initializeStartupState();
     window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
+    // ショートカットヒント（表の内容ヘッダー）を5秒ごとにローテーション
+    this.shortcutHintIntervalHandle = setInterval(() => {
+      const nextIndex = (this.shortcutHintIndex() + 1) % this.shortcutHints.length;
+      this.shortcutHintIndex.set(nextIndex);
+    }, 5000);
   }
 
   ngAfterViewInit(): void {
@@ -2586,9 +2605,40 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       cancelAnimationFrame(this._overallProofreadScrollRaf);
     }
     window.removeEventListener('scroll', this._refreshSegmentTableInView);
+    if (this.shortcutFocusRetryTimer !== null) {
+      clearTimeout(this.shortcutFocusRetryTimer);
+      this.shortcutFocusRetryTimer = null;
+    }
+    if (this.shortcutHintIntervalHandle !== null) {
+      clearInterval(this.shortcutHintIntervalHandle);
+      this.shortcutHintIntervalHandle = null;
+    }
   }
 
+  /**
+   * keydown の唯一の入口。
+   *
+   * 重要: Angular は @HostListener を「イベント名」をキーにしたマップで保持するため、
+   * 同じ 'window:keydown' を複数のメソッドに付けると **最後の1つだけが登録され、
+   * それ以前のものはエラーも警告も出さずに無効化される**。
+   * 過去に追加したショートカットが効かなかった原因はこれ。
+   * キーボードショートカットを増やすときは、必ずこのメソッドから呼び出すこと。
+   *
+   * 先に処理したハンドラが preventDefault() したら後続は動かさない。
+   */
   @HostListener('window:keydown', ['$event'])
+  onWindowKeydown(event: KeyboardEvent): void {
+    this.onWindowFindShortcut(event);
+    if (event.defaultPrevented) {
+      return;
+    }
+    this.onWindowTextUndoRedo(event);
+    if (event.defaultPrevented) {
+      return;
+    }
+    this.onWindowPlaybackShortcut(event);
+  }
+
   onWindowFindShortcut(event: KeyboardEvent): void {
     if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) {
       return;
@@ -2601,7 +2651,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.openFindReplaceDialog();
   }
 
-  @HostListener('window:keydown', ['$event'])
   onWindowTextUndoRedo(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.isComposing || event.altKey) {
       return;
@@ -2635,6 +2684,288 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.undoSegmentTextEdit(segmentId, textarea);
     } else {
       this.redoSegmentTextEdit(segmentId, textarea);
+    }
+  }
+
+  onWindowPlaybackShortcut(event: KeyboardEvent): void {
+    if (event.defaultPrevented) {
+      return;
+    }
+    if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) {
+      return;
+    }
+    // 注意: event.isComposing での早期returnはしない。これは文字入力用ではなく
+    // 再生操作用のショートカットであり、IME変換中に反応しないと
+    // 「ショートカットが効かない」という不具合報告の主因になりうるため。
+    const code = this.matchPlaybackShortcutCode(event);
+    if (!code) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    switch (code) {
+      case 'Space':
+        this.handlePlaybackToggleShortcut();
+        break;
+      case 'KeyA':
+        void this.handleSeekShortcut(-this.shortcutSeekSeconds);
+        break;
+      case 'KeyD':
+        void this.handleSeekShortcut(this.shortcutSeekSeconds);
+        break;
+      case 'KeyE':
+        this.handleSpeakerCycleShortcut();
+        break;
+    }
+  }
+
+  /**
+   * Ctrl+Shift 押下中や IME 変換中は event.key が大文字化・'Process'・'Unidentified'
+   * になることがあり、それだけに頼ると反応しないことがある。レイアウト非依存で
+   * 安定している event.code を優先し、取れない場合のみ event.key へフォールバックする。
+   */
+  private matchPlaybackShortcutCode(event: KeyboardEvent): 'Space' | 'KeyA' | 'KeyD' | 'KeyE' | null {
+    const knownCodes = ['Space', 'KeyA', 'KeyD', 'KeyE'] as const;
+    const code = event.code as (typeof knownCodes)[number];
+    if (knownCodes.includes(code)) {
+      return code;
+    }
+    const key = (event.key ?? '').toLowerCase();
+    switch (key) {
+      case ' ':
+      case 'spacebar':
+        return 'Space';
+      case 'a':
+        return 'KeyA';
+      case 'd':
+        return 'KeyD';
+      case 'e':
+        return 'KeyE';
+      default:
+        return null;
+    }
+  }
+
+  /** Ctrl+Shift+Space: 連続再生の再生 / 一時停止をトグルする。 */
+  private handlePlaybackToggleShortcut(): void {
+    if (this.isPlaybackDisabled() || !this.selectedAudioPath()) {
+      this.snackBar.open('音声ファイルが読み込まれていません', undefined, { duration: 2200 });
+      return;
+    }
+    const audio = this.previewAudio;
+    const playingId = this.playingSegmentId();
+    if (playingId !== null && audio && !audio.paused) {
+      audio.pause();
+      this.previewPaused = true;
+      // 一時停止した行をそのまま直せるようにキャレットを末尾へ置く。
+      this.focusSegmentTextareaById(playingId);
+      return;
+    }
+    if (playingId !== null && this.previewPaused && audio) {
+      this.previewPaused = false;
+      void audio.play();
+      return;
+    }
+    const segment = this.resolveShortcutTargetSegment();
+    if (!segment) {
+      this.snackBar.open('音声ファイルが読み込まれていません', undefined, { duration: 2200 });
+      return;
+    }
+    void this.playSegmentOnce(segment);
+  }
+
+  /** Ctrl+Shift+A / D: ±5秒シークする。リピート再生中はセグメント境界内に留める。 */
+  private async handleSeekShortcut(deltaSeconds: number): Promise<void> {
+    if (this.playingSegmentId() === null) {
+      this.snackBar.open('再生中に使えます', undefined, { duration: 2200 });
+      return;
+    }
+    const audio = this.previewAudio;
+    if (!audio) {
+      return;
+    }
+    const duration = audio.duration;
+    let target = audio.currentTime + deltaSeconds;
+    if (Number.isFinite(duration) && duration > 0) {
+      target = Math.min(Math.max(target, 0), duration);
+    } else {
+      target = Math.max(target, 0);
+    }
+
+    if (this.previewLoopEnabled) {
+      // リピート再生中はセグメントを切り替えず、区間内にクランプする。
+      const lo = this.previewStartSeconds ?? 0;
+      const hi = this.previewEndSeconds ?? target;
+      target = Math.min(Math.max(target, lo), hi);
+      await this.seekPreviewToSegmentTime(null, target);
+      return;
+    }
+
+    // 連続再生中: target 秒を含むセグメントを探し、そこから始まるシーケンスへ作り直す。
+    const rows = this.segmentRows;
+    let seg: TranscriptionSegment | null = null;
+    for (const s of rows) {
+      if (s.start > target) {
+        break;
+      }
+      seg = s;
+      if (target < s.end) {
+        break;
+      }
+    }
+    if (!seg && rows.length > 0) {
+      seg = rows[0];
+    }
+    if (!seg) {
+      return;
+    }
+
+    const ids = rows.map((v) => v.id);
+    const idx = ids.indexOf(seg.id);
+    this.previewSequenceSegmentIds = idx >= 0 ? ids.slice(idx) : [seg.id];
+    this.previewSequenceIndex = 0;
+    this.setActivePlayingSegment(seg.id);
+    await this.seekPreviewToSegmentTime(seg, target);
+  }
+
+  /** Ctrl+Shift+E: 対象行の話者を次の選択肢へ送る（未入力は飛ばす）。 */
+  private handleSpeakerCycleShortcut(): void {
+    // 再生系と違い、話者切り替えは「今フォーカスしている行」を最優先にする。
+    // 一時停止中は playingSegmentId が残るため、共通の解決順のままだと
+    // 別の行を編集していても停止した行の話者を書き換えてしまう。
+    const segment = this.segmentFromFocusedTextarea() ?? this.resolveShortcutTargetSegment();
+    if (!segment) {
+      return;
+    }
+    const options = this.speakerOptions;
+    if (options.length === 0) {
+      return;
+    }
+    const current = this.getAssignedSpeakerKey(segment);
+    const index = options.indexOf(current);
+    const next = index === -1 ? options[0] : options[(index + 1) % options.length];
+    this.setAssignedSpeaker(segment.id, next);
+  }
+
+  /**
+   * ショートカットの対象セグメントを解決する優先順位:
+   * 1. 再生中のセグメント（表示中の行に限る）
+   * 2. フォーカス中の編集欄（.segment-content-input）が指すセグメント
+   * 3. 表示中の先頭行
+   */
+  private resolveShortcutTargetSegment(): TranscriptionSegment | null {
+    const rows = this.displayedSegmentRows;
+    if (rows.length === 0) {
+      return null;
+    }
+    const playingId = this.playingSegmentId();
+    if (playingId !== null) {
+      const playing = rows.find((s) => s.id === playingId);
+      if (playing) {
+        return playing;
+      }
+    }
+    const focused = this.segmentFromFocusedTextarea();
+    if (focused) {
+      return focused;
+    }
+    return rows[0];
+  }
+
+  /** フォーカス中の編集欄（.segment-content-input）が指す表示中のセグメントを返す。 */
+  private segmentFromFocusedTextarea(): TranscriptionSegment | null {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLTextAreaElement) || !active.classList.contains('segment-content-input')) {
+      return null;
+    }
+    const id = Number(active.dataset['segmentId']);
+    if (!Number.isInteger(id)) {
+      return null;
+    }
+    return this.displayedSegmentRows.find((s) => s.id === id) ?? null;
+  }
+
+  /**
+   * 仮想スクロールで対象行がまだ描画されていないことがあるため、
+   * まず中央へスクロールし、その後 DOM に描画されるまで一定間隔でリトライして
+   * textarea を取得してからフォーカス・キャレットを末尾へ移動する。
+   */
+  private focusSegmentTextareaById(segmentId: number, attemptsLeft = 12): void {
+    if (this.shortcutFocusRetryTimer !== null) {
+      clearTimeout(this.shortcutFocusRetryTimer);
+      this.shortcutFocusRetryTimer = null;
+    }
+    const index = this.displayedSegmentRows.findIndex((s) => s.id === segmentId);
+    const viewport = this.activeSegmentViewport;
+    if (viewport && index >= 0) {
+      this.scrollSegmentRowIntoCenter(viewport, segmentId, index, ++this.followScrollGeneration, 10);
+    }
+    this.retryFocusSegmentTextarea(segmentId, attemptsLeft);
+  }
+
+  private retryFocusSegmentTextarea(segmentId: number, attemptsLeft: number): void {
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      `.segment-content-input[data-segment-id="${segmentId}"]`
+    );
+    if (textarea) {
+      textarea.focus();
+      const len = textarea.value.length;
+      textarea.setSelectionRange(len, len);
+      return;
+    }
+    if (attemptsLeft <= 0) {
+      return;
+    }
+    this.shortcutFocusRetryTimer = setTimeout(() => {
+      this.shortcutFocusRetryTimer = null;
+      this.retryFocusSegmentTextarea(segmentId, attemptsLeft - 1);
+    }, 40);
+  }
+
+  /**
+   * ontimeupdate の再入・進行中の advanceSequencePlayback を避けるため、
+   * startSegmentPlayback / advanceSequencePlayback と同じ手順でシークする:
+   * pause → previewEndSeconds を null 化 → 世代カウンタを進めて古い処理を無効化 →
+   * seeked 待ち（最大500ms）→ previewEndSeconds を復元 → 再生中だったら再開。
+   * segment が null の場合（リピート区間内シーク）はセグメント境界を変更しない。
+   */
+  private async seekPreviewToSegmentTime(segment: TranscriptionSegment | null, targetSeconds: number): Promise<void> {
+    const audio = this.previewAudio;
+    if (!audio) {
+      return;
+    }
+    const wasPlaying = !audio.paused;
+    // 先に一時停止してからシークする。ontimeupdate が中途半端な位置で
+    // 再入して意図しないセグメント送りが起きるのを防ぐ。
+    audio.pause();
+    const previousEnd = this.previewEndSeconds;
+    if (segment) {
+      this.previewStartSeconds = Math.max(0, segment.start);
+    }
+    this.previewEndSeconds = null;
+    // 進行中の advanceSequencePlayback や別の seek 処理を打ち切るための世代カウンタ。
+    const gen = ++this.seekPlayGeneration;
+    await new Promise<void>((resolve) => {
+      const onSeeked = () => {
+        audio.removeEventListener('seeked', onSeeked);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        audio.removeEventListener('seeked', onSeeked);
+        resolve();
+      }, 500);
+      audio.addEventListener('seeked', onSeeked);
+      audio.currentTime = targetSeconds;
+    });
+    if (gen !== this.seekPlayGeneration) {
+      return;
+    }
+    this.previewEndSeconds = segment
+      ? Math.max((this.previewStartSeconds ?? 0) + 0.1, segment.end)
+      : previousEnd;
+    if (wasPlaying && !this.previewPaused) {
+      void audio.play();
     }
   }
 
@@ -7095,6 +7426,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
+    this.previewPaused = false;
     const audio = this.getOrCreatePreviewAudio();
     const src = await this.resolvePlayableAudioSrc(path);
     const start = Math.max(0, segment.start);
@@ -7219,6 +7551,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     ++this.seekPlayGeneration;
     this.sequenceSnackBarRef?.dismiss();
     this.sequenceSnackBarRef = null;
+    this.previewPaused = false;
     if (!this.previewAudio) {
       this.setActivePlayingSegment(null, false);
       this.previewLoopEnabled = false;

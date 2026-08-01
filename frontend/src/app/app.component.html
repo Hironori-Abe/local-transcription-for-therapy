@@ -1427,7 +1427,10 @@
             <div class="segment-col-content">
               <div class="content-header-filter">
                 <span>内容</span>
-                <span class="reader-hint">Ctrl+Shift+F（置換）</span>
+                <span class="reader-hint shortcut-hint">
+                  <mat-icon class="material-symbols-outlined shortcut-hint-icon" aria-hidden="true">lightbulb</mat-icon>
+                  <span class="shortcut-hint-text">{{ currentShortcutHint() }}</span>
+                </span>
                 <span class="content-filter-toggle-wrap">
                   <mat-button-toggle-group class="content-filter-toggle" [value]="segmentRowFilter()"
                     [disabled]="cautionExtracting()" aria-label="結果行の表示切替">

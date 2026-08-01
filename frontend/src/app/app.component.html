@@ -39,7 +39,13 @@
 
   <div class="dev-emulation-label" *ngIf="runtimeCheckDone() && devEmulationLabel()">{{ devEmulationLabel() }}</div>
 
-  <mat-tab-group *ngIf="runtimeCheckDone()" [selectedIndex]="activeTabIndex()"
+  <div class="tabs-shell" *ngIf="runtimeCheckDone()">
+    <button mat-icon-button type="button" class="theme-toggle-btn" (click)="onThemeToggleClick()"
+      [matTooltip]="themeToggleTooltip()" aria-label="表示テーマを切り替える">
+      <mat-icon class="material-symbols-outlined">{{ themeToggleIcon() }}</mat-icon>
+    </button>
+
+  <mat-tab-group [selectedIndex]="activeTabIndex()"
     (selectedIndexChange)="onTabIndexChange($event)" [dynamicHeight]="true" animationDuration="150ms">
     <mat-tab [label]="getTranscriptionTabLabel()" *ngIf="canShowTranscriptionTab()">
       <div class="tab-content">
@@ -1260,6 +1266,7 @@
       </div>
     </mat-tab>
   </mat-tab-group>
+  </div>
 
   <ng-template #proofreadAndMergeSection let-source="source" let-requireImportReady="requireImportReady"
     let-rowClass="rowClass">
@@ -1298,7 +1305,7 @@
                   style="color: orange; vertical-align: middle; font-size: 18px;">warning</mat-icon>
                 <span>AI校正の実行には <strong>{{ llmInstallableGpuEntry()?.installKey }}</strong>
                   バックエンドのダウンロードが必要です。</span>
-                <span style="color: #888;">（インターネット接続が必要です）</span>
+                <span style="color: light-dark(#888, #9099a2);">（インターネット接続が必要です）</span>
                 <button mat-stroked-button (click)="installLlmBackend()" style="margin-left: 8px;">
                   ダウンロードして設定
                 </button>
@@ -1313,7 +1320,7 @@
             </ng-container>
             <div
               *ngIf="!llmBackendInstalling() && llmBackendInstallMessage() && !llmInstallableGpuEntry()"
-              class="copy-status" style="color: green;">
+              class="copy-status" style="color: light-dark(green, #7fc98a);">
               {{ llmBackendInstallMessage() }}
             </div>
           </div>

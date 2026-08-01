@@ -335,6 +335,9 @@ interface AmdGpuFailureDialogState {
   message: string;
 }
 
+/** 画面テーマ。system はOS設定に追従する。 */
+type ThemeMode = 'system' | 'light' | 'dark';
+
 interface AppSettingsV1 {
   transcription?: {
     device?: string;
@@ -363,6 +366,9 @@ interface AppSettingsV1 {
   };
   export?: {
     addUtteranceNumber?: boolean;
+  };
+  ui?: {
+    themeMode?: ThemeMode;
   };
   llm?: {
     modelPath?: string;
@@ -1422,6 +1428,31 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private lastObservedComputeType: string | null = null;
   private lastObservedTranscriptionDevice: string | null = null;
 
+  // ===== 画面テーマ（システム / ライト / ダーク） =====
+  readonly themeMode = signal<ThemeMode>('system');
+  /** OS 側のダークモード設定。system モードのときの実効テーマ判定に使う。 */
+  readonly systemPrefersDark = signal(false);
+  readonly themeIsDark = computed(
+    () => this.themeMode() === 'dark' || (this.themeMode() === 'system' && this.systemPrefersDark())
+  );
+  readonly themeToggleIcon = computed(() => {
+    switch (this.themeMode()) {
+      case 'light':
+        return 'light_mode';
+      case 'dark':
+        return 'dark_mode';
+      default:
+        return 'brightness_auto';
+    }
+  });
+  readonly themeToggleTooltip = computed(
+    () => `表示テーマ: ${this.themeModeLabel(this.themeMode())}（クリックで切り替え）`
+  );
+  private systemDarkQuery: MediaQueryList | null = null;
+  private readonly _onSystemThemeChange = (event: MediaQueryListEvent): void => {
+    this.ngZone.run(() => this.systemPrefersDark.set(event.matches));
+  };
+
   get resultAsPrettyJson(): string {
     return JSON.stringify(this.result(), null, 2);
   }
@@ -2269,6 +2300,64 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.updateDevEmulationLabelFromSettings();
   }
 
+  private normalizeThemeMode(value: unknown): ThemeMode {
+    return value === 'light' || value === 'dark' ? value : 'system';
+  }
+
+  private themeModeLabel(mode: ThemeMode): string {
+    switch (mode) {
+      case 'light':
+        return 'ライト';
+      case 'dark':
+        return 'ダーク';
+      default:
+        return 'システムに合わせる';
+    }
+  }
+
+  /** 保存済みテーマを復元し、OS のダークモード設定の監視を開始する。 */
+  private initTheme(): void {
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      try {
+        this.systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+        this.systemPrefersDark.set(this.systemDarkQuery.matches);
+        this.systemDarkQuery.addEventListener('change', this._onSystemThemeChange);
+      } catch {
+        this.systemDarkQuery = null;
+      }
+    }
+    this.themeMode.set(this.normalizeThemeMode(this.appSettings.ui?.themeMode));
+    this.applyThemeToDocument();
+  }
+
+  private applyThemeToDocument(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const root = document.documentElement;
+    const mode = this.themeMode();
+    if (mode === 'system') {
+      root.removeAttribute('data-theme');
+    } else {
+      root.setAttribute('data-theme', mode);
+    }
+  }
+
+  /** システムに合わせる → ライト → ダーク の順に切り替える。 */
+  onThemeToggleClick(): void {
+    const order: ThemeMode[] = ['system', 'light', 'dark'];
+    const next = order[(order.indexOf(this.themeMode()) + 1) % order.length];
+    this.themeMode.set(next);
+    this.applyThemeToDocument();
+    this.appSettings = {
+      ...this.appSettings,
+      ui: { ...this.appSettings.ui, themeMode: next }
+    };
+    this.persistAppSettings();
+    const suffix = next === 'system' ? `（現在: ${this.themeIsDark() ? 'ダーク' : 'ライト'}）` : '';
+    this.snackBar.open(`表示テーマ: ${this.themeModeLabel(next)}${suffix}`, undefined, { duration: 2400 });
+  }
+
   private persistTranscriptionSettings(): void {
     this.appSettings = {
       ...this.appSettings,
@@ -2552,6 +2641,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     void this.debounceDevWindowFocus();
     this.loadEditorLowMemoryVoiceInputOptIn();
     this.loadAppSettings();
+    this.initTheme();
     this.applyAppSettings();
     this.loadEstimateSamples();
     void this.initializeStartupState();
@@ -2578,6 +2668,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   };
 
   ngOnDestroy(): void {
+    if (this.systemDarkQuery) {
+      this.systemDarkQuery.removeEventListener('change', this._onSystemThemeChange);
+      this.systemDarkQuery = null;
+    }
     this.stopRunningTicker();
     this.stopSmoothProgress();
     this.stopProofreadTicker();

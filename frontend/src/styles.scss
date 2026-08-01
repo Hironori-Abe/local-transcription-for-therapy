@@ -1,7 +1,10 @@
 @use '@angular/material' as mat;
 
 html {
-  color-scheme: light;
+  // 既定は「システムに合わせる」。data-theme で明示指定に切り替える。
+  // Angular Material の mat.theme() は light-dark() ベースのトークンを出力するため、
+  // color-scheme を切り替えるだけで Material コンポーネント側も追従する。
+  color-scheme: light dark;
   @include mat.theme(
     (
       color: mat.$azure-palette,
@@ -11,10 +14,27 @@ html {
   );
 }
 
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+// アプリ共通のベース配色。
+// 個々のコンポーネント側は light-dark(ライト値, ダーク値) を直接使っている。
+html {
+  --lott-bg: light-dark(#f5f7fa, #12171e);
+  --lott-text: light-dark(#212121, #e6edf3);
+  --lott-text-muted: light-dark(#455a64, #b3c0cc);
+}
+
 body {
   margin: 0;
   font-family: Roboto, 'Noto Sans JP', sans-serif;
-  background: #f5f7fa;
+  background: var(--lott-bg);
+  color: var(--lott-text);
 }
 
 mat-icon.material-symbols-outlined {
@@ -36,6 +56,3 @@ mat-icon.material-symbols-outlined {
   font-size: 12px;
   line-height: 1.6;
 }
-
-
-

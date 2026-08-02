@@ -10,6 +10,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
+import { MatMenuModule } from '@angular/material/menu';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSelectModule } from '@angular/material/select';
@@ -512,6 +513,7 @@ interface SegmentTextHistory {
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
+    MatMenuModule,
     MatProgressBarModule,
     MatProgressSpinnerModule,
     MatSelectModule,
@@ -994,7 +996,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     'Ctrl+Shift+Space（連続再生 / 停止）',
     'Ctrl+Shift+A（5秒戻す）',
     'Ctrl+Shift+D（5秒進める）',
-    'Ctrl+Shift+E（話者を切替）'
+    'Ctrl+Shift+E（話者を切替）',
+    'Ctrl+Shift+M（音声入力）'
   ];
   readonly shortcutHintIndex = signal<number>(0);
   readonly currentShortcutHint = computed(() => this.shortcutHints[this.shortcutHintIndex()]);
@@ -2730,6 +2733,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (event.defaultPrevented) {
       return;
     }
+    this.onWindowVoiceInputShortcut(event);
+    if (event.defaultPrevented) {
+      return;
+    }
     this.onWindowPlaybackShortcut(event);
   }
 
@@ -2811,6 +2818,66 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.handleSpeakerCycleShortcut();
         break;
     }
+  }
+
+  /** Ctrl+Shift+M: 対象行で Gemma 4 の音声入力を開始 / 停止する。 */
+  private onWindowVoiceInputShortcut(event: KeyboardEvent): void {
+    if (event.defaultPrevented || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) {
+      return;
+    }
+    const keyMatches = event.code === 'KeyM'
+      || ((!event.code || event.code === 'Unidentified') && (event.key ?? '').toLowerCase() === 'm');
+    if (!keyMatches) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void this.toggleVoiceInputFromShortcut();
+  }
+
+  private async toggleVoiceInputFromShortcut(): Promise<void> {
+    if (!this.isTauriRuntime()) {
+      this.snackBar.open('この環境では音声入力を使用できません', undefined, { duration: 3000 });
+      return;
+    }
+    const recordingSegmentId = this.voiceInputRecordingSegmentId();
+    if (recordingSegmentId !== null) {
+      await this.finishVoiceInputRecording(recordingSegmentId);
+      return;
+    }
+    if (!this.editorInstalledMemoryChecked()) {
+      await this.checkEditorInstalledMemory();
+    }
+    if (this.cpuVoiceInputBuild && !this.editorVoiceInputMemoryAllowed()) {
+      this.snackBar.open('このPCはスペック（メモリ容量）が足りないため、音声入力を使用できません', undefined, { duration: 4000 });
+      return;
+    }
+    if (!this.editorVoiceInputPackChecked()) {
+      await this.checkEditorVoiceInputPackStatus();
+    }
+    if (this.editorVoiceInputPackStatus()?.installed !== true) {
+      this.snackBar.open('音声入力用のGemma 4が未導入です。設定画面の「音声入力パック」からAIモデルをダウンロードしてください', undefined, { duration: 5000 });
+      return;
+    }
+    if (this.voiceInputProcessingSegmentId() !== null) {
+      this.snackBar.open('音声入力の処理中です。完了してから再試行してください', undefined, { duration: 3000 });
+      return;
+    }
+
+    const focusedSegment = this.segmentFromFocusedTextarea();
+    const targetSegment = focusedSegment ?? this.resolveShortcutTargetSegment();
+    if (!targetSegment) {
+      this.snackBar.open('先に文字起こしを行ってください', undefined, { duration: 2200 });
+      return;
+    }
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      `.segment-content-input[data-segment-id="${targetSegment.id}"]`
+    );
+    if (!textarea || textarea.disabled || textarea.readOnly) {
+      this.snackBar.open('音声入力する行の編集欄を選択してください', undefined, { duration: 3000 });
+      return;
+    }
+    await this.toggleVoiceInputForSegment(targetSegment.id, textarea);
   }
 
   /**

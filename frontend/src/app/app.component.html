@@ -1660,8 +1660,21 @@
         <div class="actions-row result-save-actions">
           <mat-checkbox class="utterance-number-checkbox" [checked]="addUtteranceNumber()"
             (change)="onAddUtteranceNumberChange($event.checked)">発言番号を付与</mat-checkbox>
-          <button mat-flat-button color="primary" class="run-exec-btn" (click)="saveWord()">Wordで書き出し</button>
-          <button mat-flat-button color="primary" class="run-exec-btn" (click)="saveXlsx()">Excelで書き出し</button>
+          <div class="export-split-button" role="group" aria-label="WordまたはExcelで書き出し">
+            <button mat-flat-button color="primary" class="run-exec-btn export-split-main"
+              (click)="saveWord()">Wordで書き出し</button>
+            <button mat-flat-button color="primary" class="run-exec-btn export-split-toggle"
+              [matMenuTriggerFor]="exportFormatMenu" aria-label="別の出力形式を選択"
+              matTooltip="別の出力形式を選択">
+              <mat-icon class="material-symbols-outlined" aria-hidden="true">arrow_drop_down</mat-icon>
+            </button>
+          </div>
+          <mat-menu #exportFormatMenu="matMenu" xPosition="before">
+            <button mat-menu-item (click)="saveXlsx()">
+              <mat-icon class="material-symbols-outlined" aria-hidden="true">table_view</mat-icon>
+              <span>Excelで書き出し</span>
+            </button>
+          </mat-menu>
           <span class="save-json-reminder">WordやExcelだけでなく、jsonファイルも保存しておくことをお勧めします。</span>
           <button mat-flat-button color="primary" class="run-exec-btn" (click)="saveJson()">json書き出し</button>
         </div>

@@ -771,6 +771,29 @@
   padding-right: 70px;
 }
 
+.export-split-button {
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+.export-split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.export-split-toggle {
+  min-width: 42px;
+  padding: 0 6px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.42);
+}
+
+.export-split-toggle .mat-icon {
+  margin: 0;
+}
+
 .merge-overall-center {
   flex: 1;
   display: flex;

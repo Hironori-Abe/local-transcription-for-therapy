@@ -16,6 +16,10 @@ json <json_temp_path> <output_zip_path>
     Wrap a JSON file in an AES-256 encrypted ZIP and write to output_zip_path
     (requires pyzipper). The input temp file is NOT deleted here; the caller
     is responsible for cleanup. Password is read from stdin.
+
+srt <srt_temp_path> <output_zip_path>
+    Wrap an SRT file in an AES-256 encrypted ZIP and write to output_zip_path.
+    The input temp file is NOT deleted here. Password is read from stdin.
 """
 
 import io
@@ -38,10 +42,15 @@ def cmd_office(file_path: str, password: str) -> None:
         f.write(encrypted.getvalue())
 
 
-def cmd_json(json_temp_path: str, output_zip_path: str, password: str) -> None:
+def cmd_file_zip(
+    input_temp_path: str,
+    output_zip_path: str,
+    password: str,
+    extension: str,
+) -> None:
     import pyzipper
 
-    arcname = os.path.splitext(os.path.basename(output_zip_path))[0] + ".json"
+    arcname = os.path.splitext(os.path.basename(output_zip_path))[0] + extension
     with pyzipper.AESZipFile(
         output_zip_path,
         "w",
@@ -49,7 +58,7 @@ def cmd_json(json_temp_path: str, output_zip_path: str, password: str) -> None:
         encryption=pyzipper.WZ_AES,
     ) as zf:
         zf.setpassword(password.encode("utf-8"))
-        zf.write(json_temp_path, arcname=arcname)
+        zf.write(input_temp_path, arcname=arcname)
 
 
 def read_password_from_stdin() -> str:
@@ -61,7 +70,7 @@ def read_password_from_stdin() -> str:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: encrypt_office_cli.py <office|json> ...  (password via stdin)", file=sys.stderr)
+        print("Usage: encrypt_office_cli.py <office|json|srt> ...  (password via stdin)", file=sys.stderr)
         sys.exit(1)
 
     mode = sys.argv[1]
@@ -82,7 +91,16 @@ def main() -> None:
         if not password:
             print("password (stdin) is empty", file=sys.stderr)
             sys.exit(1)
-        cmd_json(sys.argv[2], sys.argv[3], password)
+        cmd_file_zip(sys.argv[2], sys.argv[3], password, ".json")
+    elif mode == "srt":
+        if len(sys.argv) != 4:
+            print("Usage: encrypt_office_cli.py srt <srt_temp> <zip_out>  (password via stdin)", file=sys.stderr)
+            sys.exit(1)
+        password = read_password_from_stdin()
+        if not password:
+            print("password (stdin) is empty", file=sys.stderr)
+            sys.exit(1)
+        cmd_file_zip(sys.argv[2], sys.argv[3], password, ".srt")
     else:
         print(f"Unknown mode: {mode}", file=sys.stderr)
         sys.exit(1)

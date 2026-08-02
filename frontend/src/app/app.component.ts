@@ -107,6 +107,13 @@ interface SaveXlsxRow {
   text: string;
 }
 
+interface SaveSrtRow {
+  startSeconds: number;
+  endSeconds: number;
+  speaker: string;
+  text: string;
+}
+
 interface ExportSpeakerDatasetRow {
   speakerValue: string;
   displayName: string;
@@ -1401,6 +1408,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private previewStartSeconds: number | null = null;
   private previewEndSeconds: number | null = null;
   private seekPlayGeneration = 0;
+  private pendingOverallProofreadTier: 'e4b' | '12b' = 'e4b';
   private pendingImportedPayload: ExportTranscriptionPayload | null = null;
   // undefined = 未取得, null = 存在しない, string = パス
   private devDemoDataDir: string | null | undefined = undefined;
@@ -4484,7 +4492,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     if (dialog.actionKind === 'overallProofreadBeforeMerge') {
-      await this.runOverallProofread();
+      await this.runOverallProofread(this.pendingOverallProofreadTier);
     }
 
     if (dialog.actionKind === 'lowerLlmParallelOnOom') {
@@ -4511,12 +4519,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     });
   }
 
-  openOrRunOverallProofread(withConfirm: boolean): void {
+  openOrRunOverallProofread(withConfirm: boolean, proofreadTier: 'e4b' | '12b' = 'e4b'): void {
     if (this.overallProofreadHasPendingItems()) {
       this.overallProofreadDialogOpen.set(true);
       return;
     }
     if (withConfirm) {
+      this.pendingOverallProofreadTier = proofreadTier;
       this.openConfirmDialog({
         actionKind: 'overallProofreadBeforeMerge',
         title: 'AI全体校正',
@@ -4527,11 +4536,32 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         cancelColor: null,
       });
     } else {
-      void this.runOverallProofread();
+      void this.runOverallProofread(proofreadTier);
     }
   }
 
-  async runOverallProofread(): Promise<void> {
+  async openOrRunOverallProofreadWith12b(withConfirm: boolean): Promise<void> {
+    if (this.overallProofreadHasPendingItems()) {
+      this.overallProofreadDialogOpen.set(true);
+      return;
+    }
+    if (!this.isTauriRuntime()) return;
+    let installed = false;
+    try {
+      installed = await invoke<boolean>('check_gemma_12b_installed');
+      this.gemma12bInstalled.set(installed);
+    } catch {
+      // 状態を確認できない場合にE4Bへ黙ってフォールバックしないよう、未導入として扱う。
+      installed = false;
+    }
+    if (!installed) {
+      this.snackBar.open('Gemma 4 12Bが未導入です。設定画面から12Bモデルをダウンロードしてください', undefined, { duration: 5000 });
+      return;
+    }
+    this.openOrRunOverallProofread(withConfirm, '12b');
+  }
+
+  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b'): Promise<void> {
     if (this.overallProofreadRunning()) return;
     if (this.running() || this.proofreadRunning() || this.diarizationRunning() || this.llmProofreadRunning()) {
       this.overallProofreadError.set('他の処理が実行中のため、全体校正を開始できません。');
@@ -4540,8 +4570,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     if (!this.isTauriRuntime() || !this.result()) return;
 
-    const backend: 'lemonade' | 'openai_compatible' =
-      this.llmBackendMode() === 'local_gguf' ? 'lemonade' : 'openai_compatible';
+    // 分割ボタンからの全体校正は、設定中の外部ローカルAIアプリに左右されず
+    // 指定された内蔵 Gemma 4 階層をジョブ単位で使用する。
+    const backend: 'lemonade' = 'lemonade';
     const modelPath = '';
 
     // 校正対象が無ければエンジンを起動せず早期returnする（無駄起動・常駐の防止）。
@@ -4559,32 +4590,23 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (backend === 'lemonade') {
-      await this.checkLlmStatus();
+    await this.checkLlmStatus();
+    if (this.llmServerStatus() !== 'running') {
+      this.overallProofreadStatus.set('AI校正エンジンを起動中...');
+      await this.startLlm(false, proofreadTier);
       if (this.llmServerStatus() !== 'running') {
-        this.overallProofreadStatus.set('AI校正エンジンを起動中...');
-        await this.startLlm();
-        if (this.llmServerStatus() !== 'running') {
-          if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runOverallProofread())) {
-            this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-          } else {
-            this.overallProofreadError.set('AI校正エンジンの起動に失敗しました。');
-            this.showAmdGpuProcessingFailure(
-              '全体校正',
-              this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
-            );
-            if (this.buildVariant() !== 'rocm') {
-              this.overallProofreadDialogOpen.set(true);
-            }
+        if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runOverallProofread(proofreadTier))) {
+          this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
+        } else {
+          this.overallProofreadError.set('AI校正エンジンの起動に失敗しました。');
+          this.showAmdGpuProcessingFailure(
+            '全体校正',
+            this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
+          );
+          if (this.buildVariant() !== 'rocm') {
+            this.overallProofreadDialogOpen.set(true);
           }
-          return;
         }
-      }
-    } else {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) {
-        this.overallProofreadError.set('モデル名が選択されていません。設定タブで「モデル一覧を取得」してモデルを選択してください。');
-        this.overallProofreadDialogOpen.set(true);
         return;
       }
     }
@@ -4604,22 +4626,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           request: {
             segments,
             modelPath,
-            nGpuLayers: backend === 'lemonade' ? 0 : -1,
+            nGpuLayers: 0,
             backend,
             lemonadeUrl: this.lemonadeUrl(),
             lemonadeModel: this.lemonadeModel(),
             openaiBaseUrl: this.activeOpenAiBaseUrl(),
             openaiModel: this.activeOpenAiModelInput(),
             nCtx: this.llmNCtx() > 0 ? this.llmNCtx() : 16384,
-            promptType: this.llmPromptType(),
-            systemPrompt: this.proofreadSystemPromptReadonly() ? null : this.overallProofreadSystemPrompt() || null,
+            promptType: 'gemma4',
+            systemPrompt: null,
           }
         }
       );
 
       if (!response.success || !response.result) {
         const msg = response.errorMessage ?? '全体校正に失敗しました。';
-        if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread())) {
+        if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
           oomHandled = true;
           this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
         } else {
@@ -4634,7 +4656,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     } catch (error) {
       const msg = this.normalizeErrorMessage(error);
-      if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread())) {
+      if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
         oomHandled = true;
         this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
       } else {
@@ -4825,6 +4847,58 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
+  async saveSrt(): Promise<void> {
+    if (!this.isTauriRuntime()) {
+      this.error.set('ブラウザ起動では保存できません。Tauri ウィンドウから実行してください。');
+      return;
+    }
+
+    if (!this.result()) {
+      return;
+    }
+
+    const password = await this.promptPassword();
+    if (password === null) {
+      return;
+    }
+
+    this.error.set('');
+    const hasPassword = password.length > 0;
+    const targetPath = await save({
+      title: '文字起こし結果（SRT字幕）を保存',
+      defaultPath: hasPassword
+        ? this.buildSrtDefaultFileName().replace(/\.srt$/, '.zip')
+        : this.buildSrtDefaultFileName(),
+      filters: hasPassword
+        ? [{ name: 'パスワード付きZIP', extensions: ['zip'] }]
+        : [{ name: 'SRT字幕', extensions: ['srt'] }]
+    });
+
+    if (!targetPath) {
+      return;
+    }
+
+    try {
+      const ext = hasPassword ? '.zip' : '.srt';
+      const finalPath = targetPath.toLowerCase().endsWith(ext) ? targetPath : `${targetPath}${ext}`;
+      const rows: SaveSrtRow[] = this.segmentRows.map((segment) => ({
+        startSeconds: segment.start,
+        endSeconds: segment.end,
+        speaker: this.displaySpeaker(this.getAssignedSpeakerKey(segment)).trim(),
+        text: this.getEditableText(segment)
+      }));
+      await invoke('save_transcription_srt', {
+        request: {
+          path: finalPath,
+          rows,
+          password: hasPassword ? password : null
+        }
+      });
+    } catch (error) {
+      this.error.set(this.normalizeErrorMessage(error));
+    }
+  }
+
   async exportRuntimeEstimateLog(): Promise<void> {
     if (!this.isTauriRuntime()) {
       this.error.set('ブラウザ起動では保存できません。Tauri ウィンドウから実行してください。');
@@ -4893,6 +4967,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const ss = String(now.getSeconds()).padStart(2, '0');
     const msec = String(now.getMilliseconds()).padStart(3, '0');
     return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}_${msec}.xlsx`;
+  }
+
+  private buildSrtDefaultFileName(): string {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mi = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}.srt`;
   }
 
   private buildJsonDefaultFileName(): string {
@@ -6058,7 +6143,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return true;
   }
 
-  async startLlm(silent = false): Promise<void> {
+  async startLlm(silent = false, proofreadTier?: 'e4b' | '12b'): Promise<void> {
     if (!this.isTauriRuntime()) return;
     this.llmLastError = '';
     this.llmServerStatus.set('starting');
@@ -6069,7 +6154,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await invoke('start_llm_server', {
         hipDeviceIndex: llmDevIdx >= 0 ? llmDevIdx : null,
         llmParallel: llmPar > 0 ? llmPar : null,
-        llmCtx: llmCtxVal > 0 ? llmCtxVal : null
+        llmCtx: llmCtxVal > 0 ? llmCtxVal : null,
+        proofreadTier: proofreadTier ?? null
       });
       this.llmServerStatus.set('running');
       await this.syncLlmUrl();

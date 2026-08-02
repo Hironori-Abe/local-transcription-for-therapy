@@ -159,16 +159,15 @@ fn validate_local_openai_base_url(raw: &str) -> Result<String, String> {
         return Err("ローカルOpenAI互換APIの Base URL が未指定です。".to_string());
     }
     if trimmed.contains('?') || trimmed.contains('#') {
-        return Err("ローカルOpenAI互換APIの Base URL にはクエリ文字列やフラグメントを含めないでください。".to_string());
+        return Err(
+            "ローカルOpenAI互換APIの Base URL にはクエリ文字列やフラグメントを含めないでください。"
+                .to_string(),
+        );
     }
-    let rest = trimmed
-        .strip_prefix("http://")
-        .ok_or_else(|| "ローカルOpenAI互換APIの Base URL は http:// で始まる必要があります。".to_string())?;
-    let authority = rest
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .trim();
+    let rest = trimmed.strip_prefix("http://").ok_or_else(|| {
+        "ローカルOpenAI互換APIの Base URL は http:// で始まる必要があります。".to_string()
+    })?;
+    let authority = rest.split('/').next().unwrap_or("").trim();
     if authority.is_empty() || authority.contains('@') {
         return Err("ローカルOpenAI互換APIの Base URL のホスト指定が不正です。".to_string());
     }
@@ -203,9 +202,7 @@ fn is_loopback_local_openai_host(host: &str) -> bool {
         return true;
     }
     let parts: Vec<&str> = host.split('.').collect();
-    parts.len() == 4
-        && parts[0] == "127"
-        && parts.iter().all(|part| part.parse::<u8>().is_ok())
+    parts.len() == 4 && parts[0] == "127" && parts.iter().all(|part| part.parse::<u8>().is_ok())
 }
 
 struct LocalOpenAiHttpTarget {
@@ -268,11 +265,7 @@ fn parse_local_openai_http_target(raw: &str) -> Result<LocalOpenAiHttpTarget, St
     let raw_path = parts.next().unwrap_or("");
 
     let (host, port) = if let Some(after_bracket) = authority.strip_prefix('[') {
-        let host = after_bracket
-            .split(']')
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let host = after_bracket.split(']').next().unwrap_or("").to_string();
         let tail = authority.split(']').nth(1).unwrap_or("");
         let port = if tail.is_empty() {
             80
@@ -388,7 +381,10 @@ fn local_openai_http_get_json(
     if !status_line.contains(" 200 ") {
         return Err(format!("モデル一覧取得に失敗しました: {status_line}"));
     }
-    let body = if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    let body = if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         decode_chunked_http_body(body_bytes)?
     } else {
         body_bytes.to_vec()
@@ -415,8 +411,8 @@ fn local_openai_http_post_json_body(
         .map_err(|e| format!("アドレス解決に失敗: {e}"))?
         .next()
         .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("接続に失敗: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let body_bytes = body.as_bytes();
     let request = format!(
@@ -435,7 +431,6 @@ fn local_openai_http_post_json_body(
     Ok(())
 }
 
-
 /// POST リクエストを送り、レスポンスボディを JSON として返す。
 fn local_openai_http_post_json_with_response(
     target: &LocalOpenAiHttpTarget,
@@ -453,8 +448,8 @@ fn local_openai_http_post_json_with_response(
         .map_err(|e| format!("アドレス解決に失敗: {e}"))?
         .next()
         .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("接続に失敗: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let body_bytes = body.as_bytes();
     let request = format!(
@@ -487,15 +482,19 @@ fn local_openai_http_post_json_with_response(
         .unwrap_or(0);
     if !(200..300).contains(&status_code) {
         let body_str = String::from_utf8_lossy(body_bytes);
-        return Err(format!("リクエストに失敗しました: {status_line} | body: {body_str}"));
+        return Err(format!(
+            "リクエストに失敗しました: {status_line} | body: {body_str}"
+        ));
     }
-    let body_decoded = if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    let body_decoded = if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         decode_chunked_http_body(body_bytes)?
     } else {
         body_bytes.to_vec()
     };
-    serde_json::from_slice(&body_decoded)
-        .map_err(|e| format!("JSON 解析に失敗しました: {e}"))
+    serde_json::from_slice(&body_decoded).map_err(|e| format!("JSON 解析に失敗しました: {e}"))
 }
 
 fn local_openai_http_get_status_body(
@@ -513,8 +512,8 @@ fn local_openai_http_get_status_body(
         .map_err(|e| format!("アドレス解決に失敗: {e}"))?
         .next()
         .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("接続に失敗: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
@@ -540,7 +539,10 @@ fn local_openai_http_get_status_body(
         .nth(1)
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    let body_decoded = if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    let body_decoded = if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         decode_chunked_http_body(body_bytes)?
     } else {
         body_bytes.to_vec()
@@ -630,18 +632,21 @@ fn prepare_openai_unload_info(
 
     match server_type.as_str() {
         "LM Studio" => {
-            emit_progress(app, "llm_sidecar_start", "LM Studio モデルをロード中...", None);
+            emit_progress(
+                app,
+                "llm_sidecar_start",
+                "LM Studio モデルをロード中...",
+                None,
+            );
             match lmstudio_load_model(&target, model_id) {
-                Ok((instance_id, true)) => {
-                    Some(OpenAiUnloadTarget {
-                        host: target.host,
-                        authority: target.authority,
-                        port: target.port,
-                        path_prefix: target.path_prefix,
-                        server_type,
-                        model_id: instance_id,
-                    })
-                }
+                Ok((instance_id, true)) => Some(OpenAiUnloadTarget {
+                    host: target.host,
+                    authority: target.authority,
+                    port: target.port,
+                    path_prefix: target.path_prefix,
+                    server_type,
+                    model_id: instance_id,
+                }),
                 Ok((_, false)) => None,
                 Err(e) => {
                     emit_progress(
@@ -767,7 +772,9 @@ fn detect_local_openai_server_name(
             return "ollama".to_string();
         }
     }
-    if let Ok((_, props_json)) = local_openai_http_get_json(target, "/props", Duration::from_secs(2)) {
+    if let Ok((_, props_json)) =
+        local_openai_http_get_json(target, "/props", Duration::from_secs(2))
+    {
         if props_json.get("default_generation_settings").is_some()
             || props_json.get("model_path").is_some()
             || props_json.get("total_slots").is_some()
@@ -778,7 +785,11 @@ fn detect_local_openai_server_name(
     if let Ok((_, lmstudio_json)) =
         local_openai_http_get_json(target, "/api/v0/models", Duration::from_secs(2))
     {
-        if lmstudio_json.get("data").and_then(Value::as_array).is_some() {
+        if lmstudio_json
+            .get("data")
+            .and_then(Value::as_array)
+            .is_some()
+        {
             return "LM Studio".to_string();
         }
     }
@@ -843,7 +854,11 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     // 介さず CUDA で AI 校正が動く。cfg(debug_assertions) ガードのためリリース挙動・配布物・
     // ライセンス前提は不変で、AMD リリースにも影響しない。
     #[cfg(debug_assertions)]
-    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("llama-server"));
+    search_dirs.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("llama-server"),
+    );
 
     let exe = std::env::consts::EXE_SUFFIX;
     for dir in &search_dirs {
@@ -933,7 +948,12 @@ fn rocm_build_supports_gemma4_assistant(bin_path: &str) -> bool {
 fn llama_server_supports_mtp(bin_path: &str) -> bool {
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
-    match cmd.arg("--help").stdout(Stdio::piped()).stderr(Stdio::piped()).output() {
+    match cmd
+        .arg("--help")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1209,7 +1229,11 @@ fn try_start_llama_server_vulkan(
     let ctx_s = ctx_size.to_string();
     let port_s = port.to_string();
     // MTP ドラフト併用時は FlashAttention off（CUDA 経路と同方針。ドラフト併用時の安定性を優先）。
-    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    let flash_attn = if mtp_model_path.is_some() {
+        "off"
+    } else {
+        "on"
+    };
     cmd.arg("-m")
         .arg(model_path)
         .arg("--port")
@@ -1319,7 +1343,11 @@ fn try_start_llama_server_rocm(
     let ctx_s = ctx_size.to_string();
     let port_s = port.to_string();
     // MTP 併用時は FlashAttention off（CUDA / Vulkan 経路と同方針）。
-    let flash_attn = if mtp_model_path.is_some() { "off" } else { "on" };
+    let flash_attn = if mtp_model_path.is_some() {
+        "off"
+    } else {
+        "on"
+    };
     cmd.arg("-m")
         .arg(model_path)
         .arg("--port")
@@ -1379,9 +1407,9 @@ fn assign_to_kill_on_close_job(child: &Child) {
     use windows_sys::Win32::{
         Foundation::HANDLE,
         System::JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW,
-            JobObjectExtendedLimitInformation, SetInformationJobObject,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
     };
     unsafe {
@@ -1570,11 +1598,9 @@ fn gemma_llm_relative_dir(tier: GemmaTier) -> PathBuf {
 }
 
 fn gemma_debug_model_dir_candidates(tier: GemmaTier) -> Vec<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(gemma_llm_relative_dir(tier)),
-    ];
+    let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(gemma_llm_relative_dir(tier))];
     if let Ok(cwd) = env::current_dir() {
         candidates.push(cwd.join(gemma_llm_relative_dir(tier)));
     }
@@ -1582,8 +1608,7 @@ fn gemma_debug_model_dir_candidates(tier: GemmaTier) -> Vec<PathBuf> {
 }
 
 fn gemma_release_model_dir(app: &AppHandle, tier: GemmaTier) -> Option<PathBuf> {
-    release_models_root(app)
-        .map(|root| root.join("llm").join(tier.model_dir()))
+    release_models_root(app).map(|root| root.join("llm").join(tier.model_dir()))
 }
 
 fn gemma_main_gguf_path(dir: &Path, tier: GemmaTier) -> PathBuf {
@@ -1688,7 +1713,11 @@ fn resolve_gemma_e4b_mmproj_path(app: &AppHandle) -> Option<String> {
 /// 実際にロードするモデル階層を決める。選択が B12 でも本体 GGUF が無ければ
 /// E4b へフォールバックする（フェイルセーフ。12B 未ダウンロードでもサーバは起動する）。
 fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
-    let want = read_proofread_model_tier(app);
+    resolve_effective_proofread_tier_for(app, read_proofread_model_tier(app))
+}
+
+/// 保存設定を変更せず、単一ジョブ向けに指定された階層の実効値を解決する。
+fn resolve_effective_proofread_tier_for(app: &AppHandle, want: GemmaTier) -> GemmaTier {
     if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
         GemmaTier::B12
     } else {
@@ -1703,9 +1732,12 @@ fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
 /// NVIDIA 直起動と同じく、lemond のモデル管理を介さずローカル GGUF を直接ロードする。
 /// これにより rocm-stable では未対応のドラフト（`gemma4-assistant`）も、新しい Vulkan
 /// ビルドで MTP（投機的デコード）として有効化できる。
-fn amd_vulkan_12b_launch(app: &AppHandle) -> Option<(String, String, Option<String>, u32)> {
+fn amd_vulkan_12b_launch(
+    app: &AppHandle,
+    proofread_tier: Option<GemmaTier>,
+) -> Option<(String, String, Option<String>, u32)> {
     // 実効階層が 12B のときだけ対象（E4B は従来どおり lemond で動かす）。
-    if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
+    if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::B12 {
         return None;
     }
     let vk_bin = find_llm_vulkan_llama_server(app)?;
@@ -1817,8 +1849,8 @@ fn system_rocm_tensile_has_arch(gfx: &str) -> bool {
 /// 条件: 実効階層 12B ∧ rocm ビルドが gemma4-assistant 対応(b9585+) ∧ AMD GPU 検出 ∧
 /// システム ROCm にその GPU arch の rocBLAS Tensile がある（推論時クラッシュを起動前に排除）。
 /// 満たさなければ None（→ Vulkan 直起動、それも不可なら lemond E4B へフォールバック）。
-fn amd_rocm_12b_launch(app: &AppHandle) -> Option<RocmLaunch> {
-    if resolve_effective_proofread_tier(app) != GemmaTier::B12 {
+fn amd_rocm_12b_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Option<RocmLaunch> {
+    if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::B12 {
         return None;
     }
     let rocm_bin = find_llm_rocm_llama_server(app)?;
@@ -1836,9 +1868,12 @@ fn amd_rocm_12b_launch(app: &AppHandle) -> Option<RocmLaunch> {
 
 /// AMD で 12B を直起動する計画（ROCm 優先・Vulkan フォールバック）を返す。
 /// どちらも不可なら None（→ lemond E4B 経路へ）。NVIDIA・E4B では常に None。
-fn amd_12b_launch_plan(app: &AppHandle) -> Option<(Option<RocmLaunch>, Option<VulkanLaunch>)> {
-    let rocm = amd_rocm_12b_launch(app);
-    let vulkan = amd_vulkan_12b_launch(app);
+fn amd_12b_launch_plan(
+    app: &AppHandle,
+    proofread_tier: Option<GemmaTier>,
+) -> Option<(Option<RocmLaunch>, Option<VulkanLaunch>)> {
+    let rocm = amd_rocm_12b_launch(app, proofread_tier);
+    let vulkan = amd_vulkan_12b_launch(app, proofread_tier);
     if rocm.is_some() || vulkan.is_some() {
         Some((rocm, vulkan))
     } else {
@@ -1960,8 +1995,8 @@ const AMD_E4B_CTX_SIZE: u32 = 16384;
 /// （rocm バイナリ存在 ∧ AMD GPU 検出 ∧ system ROCm に対象 arch の rocBLAS Tensile あり）
 /// だけを対象にし、満たさなければ None → 従来の lemond E4B 経路へ（挙動完全不変）。
 /// MTP は使わない（lemond E4B 既定と同じ挙動を保つ）。Linux 以外では GPU 検出系が空を返し None。
-fn amd_e4b_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
-    if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
+fn amd_e4b_rocm_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Option<RocmLaunch> {
+    if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::E4b {
         return None;
     }
     let rocm_bin = find_llm_rocm_llama_server(app)?;
@@ -2034,8 +2069,11 @@ fn try_start_amd_e4b_rocm_direct(
 /// （Windows AMD は system ROCm ゲートが /opt/rocm 前提で常に不成立、system ROCm 無し Linux AMD 等）
 /// の受け皿。vulkan バイナリが取得済みのときだけ Some。未取得なら None → lemond へ。
 /// MTP は使わない（lemond E4B 既定と同じ挙動）。
-fn amd_e4b_vulkan_launch(app: &AppHandle) -> Option<VulkanLaunch> {
-    if resolve_effective_proofread_tier(app) != GemmaTier::E4b {
+fn amd_e4b_vulkan_launch(
+    app: &AppHandle,
+    proofread_tier: Option<GemmaTier>,
+) -> Option<VulkanLaunch> {
+    if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::E4b {
         return None;
     }
     let vk_bin = find_llm_vulkan_llama_server(app)?;
@@ -2300,6 +2338,7 @@ async fn start_llm_server(
     hip_device_index: Option<i32>,
     llm_parallel: Option<u32>,
     llm_ctx: Option<u32>,
+    proofread_tier: Option<String>,
 ) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
     if llm_server_port_open(port) {
@@ -2315,8 +2354,16 @@ async fn start_llm_server(
     // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
     let nvidia_list = nvidia_gpu_priority_list();
     let llama_server_bin = find_bundled_llama_server_bin(&app);
-    let model_path = get_default_llm_model_path(app.clone());
-    let mtp_model_path = match (&llama_server_bin, get_default_llm_mtp_model_path(&app)) {
+    let effective_tier = proofread_tier
+        .as_deref()
+        .map(GemmaTier::from_marker)
+        .map(|tier| resolve_effective_proofread_tier_for(&app, tier))
+        .unwrap_or_else(|| resolve_effective_proofread_tier(&app));
+    let model_path = resolve_gemma_main_path_for_tier(&app, effective_tier);
+    let mtp_model_path = match (
+        &llama_server_bin,
+        resolve_gemma_mtp_path_for_tier(&app, effective_tier),
+    ) {
         (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
         _ => None,
     };
@@ -2353,7 +2400,7 @@ async fn start_llm_server(
         // 多く GPU に載せ高速化するため、ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
         // （ctx16384/np2 だと KV が大きく本体が CPU に逃げて遅くなる実測。8192/np1 で約24 tok/s）。
         // E4B は従来どおり -ngl 99 + 自動 ctx/np。
-        let is_12b = matches!(resolve_effective_proofread_tier(&app), GemmaTier::B12);
+        let is_12b = matches!(effective_tier, GemmaTier::B12);
         let (n_parallel, ctx_size) = if is_12b {
             (1u32, AMD_12B_CTX_SIZE)
         } else {
@@ -2380,7 +2427,7 @@ async fn start_llm_server(
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app) {
+    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app, Some(effective_tier)) {
         // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。単一スロット運用。
         tauri::async_runtime::spawn_blocking(move || {
@@ -2403,8 +2450,8 @@ async fn start_llm_server(
     } else {
         // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
         // どちらも不可ならエラー（lemond は撤去済み）。GPU ランタイム/モデルの準備を促す。
-        let e4b_rocm = amd_e4b_rocm_launch(&app);
-        let e4b_vulkan = amd_e4b_vulkan_launch(&app);
+        let e4b_rocm = amd_e4b_rocm_launch(&app, Some(effective_tier));
+        let e4b_vulkan = amd_e4b_vulkan_launch(&app, Some(effective_tier));
         tauri::async_runtime::spawn_blocking(move || {
             // 1) ROCm 直起動（最速）。
             if let Some(launch) = e4b_rocm {
@@ -2446,10 +2493,7 @@ async fn start_llm_server(
 /// Lemonade バックエンドバイナリをダウンロード・インストールする（初回セットアップ時・要インターネット接続）。
 /// backend: "llamacpp:rocm" / "llamacpp:vulkan" / "llamacpp:cpu" のいずれか。
 #[tauri::command]
-async fn install_llm_backend(
-    app: AppHandle,
-    backend: String,
-) -> Result<String, String> {
+async fn install_llm_backend(app: AppHandle, backend: String) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
     // backend 名 → (Python downloader の --backend 値, bin 配下のサブディレクトリ名)。
@@ -2519,7 +2563,10 @@ async fn install_llm_backend(
 
 // オフライン動作専用: winget は使用しない。バンドルバイナリを起動するだけ
 #[tauri::command]
-async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) -> Result<String, String> {
+async fn install_llm_engine(
+    app: AppHandle,
+    state: tauri::State<'_, LlmServer>,
+) -> Result<String, String> {
     stop_retained_voice_input_server(&app);
     // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
     let nvidia_list = nvidia_gpu_priority_list();
@@ -2587,7 +2634,7 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app) {
+    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app, None) {
         // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
@@ -2613,8 +2660,8 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
     } else {
         // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
         // どちらも不可ならエラー（lemond は撤去済み）。
-        let e4b_rocm = amd_e4b_rocm_launch(&app);
-        let e4b_vulkan = amd_e4b_vulkan_launch(&app);
+        let e4b_rocm = amd_e4b_rocm_launch(&app, None);
+        let e4b_vulkan = amd_e4b_vulkan_launch(&app, None);
         tauri::async_runtime::spawn_blocking(move || {
             let _ = app_clone.emit(
                 "llm-install-progress",
@@ -2659,7 +2706,10 @@ async fn install_llm_engine(app: AppHandle, state: tauri::State<'_, LlmServer>) 
 
 #[tauri::command]
 fn stop_llm_server(state: tauri::State<'_, LlmServer>) -> Result<(), String> {
-    let mut guard = state.child.lock().map_err(|_| "mutex poisoned".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "mutex poisoned".to_string())?;
     if let Some(mut child) = guard.take() {
         let _ = kill_process_tree_by_pid(child.id());
         let _ = child.kill();
@@ -2736,7 +2786,9 @@ fn editor_voice_input_server_ready(port: u16) -> bool {
     };
     match local_openai_http_get_status_body(&target, "/health", Duration::from_secs(2)) {
         Ok((code, _, _)) if (200..300).contains(&code) => true,
-        Ok((404, _, _)) => local_openai_http_get_json(&target, "/v1/models", Duration::from_secs(2)).is_ok(),
+        Ok((404, _, _)) => {
+            local_openai_http_get_json(&target, "/v1/models", Duration::from_secs(2)).is_ok()
+        }
         Ok(_) | Err(_) => false,
     }
 }
@@ -2751,7 +2803,9 @@ fn local_openai_http_post_json_with_loading_retry(
     for attempt in 0..30 {
         match local_openai_http_post_json_with_response(target, path, body, timeout) {
             Ok(value) => return Ok(value),
-            Err(error) if error.contains("503") && error.to_ascii_lowercase().contains("loading") => {
+            Err(error)
+                if error.contains("503") && error.to_ascii_lowercase().contains("loading") =>
+            {
                 last_error = error;
                 thread::sleep(Duration::from_secs(1));
             }
@@ -2869,7 +2923,13 @@ fn voice_amd_rocm_launch(app: &AppHandle) -> Option<RocmLaunch> {
     if !system_rocm_tensile_has_arch(&gfx) {
         return None;
     }
-    Some((rocm_bin, main_path, None, VOICE_INPUT_GPU_CTX_SIZE, hip_index))
+    Some((
+        rocm_bin,
+        main_path,
+        None,
+        VOICE_INPUT_GPU_CTX_SIZE,
+        hip_index,
+    ))
 }
 
 /// 音声入力用に AMD で E4B を Vulkan 直起動するパラメータを返す（ROCm 直起動が使えない機の受け皿）。
@@ -3035,16 +3095,13 @@ fn parse_editor_voice_candidates_text(raw: &str, max_candidates: usize) -> Vec<S
         if let Ok(value) = serde_json::from_str::<Value>(&json_candidate) {
             if let Some(items) = value.as_array() {
                 for item in items {
-                    let candidate = item
-                        .as_str()
-                        .map(str::to_string)
-                        .or_else(|| {
-                            item.get("text")
-                                .or_else(|| item.get("candidate"))
-                                .or_else(|| item.get("content"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                        });
+                    let candidate = item.as_str().map(str::to_string).or_else(|| {
+                        item.get("text")
+                            .or_else(|| item.get("candidate"))
+                            .or_else(|| item.get("content"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    });
                     if let Some(candidate) = candidate {
                         let trimmed = candidate.trim();
                         if !trimmed.is_empty() {
@@ -3389,9 +3446,7 @@ fn dev_cpu_startup_scenario_inputs_from_env() -> Option<(Option<u64>, bool, usiz
 }
 
 #[cfg(any(debug_assertions, test))]
-fn dev_cpu_startup_scenario_inputs(
-    scenario: DevCpuStartupScenario,
-) -> (Option<u64>, bool, usize) {
+fn dev_cpu_startup_scenario_inputs(scenario: DevCpuStartupScenario) -> (Option<u64>, bool, usize) {
     let supported_memory = Some(CPU_MINIMUM_MEMORY_BYTES);
     match scenario {
         DevCpuStartupScenario::Memory => (Some(8 * 1024_u64.pow(3)), true, 8),
@@ -3556,7 +3611,10 @@ fn generate_editor_voice_input_candidates_blocking(
 /// 区間聞き直し用 ffmpeg のDL配置先（Editor版の後付けDL先）。
 /// `%LOCALAPPDATA%\{identifier}\ffmpeg\` 相当で、NSIS アンインストーラーの一括削除対象。
 fn editor_ffmpeg_install_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_local_data_dir().ok().map(|d| d.join("ffmpeg"))
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|d| d.join("ffmpeg"))
 }
 
 fn find_downloaded_ffmpeg_bin(app: &AppHandle) -> Option<String> {
@@ -3574,7 +3632,9 @@ fn find_downloaded_ffmpeg_bin(app: &AppHandle) -> Option<String> {
 fn find_path_ffmpeg_bin() -> Option<String> {
     let mut cmd = Command::new("ffmpeg");
     apply_windows_no_window(&mut cmd);
-    cmd.arg("-version").stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     match cmd.status() {
         Ok(status) if status.success() => Some("ffmpeg".to_string()),
         _ => None,
@@ -3608,8 +3668,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[((n >> 18) & 63) as usize] as char);
         out.push(TABLE[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -3624,7 +3692,10 @@ fn extract_segment_wav_base64(
     let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
         .ok_or_else(|| "音声切り出しに必要な ffmpeg が見つかりませんでした。設定タブの「音声入力パック」の状態を確認してください。".to_string())?;
     if !Path::new(audio_path).exists() {
-        return Err("音声ファイルが見つかりません。音声ファイルを読み込み直してから再試行してください。".to_string());
+        return Err(
+            "音声ファイルが見つかりません。音声ファイルを読み込み直してから再試行してください。"
+                .to_string(),
+        );
     }
     let temp_path = private_llm_temp_dir(app)?.join(format!(
         "lott-retranscribe-{}-{}.wav",
@@ -3684,9 +3755,8 @@ fn extract_segment_wav_base64(
 fn segment_retranscribe_padded_range(start_seconds: f64, core_duration_seconds: f64) -> (f64, f64) {
     let padded_start = (start_seconds - SEGMENT_RETRANSCRIBE_PADDING_SECONDS).max(0.0);
     let actual_leading_padding = start_seconds - padded_start;
-    let padded_duration = core_duration_seconds
-        + actual_leading_padding
-        + SEGMENT_RETRANSCRIBE_PADDING_SECONDS;
+    let padded_duration =
+        core_duration_seconds + actual_leading_padding + SEGMENT_RETRANSCRIBE_PADDING_SECONDS;
     (padded_start, padded_duration)
 }
 
@@ -3724,7 +3794,9 @@ fn generate_segment_retranscribe_candidates_blocking(
     }
     let duration_raw = request.end_seconds - request.start_seconds;
     if duration_raw < SEGMENT_RETRANSCRIBE_MIN_SECONDS {
-        return Err("この行には有効な時間範囲がありません。開始・終了時刻を確認してください。".to_string());
+        return Err(
+            "この行には有効な時間範囲がありません。開始・終了時刻を確認してください。".to_string(),
+        );
     }
     // 30秒超はフロントが snackbar で通知したうえで先頭30秒のみ処理する。
     let duration = duration_raw.min(SEGMENT_RETRANSCRIBE_MAX_SECONDS);
@@ -4185,9 +4257,34 @@ impl Default for PunctRules {
             speaker_mid_comma_min_chars: 8,
             speaker_mid_short_comma_max_chars: 5,
             speaker_connective_endings: [
-                "けれども", "けれど", "けども", "けど", "が", "して", "くて", "って", "て",
-                "で", "し", "から", "ので", "のに", "とか", "たり", "たら", "ば", "なら",
-                "ながら", "つつ", "と", "に", "を", "は", "も", "や", "へ",
+                "けれども",
+                "けれど",
+                "けども",
+                "けど",
+                "が",
+                "して",
+                "くて",
+                "って",
+                "て",
+                "で",
+                "し",
+                "から",
+                "ので",
+                "のに",
+                "とか",
+                "たり",
+                "たら",
+                "ば",
+                "なら",
+                "ながら",
+                "つつ",
+                "と",
+                "に",
+                "を",
+                "は",
+                "も",
+                "や",
+                "へ",
             ]
             .iter()
             .map(|s| s.to_string())
@@ -4382,14 +4479,18 @@ impl Default for EntityRules {
         .expect("default honorific regex");
         let uni = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}大学$")
             .expect("default university regex");
-        let el = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:小学校|義務教育学校)$")
-            .expect("default elementary regex");
-        let mid = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:中学校|中等教育学校)$")
-            .expect("default middle regex");
+        let el =
+            Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:小学校|義務教育学校)$")
+                .expect("default elementary regex");
+        let mid =
+            Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:中学校|中等教育学校)$")
+                .expect("default middle regex");
         let hi = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:高校|高等学校)$")
             .expect("default high regex");
-        let nu = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:保育園|保育所|認定こども園|こども園)$")
-            .expect("default nursery regex");
+        let nu = Regex::new(
+            r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}(?:保育園|保育所|認定こども園|こども園)$",
+        )
+        .expect("default nursery regex");
         let kg = Regex::new(r"^[一-龥々ぁ-ゖァ-ヶーA-Za-z0-9０-９・･]{1,8}幼稚園$")
             .expect("default kindergarten regex");
         Self {
@@ -4737,6 +4838,24 @@ struct SaveTranscriptionXlsxRow {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SaveTranscriptionSrtRequest {
+    path: String,
+    rows: Vec<SaveTranscriptionSrtRow>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTranscriptionSrtRow {
+    start_seconds: f64,
+    end_seconds: f64,
+    speaker: String,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ReadTextFileRequest {
     path: String,
 }
@@ -4836,7 +4955,11 @@ fn resolve_default_python_bin() -> String {
             return normalized;
         }
     }
-    if cfg!(target_os = "windows") { "py".to_string() } else { "python3".to_string() }
+    if cfg!(target_os = "windows") {
+        "py".to_string()
+    } else {
+        "python3".to_string()
+    }
 }
 
 fn normalize_python_bin_candidate(value: &str) -> String {
@@ -4857,7 +4980,10 @@ fn is_usable_python_bin_candidate(value: &str) -> bool {
 }
 
 #[tauri::command]
-fn save_transcription_json(app: AppHandle, request: SaveTranscriptionJsonRequest) -> Result<(), String> {
+fn save_transcription_json(
+    app: AppHandle,
+    request: SaveTranscriptionJsonRequest,
+) -> Result<(), String> {
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
         // Write temp JSON, then have Python create AES-256 ZIP via pyzipper
         let temp_path = format!("{}.tmp", request.path);
@@ -4867,7 +4993,8 @@ fn save_transcription_json(app: AppHandle, request: SaveTranscriptionJsonRequest
         let _ = fs::remove_file(&temp_path);
         result
     } else {
-        fs::write(&request.path, request.content).map_err(|e| format!("JSON 保存に失敗しました: {e}"))
+        fs::write(&request.path, request.content)
+            .map_err(|e| format!("JSON 保存に失敗しました: {e}"))
     }
 }
 
@@ -4876,6 +5003,74 @@ fn save_text_shift_jis(request: SaveTextShiftJisRequest) -> Result<(), String> {
     let (bytes, _, _) = SHIFT_JIS.encode(&request.content);
     fs::write(&request.path, bytes.as_ref())
         .map_err(|e| format!("Shift-JIS テキスト保存に失敗しました: {e}"))
+}
+
+fn format_srt_timestamp(seconds: f64) -> String {
+    let total_millis = if seconds.is_finite() {
+        (seconds.max(0.0) * 1000.0).round() as u64
+    } else {
+        0
+    };
+    let hours = total_millis / 3_600_000;
+    let minutes = (total_millis / 60_000) % 60;
+    let secs = (total_millis / 1_000) % 60;
+    let millis = total_millis % 1_000;
+    format!("{hours:02}:{minutes:02}:{secs:02},{millis:03}")
+}
+
+fn build_transcription_srt(rows: &[SaveTranscriptionSrtRow]) -> String {
+    let mut output = String::new();
+    let mut cue_index = 1usize;
+    for row in rows {
+        let text = row.text.replace("\r\n", "\n").replace('\r', "\n");
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let start_seconds = if row.start_seconds.is_finite() {
+            row.start_seconds.max(0.0)
+        } else {
+            0.0
+        };
+        let end_seconds = if row.end_seconds.is_finite() {
+            row.end_seconds.max(start_seconds)
+        } else {
+            start_seconds
+        };
+        let speaker = row.speaker.split_whitespace().collect::<Vec<_>>().join(" ");
+        let cue_text = if speaker.is_empty() || speaker == "-" {
+            text.to_string()
+        } else {
+            format!("{speaker}：{text}")
+        };
+        output.push_str(&format!(
+            "{cue_index}\n{} --> {}\n{cue_text}\n\n",
+            format_srt_timestamp(start_seconds),
+            format_srt_timestamp(end_seconds),
+        ));
+        cue_index += 1;
+    }
+    output
+}
+
+#[tauri::command]
+fn save_transcription_srt(
+    app: AppHandle,
+    request: SaveTranscriptionSrtRequest,
+) -> Result<(), String> {
+    let content = build_transcription_srt(&request.rows);
+    if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
+        // JSON と同様に、一時 SRT を AES-256 暗号化 ZIP に格納する。
+        let temp_path = format!("{}.tmp", request.path);
+        fs::write(&temp_path, content.as_bytes())
+            .map_err(|e| format!("一時SRTファイルの書き込みに失敗しました: {e}"))?;
+        let result = encrypt_srt_to_zip(&app, &temp_path, &request.path, pw);
+        let _ = fs::remove_file(&temp_path);
+        result
+    } else {
+        fs::write(&request.path, content.as_bytes())
+            .map_err(|e| format!("SRT 保存に失敗しました: {e}"))
+    }
 }
 
 fn install_diarization_model_impl(
@@ -4905,8 +5100,12 @@ fn install_diarization_model_impl(
         .output()
         .map_err(|e| format!("huggingface-hub の準備に失敗しました: {e}"))?;
     if !pip_output.status.success() {
-        let stderr = String::from_utf8_lossy(&pip_output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&pip_output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&pip_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&pip_output.stdout)
+            .trim()
+            .to_string();
         let detail = if !stderr.is_empty() { stderr } else { stdout };
         return Ok(InstallDiarizationModelResponse {
             success: false,
@@ -4927,13 +5126,22 @@ fn install_diarization_model_impl(
         .arg(model_dir.to_string_lossy().as_ref());
 
     match run_download_streaming(app, &mut dl_cmd, "diarization") {
-        Ok(msg) => Ok(InstallDiarizationModelResponse { success: true, message: msg }),
-        Err(e) => Ok(InstallDiarizationModelResponse { success: false, message: e }),
+        Ok(msg) => Ok(InstallDiarizationModelResponse {
+            success: true,
+            message: msg,
+        }),
+        Err(e) => Ok(InstallDiarizationModelResponse {
+            success: false,
+            message: e,
+        }),
     }
 }
 
 #[tauri::command]
-fn save_transcription_docx(app: AppHandle, request: SaveTranscriptionDocxRequest) -> Result<(), String> {
+fn save_transcription_docx(
+    app: AppHandle,
+    request: SaveTranscriptionDocxRequest,
+) -> Result<(), String> {
     const DOCX_TIME_COL_W: usize = 1200;
     const DOCX_SPEAKER_COL_W: usize = 1400;
     const DOCX_TEXT_COL_W: usize = 7038;
@@ -5084,7 +5292,10 @@ fn save_transcription_docx(app: AppHandle, request: SaveTranscriptionDocxRequest
 }
 
 #[tauri::command]
-fn save_transcription_xlsx(app: AppHandle, request: SaveTranscriptionXlsxRequest) -> Result<(), String> {
+fn save_transcription_xlsx(
+    app: AppHandle,
+    request: SaveTranscriptionXlsxRequest,
+) -> Result<(), String> {
     let content_types_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -5258,8 +5469,7 @@ fn cleanup_stale_private_temp_files(app: &AppHandle) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if known_prefixes
-                .map(|prefixes| prefixes.iter().any(|prefix| name.starts_with(prefix)))
+            if known_prefixes.map(|prefixes| prefixes.iter().any(|prefix| name.starts_with(prefix)))
                 == Some(false)
             {
                 continue;
@@ -5364,8 +5574,22 @@ fn encrypt_office_file(app: &AppHandle, file_path: &str, password: &str) -> Resu
     run_encrypt_script(app, &["office", file_path], password)
 }
 
-fn encrypt_json_to_zip(app: &AppHandle, json_temp: &str, zip_path: &str, password: &str) -> Result<(), String> {
+fn encrypt_json_to_zip(
+    app: &AppHandle,
+    json_temp: &str,
+    zip_path: &str,
+    password: &str,
+) -> Result<(), String> {
     run_encrypt_script(app, &["json", json_temp, zip_path], password)
+}
+
+fn encrypt_srt_to_zip(
+    app: &AppHandle,
+    srt_temp: &str,
+    zip_path: &str,
+    password: &str,
+) -> Result<(), String> {
+    run_encrypt_script(app, &["srt", srt_temp, zip_path], password)
 }
 
 // ─── Audio streaming server ──────────────────────────────────────────────────
@@ -5402,7 +5626,9 @@ fn generate_audio_stream_token() -> Result<String, String> {
             )
         };
         if status < 0 {
-            return Err(format!("音声配信用トークンを生成できませんでした: {status}"));
+            return Err(format!(
+                "音声配信用トークンを生成できませんでした: {status}"
+            ));
         }
     }
     #[cfg(unix)]
@@ -5481,7 +5707,9 @@ fn serve_audio_connection(
     let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
 
     let request_target = parts.get(1).copied().unwrap_or("");
-    let (encoded_path, query) = request_target.split_once('?').unwrap_or((request_target, ""));
+    let (encoded_path, query) = request_target
+        .split_once('?')
+        .unwrap_or((request_target, ""));
     let supplied_token = query
         .split('&')
         .find_map(|part| part.strip_prefix("token="))
@@ -5511,11 +5739,14 @@ fn serve_audio_connection(
         let guard = allowed_path.lock().unwrap_or_else(|e| e.into_inner());
         guard.clone()
     };
-    let is_allowed = allowed.as_deref().map(|a| {
-        let req = std::fs::canonicalize(&file_path).ok();
-        let all = std::fs::canonicalize(a).ok();
-        req.is_some() && req == all
-    }).unwrap_or(false);
+    let is_allowed = allowed
+        .as_deref()
+        .map(|a| {
+            let req = std::fs::canonicalize(&file_path).ok();
+            let all = std::fs::canonicalize(a).ok();
+            req.is_some() && req == all
+        })
+        .unwrap_or(false);
     if !is_allowed {
         let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
         return;
@@ -5567,7 +5798,11 @@ fn serve_audio_connection(
         .unwrap_or("")
         .to_ascii_lowercase();
     let mime = audio_mime(&ext);
-    let status = if range_opt.is_some() { "206 Partial Content" } else { "200 OK" };
+    let status = if range_opt.is_some() {
+        "206 Partial Content"
+    } else {
+        "200 OK"
+    };
 
     let header = format!(
         "HTTP/1.1 {status}\r\n\
@@ -5608,13 +5843,13 @@ fn serve_audio_connection(
     }
 }
 
-fn start_audio_stream_server(
-    allowed_path: Arc<Mutex<Option<String>>>,
-    token: Arc<String>,
-) -> u16 {
+fn start_audio_stream_server(allowed_path: Arc<Mutex<Option<String>>>, token: Arc<String>) -> u16 {
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").expect("audio stream server bind failed");
-    let port = listener.local_addr().expect("audio stream server addr").port();
+    let port = listener
+        .local_addr()
+        .expect("audio stream server addr")
+        .port();
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let ap = Arc::clone(&allowed_path);
@@ -5648,7 +5883,10 @@ fn get_dev_demo_data_dir() -> Option<String> {
         .join("..")
         .join("demo_data");
     if candidate.exists() {
-        candidate.canonicalize().ok().map(|p| p.to_string_lossy().into_owned())
+        candidate
+            .canonicalize()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
     } else {
         None
     }
@@ -5750,7 +5988,11 @@ fn dev_delete_downloaded_models(target: Option<String>) -> DevDeleteModelsRespon
         }
     }
 
-    DevDeleteModelsResponse { deleted, not_found, errors }
+    DevDeleteModelsResponse {
+        deleted,
+        not_found,
+        errors,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5794,7 +6036,9 @@ fn get_overall_proofread_system_prompt(app: AppHandle) -> Result<ReadTextFileRes
 }
 
 #[tauri::command]
-fn get_default_overall_proofread_system_prompt(app: AppHandle) -> Result<ReadTextFileResponse, String> {
+fn get_default_overall_proofread_system_prompt(
+    app: AppHandle,
+) -> Result<ReadTextFileResponse, String> {
     let path = resolve_default_overall_proofread_system_prompt_path(&app)?;
     let content = read_text_file_content(&path)?;
     Ok(ReadTextFileResponse { content })
@@ -5825,7 +6069,10 @@ fn open_external_url(url: String) -> Result<(), String> {
         return Err("許可されていない URL です。".to_string());
     }
     // cmd /C start に渡す前にシェルメタキャラクターを拒否する
-    if normalized.chars().any(|c| matches!(c, '&' | '|' | ';' | '`' | '\'' | '"' | '\n' | '\r' | '\0')) {
+    if normalized
+        .chars()
+        .any(|c| matches!(c, '&' | '|' | ';' | '`' | '\'' | '"' | '\n' | '\r' | '\0'))
+    {
         return Err("URL に許可されていない文字が含まれています。".to_string());
     }
 
@@ -5927,7 +6174,10 @@ fn check_transcription_runtime_support_blocking(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let output = cmd.output().map_err(|e| {
-            format!("CPU ランタイム確認の実行に失敗しました (python={}): {e}", python_bin)
+            format!(
+                "CPU ランタイム確認の実行に失敗しました (python={}): {e}",
+                python_bin
+            )
         })?;
         if output.status.success() {
             return Ok(TranscriptionRuntimeStatusResponse {
@@ -5970,7 +6220,13 @@ fn check_transcription_runtime_support_blocking(
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if !output.status.success() {
-        let detail = if !stderr.is_empty() { &stderr } else if !stdout.is_empty() { &stdout } else { "" };
+        let detail = if !stderr.is_empty() {
+            &stderr
+        } else if !stdout.is_empty() {
+            &stdout
+        } else {
+            ""
+        };
         let reason = if detail.is_empty() {
             "GPU ランタイム確認の実行に失敗しました。".to_string()
         } else {
@@ -5988,16 +6244,16 @@ fn check_transcription_runtime_support_blocking(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if available {
-        let is_rocm = parsed
-            .get("hip")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let is_rocm = parsed.get("hip").and_then(Value::as_bool).unwrap_or(false);
         let reason = if is_rocm {
             "AMD GPU（ROCm / HIP）で GPU 推論が利用可能です。".to_string()
         } else {
             "CUDA が利用可能です。".to_string()
         };
-        return Ok(TranscriptionRuntimeStatusResponse { available: true, reason });
+        return Ok(TranscriptionRuntimeStatusResponse {
+            available: true,
+            reason,
+        });
     }
 
     let reason = parsed
@@ -6265,7 +6521,10 @@ fn get_gemma_mmproj_gguf_info(app: &AppHandle) -> (bool, String) {
     let dir = gemma_release_model_dir(app, GemmaTier::E4b)
         .unwrap_or_else(|| gemma_llm_relative_dir(GemmaTier::E4b));
     let p = gemma_mmproj_gguf_path(&dir);
-    (path_is_nonempty_file(&p, 1024 * 1024), p.to_string_lossy().to_string())
+    (
+        path_is_nonempty_file(&p, 1024 * 1024),
+        p.to_string_lossy().to_string(),
+    )
 }
 
 fn get_editor_voice_cpu_backend_info(app: &AppHandle) -> (bool, String) {
@@ -6357,7 +6616,9 @@ fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInpu
 }
 
 #[tauri::command]
-fn check_editor_voice_input_pack_status(app: AppHandle) -> Result<EditorVoiceInputPackStatus, String> {
+fn check_editor_voice_input_pack_status(
+    app: AppHandle,
+) -> Result<EditorVoiceInputPackStatus, String> {
     // 音声入力は Full 版（CUDA/AMD）にも展開済み。ビルド判定は cpu_backend_required 経由で
     // フロントに伝える（本コマンド自体は全ビルドで許可）。
     Ok(check_editor_voice_input_pack_status_impl(&app))
@@ -6384,9 +6645,7 @@ fn emit_voice_input_pack_progress(
 }
 
 fn editor_voice_hf_resolve_url(filename: &str) -> String {
-    format!(
-        "https://huggingface.co/{GEMMA_E4B_HF_REPO}/resolve/main/{filename}?download=true"
-    )
+    format!("https://huggingface.co/{GEMMA_E4B_HF_REPO}/resolve/main/{filename}?download=true")
 }
 
 fn llama_cpu_backend_asset_name() -> Result<String, String> {
@@ -6400,9 +6659,7 @@ fn llama_cpu_backend_asset_name() -> Result<String, String> {
 }
 
 fn llama_cpu_backend_url(asset: &str) -> String {
-    format!(
-        "https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_CPU_BUILD}/{asset}"
-    )
+    format!("https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_CPU_BUILD}/{asset}")
 }
 
 fn parse_llama_server_build_number(output: &str) -> Option<u32> {
@@ -6519,7 +6776,14 @@ fn download_file_with_progress_blocking(
     min_existing_bytes: u64,
 ) -> Result<(), String> {
     if path_is_nonempty_file(dest_file, min_existing_bytes) {
-        emit_voice_input_pack_progress(app, component, "skipped", "インストール済みです", None, total_bytes);
+        emit_voice_input_pack_progress(
+            app,
+            component,
+            "skipped",
+            "インストール済みです",
+            None,
+            total_bytes,
+        );
         return Ok(());
     }
     if let Some(parent) = dest_file.parent() {
@@ -6559,7 +6823,9 @@ fn download_file_with_progress_blocking(
             }
             None => {
                 let downloaded = temp_file.metadata().map(|m| m.len()).unwrap_or(0);
-                if downloaded >= last_emitted + 5 * 1024 * 1024 || (downloaded > 0 && last_emitted == 0) {
+                if downloaded >= last_emitted + 5 * 1024 * 1024
+                    || (downloaded > 0 && last_emitted == 0)
+                {
                     last_emitted = downloaded;
                     emit_voice_input_pack_progress(
                         app,
@@ -6612,8 +6878,12 @@ fn strip_llama_archive_root(path: &Path) -> PathBuf {
 }
 
 fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<(), String> {
-    fs::create_dir_all(dest)
-        .map_err(|e| format!("ディレクトリを作成できませんでした: {}: {e}", dest.display()))?;
+    fs::create_dir_all(dest).map_err(|e| {
+        format!(
+            "ディレクトリを作成できませんでした: {}: {e}",
+            dest.display()
+        )
+    })?;
     for entry in fs::read_dir(src)
         .map_err(|e| format!("ディレクトリを読めませんでした: {}: {e}", src.display()))?
     {
@@ -6627,8 +6897,9 @@ fn copy_dir_recursively(src: &Path, dest: &Path) -> Result<(), String> {
                 fs::remove_file(&target)
                     .map_err(|e| format!("既存ファイルを置き換えられませんでした: {e}"))?;
             }
-            fs::copy(&path, &target)
-                .map_err(|e| format!("ファイルをコピーできませんでした: {}: {e}", path.display()))?;
+            fs::copy(&path, &target).map_err(|e| {
+                format!("ファイルをコピーできませんでした: {}: {e}", path.display())
+            })?;
         }
     }
     Ok(())
@@ -6642,15 +6913,14 @@ fn flatten_extracted_llama_dir(extract_dir: &Path, dest: &Path) -> Result<(), St
         .and_then(|entries| {
             entries.flatten().map(|e| e.path()).find(|p| {
                 p.is_dir()
-                    && p
-                        .file_name()
+                    && p.file_name()
                         .map(|n| n.to_string_lossy().starts_with("llama-"))
                         .unwrap_or(false)
             })
         })
         .unwrap_or_else(|| extract_dir.to_path_buf());
-    for entry in fs::read_dir(&root)
-        .map_err(|e| format!("展開ディレクトリを読めませんでした: {e}"))?
+    for entry in
+        fs::read_dir(&root).map_err(|e| format!("展開ディレクトリを読めませんでした: {e}"))?
     {
         let entry = entry.map_err(|e| format!("展開ファイルを読めませんでした: {e}"))?;
         let path = entry.path();
@@ -6711,7 +6981,9 @@ fn expand_zip_with_powershell(archive: &Path, dest: &Path) -> Result<(), String>
         .status()
         .map_err(|e| format!("PowerShell Expand-Archive の起動に失敗しました: {e}"))?;
     if !status.success() {
-        return Err("PowerShell Expand-Archive による CPU バックエンドの展開に失敗しました。".to_string());
+        return Err(
+            "PowerShell Expand-Archive による CPU バックエンドの展開に失敗しました。".to_string(),
+        );
     }
     Ok(())
 }
@@ -6845,10 +7117,7 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
             .map_err(|e| format!("CPU バックエンドの一時配置先を削除できませんでした: {e}"))?;
     }
     extract_llama_cpu_backend_archive(&archive, &staging_dest)?;
-    let staged_server = staging_dest.join(format!(
-        "llama-server{}",
-        std::env::consts::EXE_SUFFIX
-    ));
+    let staged_server = staging_dest.join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
     let staged_build = llama_server_build_number(&staged_server);
     if staged_build != Some(LLAMA_CPP_CPU_BUILD_NUMBER) {
         let _ = fs::remove_dir_all(&staging_dest);
@@ -7272,7 +7541,11 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
         );
     }
 
-    EditorVoiceInputPackDeleteResponse { deleted, not_found, errors }
+    EditorVoiceInputPackDeleteResponse {
+        deleted,
+        not_found,
+        errors,
+    }
 }
 
 #[tauri::command]
@@ -7439,7 +7712,10 @@ fn detect_compute_env_blocking(app: AppHandle) -> serde_json::Value {
                 .unwrap_or(-1);
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("backendType".to_string(), serde_json::json!("cuda"));
-                obj.insert("recommendedIndex".to_string(), serde_json::json!(recommended));
+                obj.insert(
+                    "recommendedIndex".to_string(),
+                    serde_json::json!(recommended),
+                );
                 obj.insert("devices".to_string(), serde_json::Value::Array(nv_devices));
             }
         }
@@ -7693,7 +7969,8 @@ fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> 
     let path = proofread_model_tier_marker_path(&app)
         .ok_or_else(|| "設定の保存先を解決できませんでした。".to_string())?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("設定フォルダの作成に失敗しました: {e}"))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("設定フォルダの作成に失敗しました: {e}"))?;
     }
     std::fs::write(&path, resolved.as_marker())
         .map_err(|e| format!("設定の保存に失敗しました: {e}"))?;
@@ -7974,12 +8251,19 @@ fn proofread_transcription_llm_blocking_with_kind(
         None
     };
     let openai_model = if is_openai_compatible {
-        let model = request.openai_model.as_deref().unwrap_or("").trim().to_string();
+        let model = request
+            .openai_model
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if model.is_empty() {
             return Ok(ProofreadTranscriptionResponse {
                 success: false,
                 result: None,
-                error_message: Some("ローカルOpenAI互換APIのモデル名が指定されていません。".to_string()),
+                error_message: Some(
+                    "ローカルOpenAI互換APIのモデル名が指定されていません。".to_string(),
+                ),
             });
         }
         Some(model)
@@ -8016,7 +8300,11 @@ fn proofread_transcription_llm_blocking_with_kind(
 
     let tmp_dir = private_llm_temp_dir(&app)?;
     let invocation_id = LLM_PROOFREAD_INVOCATION_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = tmp_dir.join(format!("lott_llm_segments_{}_{}.json", std::process::id(), invocation_id));
+    let tmp_path = tmp_dir.join(format!(
+        "lott_llm_segments_{}_{}.json",
+        std::process::id(),
+        invocation_id
+    ));
     // 最初のファイル作成直後からガードし、後続ファイルの作成失敗時にも残さない。
     let mut _tmp_guard = TempFileGuard::new();
     write_private_temp_file(&tmp_path, segments_json_str.as_bytes())?;
@@ -8028,7 +8316,11 @@ fn proofread_transcription_llm_blocking_with_kind(
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty())
         .map(|prompt| {
-            let path = tmp_dir.join(format!("lott_llm_system_prompt_{}_{}.txt", std::process::id(), invocation_id));
+            let path = tmp_dir.join(format!(
+                "lott_llm_system_prompt_{}_{}.txt",
+                std::process::id(),
+                invocation_id
+            ));
             write_private_temp_file(&path, prompt.as_bytes())
                 .map_err(|e| format!("LLM システムプロンプトの一時保存に失敗しました: {e}"))?;
             Ok::<PathBuf, String>(path)
@@ -8061,7 +8353,10 @@ fn proofread_transcription_llm_blocking_with_kind(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if is_lemonade {
-        let url = request.llm_url.as_deref().unwrap_or("http://localhost:13306");
+        let url = request
+            .llm_url
+            .as_deref()
+            .unwrap_or("http://localhost:13306");
         let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
         cmd.arg("--llm-url").arg(url);
         cmd.arg("--llm-model").arg(model);
@@ -8611,11 +8906,15 @@ fn load_entity_rules_from_app(app: &AppHandle) -> EntityRules {
         if !is_valid_prefecture_code(&code) {
             continue;
         }
-        let location_names = normalize_location_name_set(region.location_names, &rules.person_name_set);
+        let location_names =
+            normalize_location_name_set(region.location_names, &rules.person_name_set);
         if !location_names.is_empty() {
-            rules.regional_location_names.insert(code.clone(), location_names);
+            rules
+                .regional_location_names
+                .insert(code.clone(), location_names);
         }
-        let station_names = normalize_location_name_set(region.station_names, &rules.person_name_set);
+        let station_names =
+            normalize_location_name_set(region.station_names, &rules.person_name_set);
         if !station_names.is_empty() {
             rules.regional_station_names.insert(code, station_names);
         }
@@ -9084,6 +9383,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn srt_timestamp_uses_hours_and_milliseconds() {
+        assert_eq!(format_srt_timestamp(0.0), "00:00:00,000");
+        assert_eq!(format_srt_timestamp(3661.234), "01:01:01,234");
+        assert_eq!(format_srt_timestamp(-1.0), "00:00:00,000");
+    }
+
+    #[test]
+    fn transcription_srt_uses_display_speaker_and_skips_blank_rows() {
+        let rows = vec![
+            SaveTranscriptionSrtRow {
+                start_seconds: 1.25,
+                end_seconds: 3.5,
+                speaker: "Th".to_string(),
+                text: "こんにちは。".to_string(),
+            },
+            SaveTranscriptionSrtRow {
+                start_seconds: 3.5,
+                end_seconds: 4.0,
+                speaker: "Cl".to_string(),
+                text: "  ".to_string(),
+            },
+            SaveTranscriptionSrtRow {
+                start_seconds: 4.0,
+                end_seconds: 6.0,
+                speaker: "-".to_string(),
+                text: "話者未設定".to_string(),
+            },
+        ];
+        assert_eq!(
+            build_transcription_srt(&rows),
+            "1\n00:00:01,250 --> 00:00:03,500\nTh：こんにちは。\n\n2\n00:00:04,000 --> 00:00:06,000\n話者未設定\n\n"
+        );
+    }
+
+    #[test]
     fn llama_server_build_number_parser_accepts_upstream_output() {
         assert_eq!(
             parse_llama_server_build_number(
@@ -9127,12 +9461,9 @@ mod tests {
 
     #[test]
     fn cpu_startup_requirements_do_not_block_when_memory_cannot_be_read() {
-        assert!(cpu_startup_requirement_failures(
-            None,
-            true,
-            CPU_MINIMUM_LOGICAL_THREADS,
-        )
-        .is_empty());
+        assert!(
+            cpu_startup_requirement_failures(None, true, CPU_MINIMUM_LOGICAL_THREADS,).is_empty()
+        );
     }
 
     #[test]
@@ -9177,9 +9508,7 @@ mod tests {
         );
 
         let notice = dev_cpu_startup_scenario_inputs(DevCpuStartupScenario::Notice);
-        assert!(
-            cpu_startup_requirement_failures(notice.0, notice.1, notice.2).is_empty()
-        );
+        assert!(cpu_startup_requirement_failures(notice.0, notice.1, notice.2).is_empty());
     }
 
     #[test]
@@ -9322,7 +9651,9 @@ mod tests {
         assert!(meta
             .organization_names
             .contains(&"青山高等学校".to_string()));
-        assert!(meta.organization_names.contains(&"みどり保育所".to_string()));
+        assert!(meta
+            .organization_names
+            .contains(&"みどり保育所".to_string()));
         assert!(meta
             .organization_names
             .contains(&"さくら認定こども園".to_string()));
@@ -9490,19 +9821,18 @@ async fn run_transcription(
     app: AppHandle,
     request: RunTranscriptionRequest,
 ) -> Result<RunTranscriptionResponse, String> {
-    let _run_guard = match TaskRunGuard::try_acquire(&TRANSCRIPTION_ACTIVE) {
-        Some(g) => g,
-        None => {
-            return Ok(RunTranscriptionResponse {
+    let _run_guard =
+        match TaskRunGuard::try_acquire(&TRANSCRIPTION_ACTIVE) {
+            Some(g) => g,
+            None => return Ok(RunTranscriptionResponse {
                 success: false,
                 result: None,
                 error_message: Some(
                     "文字起こしは既に実行中です。完了するかキャンセルしてから再実行してください。"
                         .to_string(),
                 ),
-            })
-        }
-    };
+            }),
+        };
     stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || run_transcription_blocking(app, request))
         .await
@@ -9514,19 +9844,18 @@ async fn run_diarization(
     app: AppHandle,
     request: RunDiarizationRequest,
 ) -> Result<RunDiarizationResponse, String> {
-    let _run_guard = match TaskRunGuard::try_acquire(&DIARIZATION_ACTIVE) {
-        Some(g) => g,
-        None => {
-            return Ok(RunDiarizationResponse {
+    let _run_guard =
+        match TaskRunGuard::try_acquire(&DIARIZATION_ACTIVE) {
+            Some(g) => g,
+            None => return Ok(RunDiarizationResponse {
                 success: false,
                 result: None,
                 error_message: Some(
                     "話者分離は既に実行中です。完了するかキャンセルしてから再実行してください。"
                         .to_string(),
                 ),
-            })
-        }
-    };
+            }),
+        };
     stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || run_diarization_blocking(app, request))
         .await
@@ -10215,9 +10544,7 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                 if let Some(actual_device) =
                     diarization_result.get("device").and_then(Value::as_str)
                 {
-                    if amd_gpu_required
-                        && transcription_device == "cuda"
-                        && actual_device != "cuda"
+                    if amd_gpu_required && transcription_device == "cuda" && actual_device != "cuda"
                     {
                         return Ok(RunTranscriptionResponse {
                             success: false,
@@ -10662,7 +10989,11 @@ fn find_bundled_ffmpeg_bin(app: &AppHandle) -> Option<String> {
     // 配置するのは setup_ffmpeg_lgpl.py が取得する LGPL ビルドなので Apache-2.0 前提は不変。
     // cfg(debug_assertions) ガードによりリリース挙動・配布物・AMD 版には影響しない。
     #[cfg(debug_assertions)]
-    search_dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("ffmpeg"));
+    search_dirs.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("ffmpeg"),
+    );
 
     let exe = std::env::consts::EXE_SUFFIX;
     for dir in &search_dirs {
@@ -11447,12 +11778,19 @@ fn run_overall_proofread_blocking(
         None
     };
     let openai_model = if is_openai_compatible {
-        let model = request.openai_model.as_deref().unwrap_or("").trim().to_string();
+        let model = request
+            .openai_model
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if model.is_empty() {
             return Ok(OverallProofreadResponse {
                 success: false,
                 result: None,
-                error_message: Some("ローカルOpenAI互換APIのモデル名が指定されていません。".to_string()),
+                error_message: Some(
+                    "ローカルOpenAI互換APIのモデル名が指定されていません。".to_string(),
+                ),
             });
         }
         Some(model)
@@ -11539,7 +11877,10 @@ fn run_overall_proofread_blocking(
         .stderr(Stdio::piped());
 
     if is_lemonade {
-        let url = request.llm_url.as_deref().unwrap_or("http://localhost:13306");
+        let url = request
+            .llm_url
+            .as_deref()
+            .unwrap_or("http://localhost:13306");
         let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
         cmd.arg("--llm-url").arg(url);
         cmd.arg("--llm-model").arg(model);
@@ -11570,16 +11911,25 @@ fn run_overall_proofread_blocking(
         cmd.arg("--system-prompt-path").arg(path);
     }
 
-    emit_progress(&app, "llm_sidecar_start", "全体校正サイドカーを起動しています...", None);
+    emit_progress(
+        &app,
+        "llm_sidecar_start",
+        "全体校正サイドカーを起動しています...",
+        None,
+    );
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("overall proofread sidecar の起動に失敗しました: {e}"))?;
     set_running_pid(RunningTaskKind::LlmProofread, child.id());
 
-    let stdout_reader = child.stdout.take()
+    let stdout_reader = child
+        .stdout
+        .take()
         .ok_or_else(|| "stdout パイプ取得に失敗しました。".to_string())?;
-    let stderr_reader = child.stderr.take()
+    let stderr_reader = child
+        .stderr
+        .take()
         .ok_or_else(|| "stderr パイプ取得に失敗しました。".to_string())?;
 
     let stdout_buf = Arc::new(Mutex::new(String::new()));
@@ -11638,7 +11988,9 @@ fn run_overall_proofread_blocking(
             if is_lemonade {
                 let _ = try_stop_cuda_llama_server(&app);
             }
-            return Err(format!("overall proofread sidecar の終了待機に失敗しました: {e}"));
+            return Err(format!(
+                "overall proofread sidecar の終了待機に失敗しました: {e}"
+            ));
         }
     };
 
@@ -11701,7 +12053,11 @@ fn run_overall_proofread_blocking(
         let err_msg = build_detailed_sidecar_error_message(
             "全体校正処理に失敗しました。",
             &python_bin,
-            &SidecarExecResult { status, stdout, stderr },
+            &SidecarExecResult {
+                status,
+                stdout,
+                stderr,
+            },
             parsed.as_ref(),
         );
         return Ok(OverallProofreadResponse {
@@ -11718,7 +12074,10 @@ fn run_overall_proofread_blocking(
         )
     })?;
 
-    let success = json.get("success").and_then(Value::as_bool).unwrap_or(false);
+    let success = json
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !success {
         let msg = json
             .get("error")
@@ -11750,7 +12109,11 @@ fn run_overall_proofread_blocking(
 
     Ok(OverallProofreadResponse {
         success: true,
-        result: Some(OverallProofreadResult { items, changed_count, unchanged_count }),
+        result: Some(OverallProofreadResult {
+            items,
+            changed_count,
+            unchanged_count,
+        }),
         error_message: None,
     })
 }
@@ -11807,7 +12170,10 @@ fn run_download_streaming(
                             t as f64 / 1_048_576.0
                         )
                     } else {
-                        format!("ダウンロード中... {:.0} MB", downloaded as f64 / 1_048_576.0)
+                        format!(
+                            "ダウンロード中... {:.0} MB",
+                            downloaded as f64 / 1_048_576.0
+                        )
                     }
                 } else {
                     "ダウンロード中...".to_string()
@@ -11818,7 +12184,11 @@ fn run_download_streaming(
                         component: progress_component.to_string(),
                         status: "downloading".to_string(),
                         message: msg,
-                        downloaded_bytes: if downloaded > 0 { Some(downloaded) } else { None },
+                        downloaded_bytes: if downloaded > 0 {
+                            Some(downloaded)
+                        } else {
+                            None
+                        },
                         total_bytes: total,
                     },
                 )
@@ -11838,12 +12208,19 @@ fn run_download_streaming(
         let success = v["success"].as_bool().unwrap_or(false);
         let message = v["message"]
             .as_str()
-            .unwrap_or(if success { "完了" } else { "ダウンロードに失敗しました" })
+            .unwrap_or(if success {
+                "完了"
+            } else {
+                "ダウンロードに失敗しました"
+            })
             .to_string();
         if !status.success() {
             Err(format!(
                 "ダウンロードプロセスが失敗しました{}: {}",
-                status.code().map(|code| format!(" (exit code {code})")).unwrap_or_default(),
+                status
+                    .code()
+                    .map(|code| format!(" (exit code {code})"))
+                    .unwrap_or_default(),
                 message
             ))
         } else if success {
@@ -12138,7 +12515,10 @@ fn check_python_venv(_app: &AppHandle) -> (bool, String) {
             }
 
             // python.exe が見つからない場合はエラーパスを返す
-            let expected = resource_dir.join("resources").join("python312").join("python.exe");
+            let expected = resource_dir
+                .join("resources")
+                .join("python312")
+                .join("python.exe");
             return (false, expected.to_string_lossy().to_string());
         }
 
@@ -12260,13 +12640,19 @@ fn run_venv_setup_streaming(app: &AppHandle, cmd: &mut Command) -> Result<(), St
                 let mut buf = String::new();
                 std::io::Read::read_to_string(&mut s, &mut buf).ok()?;
                 let trimmed = buf.trim().to_string();
-                if trimmed.is_empty() { None } else { Some(trimmed) }
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
             })
             .unwrap_or_default();
         if stderr_text.is_empty() {
             Err("Python 環境のセットアップに失敗しました".to_string())
         } else {
-            Err(format!("Python 環境のセットアップに失敗しました:\n{stderr_text}"))
+            Err(format!(
+                "Python 環境のセットアップに失敗しました:\n{stderr_text}"
+            ))
         }
     }
 }
@@ -12290,7 +12676,8 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
             .args([
                 script_path.to_str().unwrap_or(""),
                 req_path.to_str().unwrap_or(""),
-                "--variant", variant,
+                "--variant",
+                variant,
             ]);
         return run_venv_setup_streaming(_app, &mut cmd);
     }
@@ -12305,10 +12692,16 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
             .iter()
             .map(|s| resource_dir.join(s).join("python.exe"))
             .find(|p| p.exists())
-            .ok_or_else(|| format!(
-                "同梱 Python が見つかりません: {}",
-                resource_dir.join("resources").join("python312").join("python.exe").display()
-            ))?;
+            .ok_or_else(|| {
+                format!(
+                    "同梱 Python が見つかりません: {}",
+                    resource_dir
+                        .join("resources")
+                        .join("python312")
+                        .join("python.exe")
+                        .display()
+                )
+            })?;
 
         strip_python312_pth_bom(_app);
 
@@ -12317,7 +12710,11 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
 
         let mut cmd = Command::new(&bundled_python);
         apply_windows_no_window(&mut cmd);
-        let variant = if is_cpu_only_build(_app) { "cpu" } else { "cuda" };
+        let variant = if is_cpu_only_build(_app) {
+            "cpu"
+        } else {
+            "cuda"
+        };
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .args([
@@ -12388,7 +12785,12 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     if check_whisper_turbo_cached(&app) {
         emit_setup_progress(&app, "whisper_turbo", "skipped", "インストール済みです");
     } else {
-        emit_setup_progress(&app, "whisper_turbo", "downloading", "faster-whisper turboモデルをダウンロード中...");
+        emit_setup_progress(
+            &app,
+            "whisper_turbo",
+            "downloading",
+            "faster-whisper turboモデルをダウンロード中...",
+        );
         match download_whisper_model_blocking(app.clone(), "turbo".to_string()) {
             Ok(_) => emit_setup_progress(&app, "whisper_turbo", "done", "ダウンロード完了"),
             Err(e) => {
@@ -12409,9 +12811,19 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     } else {
         let token = hf_token.trimmed();
         if token.is_empty() {
-            emit_setup_progress(&app, "diarization", "skipped", "トークン未入力のためスキップ");
+            emit_setup_progress(
+                &app,
+                "diarization",
+                "skipped",
+                "トークン未入力のためスキップ",
+            );
         } else {
-            emit_setup_progress(&app, "diarization", "downloading", "話者分離モデルをダウンロード中...");
+            emit_setup_progress(
+                &app,
+                "diarization",
+                "downloading",
+                "話者分離モデルをダウンロード中...",
+            );
             match install_diarization_model_impl(&app, token) {
                 Ok(r) if r.success => emit_setup_progress(&app, "diarization", "done", &r.message),
                 Ok(r) => {
@@ -12450,10 +12862,20 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
         }
     } else {
         if !gemma_ok {
-            emit_setup_progress(&app, "gemma_gguf", "downloading", "Gemma 4 E4Bモデルをダウンロード中（約4.3GB）...");
+            emit_setup_progress(
+                &app,
+                "gemma_gguf",
+                "downloading",
+                "Gemma 4 E4Bモデルをダウンロード中（約4.3GB）...",
+            );
         }
         if gemma_mtp_needed && !gemma_mtp_ok {
-            emit_setup_progress(&app, "gemma_mtp_gguf", "downloading", "Gemma 4 E4B MTPモデルをダウンロード中（約60MB）...");
+            emit_setup_progress(
+                &app,
+                "gemma_mtp_gguf",
+                "downloading",
+                "Gemma 4 E4B MTPモデルをダウンロード中（約60MB）...",
+            );
         }
         match download_gemma_gguf_blocking(&app) {
             Ok(_) => {
@@ -12470,18 +12892,31 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
                         &app,
                         "gemma_gguf",
                         if gemma_ok_after { "done" } else { "error" },
-                        if gemma_ok_after { "ダウンロード完了" } else { "Gemma 4 E4Bモデルが見つかりません" },
+                        if gemma_ok_after {
+                            "ダウンロード完了"
+                        } else {
+                            "Gemma 4 E4Bモデルが見つかりません"
+                        },
                     );
                 }
                 if gemma_mtp_needed {
                     if gemma_mtp_ok {
-                        emit_setup_progress(&app, "gemma_mtp_gguf", "skipped", "インストール済みです");
+                        emit_setup_progress(
+                            &app,
+                            "gemma_mtp_gguf",
+                            "skipped",
+                            "インストール済みです",
+                        );
                     } else {
                         emit_setup_progress(
                             &app,
                             "gemma_mtp_gguf",
                             if gemma_mtp_ok_after { "done" } else { "error" },
-                            if gemma_mtp_ok_after { "ダウンロード完了" } else { "Gemma 4 E4B MTPモデルが見つかりません" },
+                            if gemma_mtp_ok_after {
+                                "ダウンロード完了"
+                            } else {
+                                "Gemma 4 E4B MTPモデルが見つかりません"
+                            },
                         );
                     }
                 }
@@ -12498,9 +12933,19 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
                 }
                 if gemma_mtp_needed {
                     if gemma_mtp_ok {
-                        emit_setup_progress(&app, "gemma_mtp_gguf", "skipped", "インストール済みです");
+                        emit_setup_progress(
+                            &app,
+                            "gemma_mtp_gguf",
+                            "skipped",
+                            "インストール済みです",
+                        );
                     } else {
-                        emit_setup_progress(&app, "gemma_mtp_gguf", "error", &format!("エラー: {e}"));
+                        emit_setup_progress(
+                            &app,
+                            "gemma_mtp_gguf",
+                            "error",
+                            &format!("エラー: {e}"),
+                        );
                     }
                 }
                 all_ok = false;
@@ -12785,7 +13230,9 @@ fn resolve_overall_proofread_system_prompt_path(app: &AppHandle) -> Result<PathB
     ))
 }
 
-fn resolve_default_overall_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_default_overall_proofread_system_prompt_path(
+    app: &AppHandle,
+) -> Result<PathBuf, String> {
     let prompt_relative = PathBuf::from("python_sidecar")
         .join("prompt_templates")
         .join("proofread")
@@ -12907,9 +13354,8 @@ fn resolve_diarization_python_bin(app: &AppHandle, _fallback_python_bin: &str) -
 
 pub fn run() {
     let audio_allowed_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let audio_stream_token = Arc::new(
-        generate_audio_stream_token().expect("audio stream token generation failed"),
-    );
+    let audio_stream_token =
+        Arc::new(generate_audio_stream_token().expect("audio stream token generation failed"));
     let audio_stream_port = start_audio_stream_server(
         Arc::clone(&audio_allowed_path),
         Arc::clone(&audio_stream_token),
@@ -12958,7 +13404,9 @@ pub fn run() {
                 let llm_port_arc = Arc::clone(&app.state::<LlmServer>().port);
                 let openai_unload_arc = Arc::clone(&app.state::<OpenAiUnloadState>().0);
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed = event {
+                    if let tauri::WindowEvent::CloseRequested { .. }
+                    | tauri::WindowEvent::Destroyed = event
+                    {
                         if let Ok(mut guard) = llm_child_arc.lock() {
                             if let Some(mut child) = guard.take() {
                                 let _ = kill_process_tree_by_pid(child.id());
@@ -13004,6 +13452,7 @@ pub fn run() {
             save_text_shift_jis,
             save_transcription_docx,
             save_transcription_xlsx,
+            save_transcription_srt,
             read_text_file,
             read_file_size,
             open_external_url,

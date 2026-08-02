@@ -844,7 +844,7 @@
                   <mat-hint>{{ llmBackendModeHint() }}</mat-hint>
                 </mat-form-field>
                 <button *ngIf="proofreadModelTierVisible()" mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります（NVIDIA/AMD GPU 対応・MTP高速化あり）。&#10;変更は次回のAI校正から反映されます。"
+                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。"
                   matTooltipClass="settings-info-tooltip" aria-label="AI校正バックエンドの説明">
                   <mat-icon class="material-symbols-outlined">info</mat-icon>
                 </button>
@@ -924,7 +924,7 @@
                   <mat-hint *ngIf="llmNCtxHint()">{{ llmNCtxHint() }}</mat-hint>
                 </mat-form-field>
                 <button mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AIが1回の呼び出しで保持できる文脈量の上限（n_ctx / 入力・出力を含むトークン数）。&#10;自動: VRAMで判定（16GB以上→32,768 / それ未満→16,384）。&#10;大きいほど長い会話に対応できますがVRAM使用量が増えます。&#10;内蔵Gemma（RTX/AMD）に有効。変更は次回のAI校正から反映されます。"
+                  matTooltip="AIが1回の呼び出しで保持できる文脈量の上限（n_ctx / 入力・出力を含むトークン数）。&#10;自動: VRAMで判定（16GB以上→32,768 / それ未満→16,384）。&#10;大きいほど長い会話に対応できますがVRAM使用量が増えます。&#10;変更は次回のAI校正から反映されます。"
                   matTooltipClass="settings-info-tooltip" aria-label="コンテキスト長の説明">
                   <mat-icon class="material-symbols-outlined">info</mat-icon>
                 </button>
@@ -1378,11 +1378,32 @@
       </button>
       <span class="copy-status" *ngIf="mergeStatus()">{{ mergeStatus() }}</span>
       <div class="merge-overall-center" *ngIf="aiProofreadBuild">
-        <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
-          [disabled]="!overallProofreadHasPendingItems() && (running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady()))"
+        <button *ngIf="overallProofreadHasPendingItems(); else overallProofreadRunButtons"
+          mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
           (click)="openOrRunOverallProofread(proofreadDialogMode)">
-          <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">{{ overallProofreadHasPendingItems() ? 'list' : 'auto_awesome' }}</mat-icon>{{ overallProofreadHasPendingItems() ? '全体校正結果の表示' : '全体校正' }}
+          <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">list</mat-icon>全体校正結果の表示
         </button>
+        <ng-template #overallProofreadRunButtons>
+          <div class="overall-proofread-split-button" role="group" aria-label="全体校正モデルを選択">
+            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn overall-proofread-split-main" color="accent"
+              [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
+              (click)="openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
+              <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">auto_awesome</mat-icon>全体校正
+            </button>
+            <button mat-stroked-button class="run-exec-btn overall-proofread-split-toggle" color="accent"
+              [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
+              [matMenuTriggerFor]="overallProofreadModelMenu" aria-label="別の全体校正モデルを選択"
+              matTooltip="別の全体校正モデルを選択">
+              <mat-icon class="material-symbols-outlined" aria-hidden="true">arrow_drop_down</mat-icon>
+            </button>
+          </div>
+          <mat-menu #overallProofreadModelMenu="matMenu" xPosition="before">
+            <button mat-menu-item (click)="openOrRunOverallProofreadWith12b(proofreadDialogMode)">
+              <mat-icon class="material-symbols-outlined" aria-hidden="true">auto_awesome</mat-icon>
+              <span>全体校正（with 12B）</span>
+            </button>
+          </mat-menu>
+        </ng-template>
       </div>
     </div>
     <mat-progress-bar *ngIf="mergeRunning()" mode="indeterminate" class="btn-progress-bar"></mat-progress-bar>
@@ -1660,7 +1681,7 @@
         <div class="actions-row result-save-actions">
           <mat-checkbox class="utterance-number-checkbox" [checked]="addUtteranceNumber()"
             (change)="onAddUtteranceNumberChange($event.checked)">発言番号を付与</mat-checkbox>
-          <div class="export-split-button" role="group" aria-label="WordまたはExcelで書き出し">
+          <div class="export-split-button" role="group" aria-label="Word、ExcelまたはSRTで書き出し">
             <button mat-flat-button color="primary" class="run-exec-btn export-split-main"
               (click)="saveWord()">Wordで書き出し</button>
             <button mat-flat-button color="primary" class="run-exec-btn export-split-toggle"
@@ -1674,8 +1695,12 @@
               <mat-icon class="material-symbols-outlined" aria-hidden="true">table_view</mat-icon>
               <span>Excelで書き出し</span>
             </button>
+            <button mat-menu-item (click)="saveSrt()">
+              <mat-icon class="material-symbols-outlined" aria-hidden="true">subtitles</mat-icon>
+              <span>SRT（字幕）で書き出し</span>
+            </button>
           </mat-menu>
-          <span class="save-json-reminder">WordやExcelだけでなく、jsonファイルも保存しておくことをお勧めします。</span>
+          <span class="save-json-reminder">Word・Excel・SRTだけでなく、jsonファイルも保存しておくことをお勧めします。</span>
           <button mat-flat-button color="primary" class="run-exec-btn" (click)="saveJson()">json書き出し</button>
         </div>
       </mat-card-content>

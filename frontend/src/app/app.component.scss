@@ -163,10 +163,14 @@
 .settings-info-icon {
   width: 28px;
   height: 28px;
-  line-height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: light-dark(#888, #9099a2);
   flex-shrink: 0;
   mat-icon {
+    display: block;
     font-size: 18px;
     width: 18px;
     height: 18px;
@@ -2303,6 +2307,29 @@ $segment-cols: 96px 84px 88px 1fr;
 
 .overall-proofread-save-btn {
   flex-shrink: 0;
+}
+
+.overall-proofread-split-button {
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+.overall-proofread-split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 0;
+}
+
+.overall-proofread-split-toggle {
+  min-width: 42px;
+  padding: 0 6px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.overall-proofread-split-toggle .mat-icon {
+  margin: 0;
 }
 
 .confirm-overlay {

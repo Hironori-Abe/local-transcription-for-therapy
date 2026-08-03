@@ -18,11 +18,12 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
 - **Japanese transcription** - faster-whisper with the Whisper turbo model by default; the higher-accuracy large-v3 model can be downloaded and selected later
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
-- **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. The proofreading AI supports the standard model, Gemma 4 E4B, and an optional higher-accuracy model, Gemma 4 12B, which is available for both NVIDIA and AMD after download
+- **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. For overall proofreading, use the standard Gemma 4 E4B button or select the optional higher-accuracy Gemma 4 12B for an individual job from the split-button menu; 12B is available for NVIDIA and AMD after download
 - **Voice input** - Record up to 15 seconds from the microphone on any transcript row, and a local AI transcribes it and suggests up to 3 candidates to insert into the edit field (available after installing the "voice input pack" from the Settings tab)
 - **Segment re-listen** - The AI re-transcribes the audio for a row's time range and suggests up to 3 candidates that replace the row's content, helping fix rows where the original transcription looks wrong
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
-- Save as Word (.docx), Excel (.xlsx), or JSON
+- Save as Word (.docx), Excel (.xlsx), SRT subtitles, or JSON. SRT can optionally be stored in an AES-256 encrypted ZIP with a password
+- Light and dark themes with system-preference support, plus keyboard shortcuts for editing, playback, speaker changes, and voice input
 
 ## Privacy and Offline Policy
 
@@ -95,6 +96,7 @@ LoTT CPU provides fully local transcription on PCs without a supported GPU. It i
    - Transcription model: Whisper turbo (the higher-accuracy large-v3 model can optionally be added later)
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
    - Proofreading LLM: Gemma 4 E4B GGUF (Full editions only)
+   - Higher-accuracy proofreading LLM: Gemma 4 12B QAT+MTP, approximately 7 GB (optional; Full editions only)
    - Voice input pack (optional, required for voice input and segment re-listen)
 
 After the models are downloaded, the app can be used offline.
@@ -104,7 +106,11 @@ After the models are downloaded, the app can be used offline.
 1. Select an audio file and run transcription
 2. Listen to the audio while editing the conversation text and speaker labels. Default speaker labels include `SPEAKER_00 -> Th` and `SPEAKER_01 -> Cl`
    - While editing, you can also use microphone voice input and the "segment re-listen" feature, which lets the AI re-transcribe a row's time range (requires the voice input pack)
-3. Save as Word, Excel, or JSON
+   - Shortcuts include `Ctrl+Shift+Space` (continuous playback / pause), `Ctrl+Shift+A` / `D` (seek back / forward 5 seconds), `Ctrl+Shift+E` (change speaker), and `Ctrl+Shift+M` (voice input)
+3. Run overall proofreading if needed. The main button uses Gemma 4 E4B; the adjacent menu uses the downloaded Gemma 4 12B for that job only (Full editions only)
+4. Save as Word, Excel, SRT subtitles, or JSON
+
+Use the button at the left of the tab row to cycle among System (default), Light, and Dark themes. The selection is preserved across launches.
 
 ## Technology Stack
 
@@ -115,6 +121,7 @@ After the models are downloaded, the app can be used offline.
 
 ## Documentation
 
+- Latest release notes (Japanese): [v0.9.7](docs/release-notes-v0.9.7.md)
 - Plain-language privacy guide for non-engineers (Japanese): [docs/privacy-guide.md](docs/privacy-guide.md)
 - Offline verification steps (Japanese): [docs/offline-verification.md](docs/offline-verification.md)
 - Template for research ethics review (IRB) documents (Japanese): [docs/irb-template.md](docs/irb-template.md)

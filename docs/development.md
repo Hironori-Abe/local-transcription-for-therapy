@@ -125,6 +125,8 @@ scripts\run-dev.bat
   - 高精度: Gemma 4 12B QAT + MTP（**NVIDIA / AMD 共通**、GPU 直起動経路。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック。large-v3 と同じく後からダウンロード（約7GB））
   - 既定は常に E4B。12B はオプトインで、未ダウンロード時は自動で E4B にフォールバックして起動します。
   - 選択は `app_local_data_dir()/proofread-model-tier.txt`（`e4b` / `12b`）に保存。MTP（投機デコード）の適用範囲・FlashAttention の扱いは [AGENTS.md](../AGENTS.md) の「MTP（投機的デコード）の適用範囲」を参照してください。
+- 全体校正の分割ボタンは、上記の永続選択とは別に、ジョブ単位の `proofreadTier`（`e4b` / `12b`）を `start_llm_server` へ渡します。通常ボタンは常にE4B、メニューの「全体校正（with 12B）」は常に12Bを要求し、設定ファイルを変更しません。12B未導入時はフロント側で実行を止めて設定画面へ案内します。
+- Word / Excel / SRTの書き出しは結果画面の分割ボタンにまとめています。SRTはRust側の `save_transcription_srt` で生成し、パスワード指定時は `encrypt_office_cli.py srt` によりAES-256暗号化ZIPへ格納します。
 
 ### ローカルAIアプリ（LM Studio / Ollama）連携のゲート
 

@@ -1,14 +1,14 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
-import { MAT_SNACK_BAR_DATA, MatSnackBarRef } from '@angular/material/snack-bar';
+import { MAT_SNACK_BAR_DATA } from '@angular/material/snack-bar';
 import { Signal } from '@angular/core';
 
 export interface PlaybackSnackbarData {
   playbackRateOptions: number[];
   playbackRate: Signal<number>;
   onRateChange: (rate: number) => void;
-  onStop: () => void;
+  onPause: () => void;
   isLoop?: boolean;
 }
 
@@ -45,9 +45,9 @@ const ICON_BASE_STYLE = `
           ×{{ rate.toFixed(1) }}
         </option>
       </select>
-      <button mat-flat-button color="warn" class="playback-snackbar-stop-btn" (click)="stop()">
-        <span class="snackbar-sym">stop</span>
-        停止
+      <button mat-flat-button color="warn" class="playback-snackbar-pause-btn" (click)="pause()">
+        <span class="snackbar-sym">pause</span>
+        一時停止
       </button>
     </div>
   `,
@@ -84,7 +84,11 @@ const ICON_BASE_STYLE = `
     .playback-snackbar-rate-select:focus {
       border-color: rgba(255,255,255,0.6);
     }
-    .playback-snackbar-stop-btn {
+    .playback-snackbar-rate-select option {
+      color: light-dark(#000, #f2f2f2);
+      background: light-dark(#fff, #333);
+    }
+    .playback-snackbar-pause-btn {
       min-width: unset;
       padding: 0 12px;
       height: 32px;
@@ -93,22 +97,20 @@ const ICON_BASE_STYLE = `
       align-items: center;
       gap: 4px;
     }
-    .playback-snackbar-stop-btn .snackbar-sym {
+    .playback-snackbar-pause-btn .snackbar-sym {
       font-size: 18px;
     }
   `]
 })
 export class PlaybackControlSnackbarComponent {
   readonly data = inject<PlaybackSnackbarData>(MAT_SNACK_BAR_DATA);
-  private readonly snackBarRef = inject(MatSnackBarRef);
 
   onRateChange(event: Event): void {
     const rate = parseFloat((event.target as HTMLSelectElement).value);
     this.data.onRateChange(rate);
   }
 
-  stop(): void {
-    this.data.onStop();
-    this.snackBarRef.dismiss();
+  pause(): void {
+    this.data.onPause();
   }
 }

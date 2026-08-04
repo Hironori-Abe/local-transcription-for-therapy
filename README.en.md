@@ -18,7 +18,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
 - **Japanese transcription** - faster-whisper with the Whisper turbo model by default; the higher-accuracy large-v3 model can be downloaded and selected later
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
-- **Proofreading** - Rule-based checks plus a local LLM. The app highlights possible personal identifiers such as names and place names. For overall proofreading, use the standard Gemma 4 E4B button or select the optional higher-accuracy Gemma 4 12B for an individual job from the split-button menu; 12B is available for NVIDIA and AMD after download
+- **Proofreading** - After diarization, Full editions automatically add punctuation with Gemma 4 E4B, while the CPU edition uses local rules. The app also highlights possible personal identifiers such as names and place names. For overall proofreading, use the standard Gemma 4 E4B button or select the optional higher-accuracy Gemma 4 12B for an individual job from the split-button menu; 12B is available for NVIDIA and AMD after download
 - **Voice input** - Record up to 15 seconds from the microphone on any transcript row, and a local AI transcribes it and suggests up to 3 candidates to insert into the edit field (available after installing the "voice input pack" from the Settings tab)
 - **Segment re-listen** - The AI re-transcribes the audio for a row's time range and suggests up to 3 candidates that replace the row's content, helping fix rows where the original transcription looks wrong
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
@@ -43,10 +43,10 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 
 | Edition | Description |
 | --- | --- |
-| **LoTT Full CUDA** | Main distribution. For NVIDIA RTX / CUDA. Includes transcription, speaker diarization, and proofreading |
-| LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. For AMD GPUs (the LLM prefers ROCm with Vulkan fallback) |
-| LoTT CPU | Trial edition. Runs transcription, speaker diarization, and simple punctuation on the CPU. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
-| LoTT Editor | Lightweight edition focused on proofreading and editing. Full transcription and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
+| **LoTT Full CUDA** | Main distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
+| LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. After diarization, punctuation is added automatically with Gemma 4 E4B (the LLM prefers ROCm with Vulkan fallback) |
+| LoTT CPU | Trial edition. Runs transcription and speaker diarization on the CPU, then automatically applies simple rule-based punctuation. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
+| LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription, diarization, automatic punctuation, and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
 
 ### AMD GPU Edition
 
@@ -70,7 +70,7 @@ scripts\run-dev-amd.bat
 
 ## CPU Edition (Trial Use)
 
-LoTT CPU provides fully local transcription on PCs without a supported GPU. It includes transcription, speaker diarization, and simple punctuation. Overall proofreading is not included. Installing the optional voice input pack also enables CPU-based voice input and segment re-listen.
+LoTT CPU provides fully local transcription on PCs without a supported GPU. After transcription and speaker diarization finish, it automatically applies simple punctuation with local rules. Overall proofreading is not included. Installing the optional voice input pack also enables CPU-based voice input and segment re-listen.
 
 **Because processing takes considerably longer, this edition is not recommended for regular, continuous use.** It is intended for trying LoTT with a small amount of audio or as a supplementary option when a supported GPU is unavailable.
 
@@ -121,7 +121,7 @@ Use the button at the left of the tab row to cycle among System (default), Light
 
 ## Documentation
 
-- Latest release notes (Japanese): [v0.9.7](docs/release-notes-v0.9.7.md)
+- Latest release notes (Japanese): [v0.9.8](docs/release-notes-v0.9.8.md)
 - Plain-language privacy guide for non-engineers (Japanese): [docs/privacy-guide.md](docs/privacy-guide.md)
 - Offline verification steps (Japanese): [docs/offline-verification.md](docs/offline-verification.md)
 - Template for research ethics review (IRB) documents (Japanese): [docs/irb-template.md](docs/irb-template.md)

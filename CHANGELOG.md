@@ -9,6 +9,28 @@
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-08-04
+
+句読点付与を文字起こし後の自動処理へ変更し、結果画面・設定画面・音声再生操作を整理したリリース。
+
+### 変更
+
+- 句読点付与の手動選択・実行を廃止した。Full GPU版は話者分離後に内蔵Gemma 4 E4B、CPU版はローカルルールで自動付与し、Editor版はJSONの読込・編集・書き出しに限定した。
+- 句読点付与方法の選択肢、手動実行ボタン、設定タブの句読点付与プロンプトUIを削除した。
+- 結果画面上部の重複していた校正説明・操作を削除し、話者名設定を2列化した。発言の統合と全体校正は結果表の下に維持した。
+- 「計算方式」を設定タブの「対象言語」の左へ移し、「再試行の理由」を「音声調整」の右へ移動した。
+
+### 改善
+
+- 12B全体校正の選択時にモデルが未導入なら確認ダイアログから約7GBのダウンロードを開始し、全体校正ボタンの下にも進捗を表示するようにした。完了後は12B全体校正を自動開始する。
+- 連続再生スナックバーの操作を完全停止から一時停止へ変更し、再生位置・対象行・連続再生キューを保持するようにした。
+- 音声再生アイコンへ「ループ再生」「連続再生」のツールチップを追加した。
+
+### 修正
+
+- 一時停止中に連続再生スナックバーが閉じられた後、ショートカットで再開してもスナックバーが再表示されない場合がある問題を修正した。
+- ライトモードで再生速度の選択肢が読みにくい問題を修正した。
+
 ## [0.9.7] - 2026-08-03
 
 編集画面の操作性と書き出し形式を拡充し、全体校正でGemma 4 12Bを直接選べるようにしたリリース。
@@ -206,7 +228,9 @@ v0.9.0 からのメンテナンスリリース。アプリの基本機能（文�
 - セグメント表の編集・句点での分割・セグメント単位の音声再生。
 - Word（.docx）/ Excel（.xlsx）/ JSON 形式での保存。
 
-[Unreleased]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.8...HEAD
+[0.9.8]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.7...v0.9.8
+[0.9.7]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.3...v0.9.4

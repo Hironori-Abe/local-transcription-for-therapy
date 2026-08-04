@@ -196,7 +196,7 @@
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
             <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf' && !allSetupStatus()?.llmBackend">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
                 [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
@@ -210,14 +210,14 @@
                 *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma GGUF -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf'">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-downloading]="setupProgressMap()['gemma_gguf']?.status === 'downloading'">{{
                 setupProgressMap()['gemma_gguf']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.gemmaGguf || setupProgressMap()['gemma_gguf']?.status === 'done' || setupProgressMap()['gemma_gguf']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">LLM校正モデル（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
+              <span class="setup-comp-name">自動句読点・校正モデル（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
               <span class="setup-comp-size">約 5 GB</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['gemma_gguf']?.status === 'error'"
@@ -225,7 +225,7 @@
                 *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild && llmBackendMode() === 'local_gguf' && buildVariant() === 'cuda'">
+            <div class="setup-component-row" *ngIf="aiProofreadBuild && buildVariant() === 'cuda'">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
@@ -372,6 +372,16 @@
                 </mat-select>
                 <mat-hint *ngIf="audioPreprocessPresetHint()">{{ audioPreprocessPresetHint() }}</mat-hint>
               </mat-form-field>
+              <mat-form-field appearance="outline" class="clustering-adjust-field">
+                <mat-label>再試行の理由（必要時のみ）</mat-label>
+                <mat-select
+                  [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
+                  [value]="clusteringAdjust()" (valueChange)="clusteringAdjust.set($event)">
+                  <mat-option value="standard">再試行ではない</mat-option>
+                  <mat-option value="over_split">一人の声が複数の話者に分かれる</mat-option>
+                  <mat-option value="under_split">話者の切り替わりが検出されない</mat-option>
+                </mat-select>
+              </mat-form-field>
               <mat-form-field appearance="outline" class="prompt-field">
                 <mat-label>頻出語・注目語</mat-label>
                 <input matInput id="initial-prompt-input" type="text"
@@ -396,32 +406,6 @@
                   </mat-option>
                 </mat-select>
               </mat-form-field>
-              <mat-form-field appearance="outline" class="compute-type-field">
-                <mat-label>計算方式</mat-label>
-                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()" [value]="computeType()"
-                  (valueChange)="onComputeTypeChange($event)">
-                  <mat-option *ngFor="let option of computeTypeOptions" [value]="option.value"
-                    [disabled]="option.value === 'int8' && isRocmGpu()">
-                    {{ option.label }}{{ option.value === 'int8' && isRocmGpu() ? '（ROCm 未検証）' : '' }}
-                  </mat-option>
-                </mat-select>
-              </mat-form-field>
-              <mat-form-field appearance="outline" class="clustering-adjust-field">
-                <mat-label>再施行の理由（必要時のみ）</mat-label>
-                <mat-select
-                  [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                  [value]="clusteringAdjust()" (valueChange)="clusteringAdjust.set($event)">
-                  <mat-option value="standard">再施行ではない</mat-option>
-                  <mat-option value="over_split">一人の声が複数の話者に分かれる</mat-option>
-                  <mat-option value="under_split">話者の切り替わりが検出されない</mat-option>
-                </mat-select>
-              </mat-form-field>
-              <mat-checkbox *ngIf="aiProofreadBuild"
-                [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                [checked]="continueProofreadAfterTranscription()"
-                (change)="onContinueProofreadAfterTranscriptionChange($event.checked)">
-                続けてAI句読点付与
-              </mat-checkbox>
               <button mat-flat-button class="run-exec-btn" [color]="running() ? 'warn' : 'accent'"
                 [ngClass]="{ 'run-exec-btn-warn': running() }"
                 [disabled]="isTranscriptionTabDisabled() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || llmProofreadCanceling() || transcriptionRunLockedByImport() || !selectedAudioPath() || transcriptionCanceling() || audioFileLoading()"
@@ -663,6 +647,16 @@
                     <span class="compute-env-no-dev">演算環境を確認中...</span>
                   </ng-template>
                 </ng-container>
+                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                  <mat-label>計算方式</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
+                    [value]="computeType()" (valueChange)="onComputeTypeChange($event)">
+                    <mat-option *ngFor="let option of computeTypeOptions" [value]="option.value"
+                      [disabled]="option.value === 'int8' && isRocmGpu()">
+                      {{ option.label }}{{ option.value === 'int8' && isRocmGpu() ? '（ROCm 未検証）' : '' }}
+                    </mat-option>
+                  </mat-select>
+                </mat-form-field>
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>対象言語</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
@@ -993,96 +987,7 @@
                   <mat-icon class="material-symbols-outlined">folder_open</mat-icon>
                 </button>
               </div>
-              <p class="prompt-section-heading">句読点付与プロンプト</p>
-              <!-- システムプロンプト: local_gguf + Gemma4フォーマット -->
-              <div *ngIf="llmBackendMode() === 'local_gguf' && llmPromptType() === 'gemma4'"
-                class="prompt-template-editor">
-                <pre class="prompt-template-fixed">&lt;|turn&gt;system</pre>
-                <div class="prompt-template-body">
-                  <div *ngIf="!proofreadSystemPromptReadonly()" class="prompt-template-toolbar">
-                    <button mat-icon-button type="button" aria-label="校正システムプロンプトをデフォルトに戻す"
-                      matTooltip="プロンプトを初期値に戻します" (click)="confirmResetProofreadSystemPrompt()">
-                      <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                    </button>
-                    <span class="prompt-template-toolbar-label">システムプロンプト（編集可）<span class="prompt-save-badge" [class.is-saved]="proofreadPromptIsCustomized()">{{ proofreadPromptIsCustomized() ? '保存済み' : '初期値' }}</span></span>
-                    <button mat-icon-button type="button" aria-label="校正システムプロンプトを保存"
-                      [disabled]="!canSaveProofreadSystemPrompt()"
-                      (click)="saveProofreadSystemPromptForSelectedModel()">
-                      <mat-icon class="material-symbols-outlined">save</mat-icon>
-                    </button>
-                  </div>
-                  <textarea cdkTextareaAutosize cdkAutosizeMinRows="2" cdkAutosizeMaxRows="6"
-                    class="prompt-template-textarea" [readonly]="proofreadSystemPromptReadonly()"
-                    [value]="proofreadSystemPrompt()"
-                    (input)="proofreadSystemPromptReadonly() ? null : onProofreadSystemPromptInput($event)"></textarea>
-                </div>
-                <pre class="prompt-template-fixed">&lt;turn|&gt;
-&lt;|turn&gt;user
-[テキストのリスト]
-
-番号付きのすべてのテキストを校正し、以下のJSON配列形式のみで返答してください。説明・前置き・マークダウンは不要です。
-[&#123;"id": &lt;番号&gt;, "result": "校正後テキスト", "changed": "変更内容（変更なしは空文字）"&#125;]&lt;turn|&gt;
-&lt;|turn&gt;model</pre>
-              </div>
-              <!-- システムプロンプト: 非local_gguf + Gemma4フォーマット -->
-              <div *ngIf="llmBackendMode() !== 'local_gguf' && llmPromptType() === 'gemma4' && showProofreadSystemPromptEditor()"
-                class="prompt-template-editor">
-                <pre class="prompt-template-fixed">&lt;|turn&gt;system</pre>
-                <div class="prompt-template-body">
-                  <div *ngIf="!proofreadSystemPromptReadonly()" class="prompt-template-toolbar">
-                    <button mat-icon-button type="button" aria-label="校正システムプロンプトをデフォルトに戻す"
-                      matTooltip="プロンプトを初期値に戻します" (click)="confirmResetProofreadSystemPrompt()">
-                      <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                    </button>
-                    <span class="prompt-template-toolbar-label">システムプロンプト（編集可）<span class="prompt-save-badge" [class.is-saved]="proofreadPromptIsCustomized()">{{ proofreadPromptIsCustomized() ? '保存済み' : '初期値' }}</span></span>
-                    <button mat-icon-button type="button" aria-label="校正システムプロンプトを保存"
-                      [disabled]="!canSaveProofreadSystemPrompt()"
-                      (click)="saveProofreadSystemPromptForSelectedModel()">
-                      <mat-icon class="material-symbols-outlined">save</mat-icon>
-                    </button>
-                  </div>
-                  <textarea cdkTextareaAutosize cdkAutosizeMinRows="2" cdkAutosizeMaxRows="6"
-                    class="prompt-template-textarea" [readonly]="proofreadSystemPromptReadonly()"
-                    [value]="proofreadSystemPrompt()"
-                    (input)="proofreadSystemPromptReadonly() ? null : onProofreadSystemPromptInput($event)"></textarea>
-                </div>
-                <pre class="prompt-template-fixed">&lt;turn|&gt;
-&lt;|turn&gt;user
-[テキストのリスト]
-
-番号付きのすべてのテキストを校正し、以下のJSON配列形式のみで返答してください。説明・前置き・マークダウンは不要です。
-[&#123;"id": &lt;番号&gt;, "result": "校正後テキスト", "changed": "変更内容（変更なしは空文字）"&#125;]&lt;turn|&gt;
-&lt;|turn&gt;model
-</pre>
-              </div>
-              <!-- システムプロンプト: オリジナルフォーマット（全バックエンド共通） -->
-              <ng-container *ngIf="llmPromptType() === 'original'">
-                <div class="prompt-template-editor">
-                  <div class="prompt-template-body">
-                    <div *ngIf="!proofreadSystemPromptReadonly()" class="prompt-template-toolbar">
-                      <button mat-icon-button type="button" aria-label="校正システムプロンプトをデフォルトに戻す"
-                        matTooltip="プロンプトを初期値に戻します" matTooltipPosition="above"
-                        (click)="confirmResetProofreadSystemPrompt()">
-                        <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                      </button>
-                      <span class="prompt-template-toolbar-label">システムプロンプト <span class="prompt-save-badge" [class.is-saved]="proofreadPromptIsCustomized()">{{ proofreadPromptIsCustomized() ? '保存済み' : '初期値（未保存）' }}</span></span>
-                      <button mat-icon-button type="button" aria-label="校正システムプロンプトを保存"
-                        [disabled]="!canSaveProofreadSystemPrompt()" (click)="saveProofreadSystemPromptForSelectedModel()">
-                        <mat-icon class="material-symbols-outlined">save</mat-icon>
-                      </button>
-                    </div>
-                    <textarea cdkTextareaAutosize cdkAutosizeMinRows="2" cdkAutosizeMaxRows="5"
-                      class="prompt-template-textarea"
-                      [value]="proofreadSystemPrompt()"
-                      (input)="onProofreadSystemPromptInput($event)"></textarea>
-                  </div>
-                  <pre class="prompt-template-fixed">[テキストのリスト]
-
-番号付きのすべてのテキストを校正し、以下のJSON配列形式のみで返答してください。説明・前置き・マークダウンは不要です。
-[&#123;"id": &lt;番号&gt;, "result": "校正後テキスト", "changed": "変更内容（変更なしは空文字）"&#125;]</pre>
-                </div>
-              </ng-container>
-              <p class="prompt-section-heading prompt-section-heading-gap">全体校正プロンプト</p>
+              <p class="prompt-section-heading">全体校正プロンプト</p>
               <!-- 全体校正システムプロンプト: local_gguf + Gemma4フォーマット -->
               <div *ngIf="llmBackendMode() === 'local_gguf' && llmPromptType() === 'gemma4'"
                 class="prompt-template-editor">
@@ -1268,104 +1173,6 @@
   </mat-tab-group>
   </div>
 
-  <ng-template #proofreadAndMergeSection let-source="source" let-requireImportReady="requireImportReady"
-    let-rowClass="rowClass">
-    <div class="section-separator"><span>校正</span></div>
-    <p class="reader-hint" style="padding-bottom: 20px;" *ngIf="aiProofreadBuild">
-      まず、他のPCで確認・校正作業をするなら、文字起こし結果をjson出力して編集用PCにデータを移行してください。
-    </p>
-    <ng-container *ngIf="aiProofreadBuild || (editorOnlyBuild && isDevModeBuild)">
-      <p class="reader-hint" style="padding-bottom: 10px;">
-        このPCで作業する場合、まずはAIに判別された話者が実際に正しいか、音声を聞きながら確認しましょう。残念ですが、話者の誤判別はよく起こります。句読点付与では、話者が切り替わる所には「。」が入りやすいため、誤判別が残ると作業の追加に繋がります。
-      </p>
-      <p class="reader-hint" style="padding-bottom: 10px;">
-        また、AIによる句読点付与にはランダム性があり、同じ処理が一律に行われるわけではありません。必ず最後まで一つ一つを確認しましょう。
-      </p>
-    </ng-container>
-    <p class="reader-hint" style="padding-bottom: 10px;">
-      同時に、人名や地名など個人情報が含まれていないか確認してください。機械による名前の検出は難易度が高いため、見逃されることや過剰に検出されることがあります。必ず自身で確認してください。</p>
-    <ng-container *ngIf="aiProofreadBuild || (editorOnlyBuild && isDevModeBuild)">
-      <div
-        [class]="(source === 'transcription' ? 'actions-row run-controls-row proofread-controls-row' : 'actions-row run-controls-row proofread-controls-row ' + rowClass)">
-
-        <ng-container *ngIf="!llmProofreadRunning()">
-          <div class="llm-proofread-wrap" *ngIf="!proofreadRunning()">
-            <button mat-flat-button class="run-exec-btn" color="primary"
-              [disabled]="running() || diarizationRunning() || overallProofreadRunning() || (requireImportReady && !importJsonReady()) || !result() || isAiProofreadDisabled()"
-              [matTooltip]="aiProofreadDisabledReason()" (click)="runLlmProofreadWithParallel()">
-              AIによる句読点付与
-            </button>
-            <span class="copy-status" *ngIf="llmProofreadStatus() && !llmProofreadRunning()">{{ llmProofreadStatus()
-              }}</span>
-            <!-- AMD バックエンド未インストール時のダウンロードプロンプト -->
-            <ng-container
-              *ngIf="llmInstallableGpuEntry() && llmServerStatus() !== 'not_installed' && llmServerStatus() !== 'installing'">
-              <div class="lemonade-backend-setup" *ngIf="!llmBackendInstalling()">
-                <mat-icon class="material-symbols-outlined"
-                  style="color: orange; vertical-align: middle; font-size: 18px;">warning</mat-icon>
-                <span>AI校正の実行には <strong>{{ llmInstallableGpuEntry()?.installKey }}</strong>
-                  バックエンドのダウンロードが必要です。</span>
-                <span style="color: light-dark(#888, #9099a2);">（インターネット接続が必要です）</span>
-                <button mat-stroked-button (click)="installLlmBackend()" style="margin-left: 8px;">
-                  ダウンロードして設定
-                </button>
-                <button mat-stroked-button color="warn" (click)="dismissLlmBackendPrompt()"
-                  style="margin-left: 4px;" matTooltip="このメッセージを非表示にします。AMD GPUモードも無効になります。設定から再度有効化できます。">
-                  不要
-                </button>
-              </div>
-              <div *ngIf="llmBackendInstalling()" class="copy-status">
-                {{ llmBackendInstallMessage() }}
-              </div>
-            </ng-container>
-            <div
-              *ngIf="!llmBackendInstalling() && llmBackendInstallMessage() && !llmInstallableGpuEntry()"
-              class="copy-status" style="color: light-dark(green, #7fc98a);">
-              {{ llmBackendInstallMessage() }}
-            </div>
-          </div>
-        </ng-container>
-        <ng-container *ngIf="llmProofreadRunning()">
-          <button mat-flat-button class="run-exec-btn" color="primary" disabled>
-            {{ llmProofreadStatus() || 'AI校正中...' }}
-          </button>
-          <button mat-flat-button class="run-exec-btn" [ngClass]="{ 'run-exec-btn-warn': !llmProofreadCanceling() }"
-            [color]="llmProofreadCanceling() ? 'primary' : 'warn'" [disabled]="llmProofreadCanceling()"
-            (click)="requestCancelRun('llmProofread')">
-            {{ llmProofreadCanceling() ? '中止要求送信中...' : '処理を中止' }}
-          </button>
-        </ng-container>
-        <button mat-flat-button color="primary" class="result-export-btn" (click)="saveJson()">結果の出力（json）</button>
-      </div>
-      <div>
-        <p class="reader-hint">AIによる句読点追加は、文字起こし所要時間と同～2倍程度の時間がかかります。</p>
-      </div>
-    </ng-container>
-    <div class="actions-row run-controls-row proofread-controls-row" *ngIf="editorOnlyBuild || cpuOnlyBuild || isDevModeBuild">
-      <ng-container *ngIf="!proofreadRunning() && !llmProofreadRunning()">
-        <button mat-flat-button class="run-exec-btn" color="primary"
-          [disabled]="running() || diarizationRunning() || overallProofreadRunning() || (requireImportReady && !importJsonReady()) || !result()"
-          (click)="runProofread(source, false, 'punct')">
-          単純な句読点付与
-        </button>
-        <span class="copy-status">{{ punctStatus() || '句読点のない文の末尾に追加します' }}</span>
-      </ng-container>
-      <button *ngIf="proofreadRunning()" mat-flat-button class="run-exec-btn"
-        [ngClass]="{ 'run-exec-btn-warn': !proofreadCanceling() }" [color]="proofreadCanceling() ? 'primary' : 'warn'"
-        [disabled]="proofreadCanceling()" (click)="requestCancelRun('proofread')">
-        {{ proofreadCanceling() ? '中止要求送信中...' : '処理を中止' }}
-      </button>
-      <button mat-flat-button color="primary" class="result-export-btn" (click)="saveJson()">結果の出力（json）</button>
-    </div>
-    <mat-progress-bar *ngIf="proofreadRunning() && proofreadStatusSource() === source" mode="indeterminate"
-      class="btn-progress-bar"></mat-progress-bar>
-    <p class="proofread-progress-count" *ngIf="proofreadRunning() && proofreadStatusSource() === source">{{
-      proofreadProgressText() || proofreadStatus() }}</p>
-    <div class="section-separator"><span>統合</span></div>
-    <p class="reader-hint">連続した同一話者の発言を一つにまとめます。音声を確認しつつ、文言や句読点の修正や最終確認をしてください。すべての作業が完了したならWordやExcelファイルとして出力します。</p>
-    <ng-container *ngTemplateOutlet="mergeAndOverallProofreadRow; context: { requireImportReady: requireImportReady, proofreadDialogMode: true, extraClass: 'proofread-controls-row' }"></ng-container>
-  </ng-template>
-
   <ng-template #mergeAndOverallProofreadRow
     let-requireImportReady="requireImportReady"
     let-proofreadDialogMode="proofreadDialogMode"
@@ -1397,6 +1204,12 @@
               <mat-icon class="material-symbols-outlined" aria-hidden="true">arrow_drop_down</mat-icon>
             </button>
           </div>
+          <div *ngIf="gemma12bDownloading()" class="whisper-dl-progress overall-proofread-download-progress">
+            <mat-progress-bar
+              [mode]="gemma12bDownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
+              [value]="gemma12bDownloadPercent()"></mat-progress-bar>
+            <span class="whisper-dl-bytes">{{ gemma12bDownloadBytesLabel() || 'ダウンロード中...' }}</span>
+          </div>
           <mat-menu #overallProofreadModelMenu="matMenu" xPosition="before">
             <button mat-menu-item (click)="openOrRunOverallProofreadWith12b(proofreadDialogMode)">
               <mat-icon class="material-symbols-outlined" aria-hidden="true">auto_awesome</mat-icon>
@@ -1423,8 +1236,6 @@
         </mat-card-title>
       </mat-card-header>
       <mat-card-content>
-        <div class="actions-row"></div>
-
         <div *ngIf="lastRunNotice()" class="run-notice-block">
           <p>{{ lastRunNotice() }}</p>
         </div>
@@ -1435,17 +1246,19 @@
 
         <div *ngIf="uniqueSpeakers.length > 0" class="speaker-alias-wrap">
           <p class="speaker-alias-title">話者名の表示変更</p>
-          <div class="speaker-alias-row" *ngFor="let spk of uniqueSpeakers">
-            <span class="speaker-swatch" [ngClass]="getSpeakerColorClass(spk)"></span>
-            <span class="speaker-source">{{ spk }} →</span>
-            <input class="speaker-alias-input" type="text" [value]="speakerAliasMap()[spk] || ''"
-              (input)="setSpeakerAlias(spk, $any($event.target).value)" placeholder="任意の表示名" />
+          <div class="speaker-alias-grid">
+            <div class="speaker-alias-row" *ngFor="let spk of uniqueSpeakers">
+              <span class="speaker-swatch" [ngClass]="getSpeakerColorClass(spk)"></span>
+              <span class="speaker-source">{{ spk }} →</span>
+              <input class="speaker-alias-input" type="text" [value]="speakerAliasMap()[spk] || ''"
+                (input)="setSpeakerAlias(spk, $any($event.target).value)" placeholder="任意の表示名" />
+            </div>
           </div>
         </div>
 
-        <ng-container
-          *ngTemplateOutlet="proofreadAndMergeSection; context: { source: source, requireImportReady: requireImportReady, rowClass: rowClass }">
-        </ng-container>
+        <div class="actions-row run-controls-row result-json-export-row">
+          <button mat-flat-button color="primary" class="result-export-btn" (click)="saveJson()">結果の出力（json）</button>
+        </div>
 
         <div class="segment-table-wrap">
           <div class="segment-grid-header">
@@ -1534,13 +1347,15 @@
               </div>
               <div class="segment-col-play">
                 <div class="segment-play-controls">
-                  <button mat-stroked-button class="segment-play-btn" aria-label="セグメントをリピート再生"
+                  <button mat-stroked-button class="segment-play-btn" aria-label="セグメントをループ再生"
+                    matTooltip="ループ再生"
                     [disabled]="isPlaybackDisabled()" (click)="playSegment(segment, segmentTextInput)">
                     <span class="material-symbols-outlined segment-play-icon" aria-hidden="true">
                       {{ isSegmentLooping(segment.id) ? 'stop' : 'repeat' }}
                     </span>
                   </button>
                   <button mat-stroked-button class="segment-play-btn" aria-label="セグメントを連続再生"
+                    matTooltip="連続再生"
                     [disabled]="isPlaybackDisabled()" (click)="playSegmentOnce(segment, segmentTextInput)">
                     <span class="material-symbols-outlined segment-play-icon segment-play-icon-rotated"
                       aria-hidden="true">

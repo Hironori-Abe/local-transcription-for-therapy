@@ -300,7 +300,7 @@ interface OverallProofreadResultData {
 
 type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'llmRerunAll' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 type EditorVoiceInputMemoryTier = 'unknown' | 'low' | 'caution' | 'normal';
 type AudioPreprocessPreset = 'none' | 'low_noise' | 'strong_noise' | 'volume_boost' | 'general_improvement' | 'manual';
@@ -360,7 +360,6 @@ interface AppSettingsV1 {
   proofread?: {
     chunkSize?: number;
     chunkMaxChars?: number;
-    continueAfterTranscription?: boolean;
     locationDetectionScope?: Partial<LocationDetectionScope>;
   };
   devEmulation?: {
@@ -837,24 +836,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!key || this.isGemma4DefaultLlmModelFileName(key)) return false;
     return typeof this.appSettings.llm?.overallSystemPromptsByModelFileName?.[key] === 'string';
   });
-  readonly isAiProofreadDisabled = computed(() => {
-    if (this.llmBackendMode() === 'local_gguf') {
-      if (this.llmServerStatus() === 'not_installed') return true;
-      if (this.llmGpuMode() === 'gpu' && this.llmLoadedDevice() === 'cpu') return true;
-      return false;
-    }
-    return !this.activeOpenAiModelInput().trim();
-  });
-  readonly aiProofreadDisabledReason = computed(() => {
-    if (!this.isAiProofreadDisabled()) return '';
-    if (this.llmBackendMode() === 'local_gguf') {
-      if (this.llmGpuMode() === 'gpu' && this.llmLoadedDevice() === 'cpu') {
-        return 'CPU 専用バックエンドが検出されました。設定タブから GPU バックエンドを再インストールしてください。';
-      }
-      return 'AI校正エンジンが未インストールです。設定タブからインストールしてください。';
-    }
-    return 'モデルが選択されていません。設定タブでモデルを選択してください。';
-  });
   readonly llmSegmentStatus = signal<Record<number, 'processing' | 'done'>>({});
   readonly proofreadProgressText = signal<string>('');
   readonly diarizationPhaseActive = signal<boolean>(false);
@@ -885,6 +866,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         parts.push('AI校正：起動中...');
       }
     }
+    if (this.proofreadRunning() && this.cpuOnlyBuild) {
+      const progress = this.proofreadProgressText() || this.proofreadStatus();
+      parts.push(progress ? `単純句読点付与：${progress}` : '単純句読点付与：処理中...');
+    }
     return parts.length ? parts.join('　') : '処理中...';
   });
   readonly mergeStatus = signal<string>('');
@@ -906,7 +891,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly proofreadCompleted = signal<boolean>(false);
   readonly proofreadChunkSize = signal<number>(12);
   readonly proofreadChunkMaxChars = signal<number>(1200);
-  readonly continueProofreadAfterTranscription = signal<boolean>(false);
   readonly selectedLocationArea = signal<LocationAreaCode>('kanto');
   readonly selectedLocationPrefectures = signal<string[]>([]);
   readonly selectedLocationPrefecturesByArea = signal<Partial<Record<LocationAreaCode, string[]>>>({});
@@ -1104,9 +1088,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const needsPythonEnv = !s.pythonEnv;
     const needsWhisper = this.transcriptionTabVisible() && !s.whisperTurbo;
     const needsDia = this.transcriptionTabVisible() && !s.diarization;
-    const needsGemma = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !s.gemmaGguf;
-    const needsGemmaMtp = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
-    const needsLlmBackend = this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !s.llmBackend;
+    // 自動句読点付与は選択中の全体校正バックエンドに関係なく内蔵E4Bを使う。
+    const needsGemma = this.aiProofreadBuild && !s.gemmaGguf;
+    const needsGemmaMtp = this.aiProofreadBuild && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
+    const needsLlmBackend = this.aiProofreadBuild && !s.llmBackend;
     return needsPythonEnv || needsWhisper || needsDia || needsGemma || needsGemmaMtp || needsLlmBackend;
   });
   readonly transcriptionTabDisabled = computed(() => {
@@ -2223,9 +2208,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       if (Number.isFinite(proofread.chunkMaxChars)) {
         this.proofreadChunkMaxChars.set(this.normalizeProofreadChunkMaxChars(Number(proofread.chunkMaxChars)));
       }
-      if (typeof proofread.continueAfterTranscription === 'boolean') {
-        this.continueProofreadAfterTranscription.set(proofread.continueAfterTranscription);
-      }
       const locationScope = this.normalizeLocationDetectionScope(proofread.locationDetectionScope);
       this.selectedLocationArea.set(locationScope.area ?? 'kanto');
       this.selectedLocationPrefecturesByArea.set(locationScope.prefecturesByArea ?? {});
@@ -2573,7 +2555,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       proofread: {
         chunkSize: this.normalizeProofreadChunkSize(this.proofreadChunkSize()),
         chunkMaxChars: this.normalizeProofreadChunkMaxChars(this.proofreadChunkMaxChars()),
-        continueAfterTranscription: this.continueProofreadAfterTranscription(),
         locationDetectionScope: this.buildLocationDetectionScopeRequest()
       }
     };
@@ -2924,14 +2905,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const audio = this.previewAudio;
     const playingId = this.playingSegmentId();
     if (playingId !== null && audio && !audio.paused) {
-      audio.pause();
-      this.previewPaused = true;
-      // 一時停止した行をそのまま直せるようにキャレットを末尾へ置く。
-      this.focusSegmentTextareaById(playingId);
+      this.pauseSegmentPlayback(false);
       return;
     }
     if (playingId !== null && this.previewPaused && audio) {
       this.previewPaused = false;
+      // 一時停止中に手動で閉じられたり、別の通知に置き換えられたりした場合は
+      // 再開と同時に連続再生コントロールも復元する。
+      this.openPlaybackSnackbar(this.previewLoopEnabled);
       void audio.play();
       return;
     }
@@ -3536,7 +3517,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (this.llmBackendMode() === 'local_gguf' && !this.llmModelPath() && !this._gemmaCheckBypassed) {
+    if (this.aiProofreadBuild && this.allSetupStatus()?.gemmaGguf === false && !this._gemmaCheckBypassed) {
       this.openConfirmDialog({
         actionKind: 'gemmaNotFoundBeforeTranscription',
         title: 'Gemma 4モデルが見つかりません',
@@ -3599,7 +3580,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.ensureProgressListener();
     this.startRunningTicker();
     this.startSmoothProgress();
-    const shouldAutoProofread = this.aiProofreadBuild && this.continueProofreadAfterTranscription();
     let autoEntityCheckAfterTranscription = false;
 
     try {
@@ -3711,8 +3691,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.runningStepTotal.set(0);
       this.runningComputeType.set('');
       this.parallelDiarizationStatus.set('');
-      if (this.aiProofreadBuild && (shouldAutoProofread || !this.diarization() || this.parallelMode() === 'fast')) {
-        await this.startAutoLlmProofread();
+      if (autoEntityCheckAfterTranscription) {
+        if (this.aiProofreadBuild) {
+          // GPU版は、保存中の高精度モデル設定に関係なくE4Bで句読点を自動付与する。
+          await this.startAutoLlmProofread();
+        } else if (this.cpuOnlyBuild) {
+          // CPU版のpunctモードは、単純句読点付与と固有名詞チェックを一度に実行する。
+          await this.runProofread('transcription', false, 'punct');
+          autoEntityCheckAfterTranscription = false;
+        }
       }
       this.dismissProgressSnackbar();
     }
@@ -3812,11 +3799,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     if (autoEntityCheckSource) {
-      // 「続けてAI校正」が有効なら先にLLM校正を実行し、完了後にentity checkを走らせる
-      if (this.result() && this.llmModelPath()) {
+      // 話者割り当ての変化を反映して、GPU版はE4B句読点付与を再実行する。
+      this.llmSegmentStatus.set({});
+      this.llmProgressOffset = 0;
+      this.llmTotalProcessedCount = 0;
+      this.proofreadUpdatedCount.set(0);
+      if (this.aiProofreadBuild) {
         await this.startAutoLlmProofread();
+        await this.runProofread(autoEntityCheckSource, false, 'entity');
+      } else if (this.cpuOnlyBuild) {
+        await this.runProofread(autoEntityCheckSource, false, 'punct');
       }
-      await this.runProofread(autoEntityCheckSource, false, 'entity');
     }
   }
 
@@ -4032,19 +4025,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           }));
 
     if (resolvedSegments.length === 0) {
-      if (autoMode) {
-        this.llmProofreadStatus.set('全セグメント処理済みです。');
-        return;
-      }
-      this.openConfirmDialog({
-        actionKind: 'llmRerunAll',
-        title: 'AI校正を再実行しますか？',
-        message: 'すべてのセグメントが処理済みです。現在の内容にもう一度校正しても結果が変わるとは限りません。それでも実行しますか？',
-        confirmLabel: '実行',
-        cancelLabel: 'キャンセル',
-        confirmColor: 'primary',
-        cancelColor: null,
-      });
+      this.llmProofreadStatus.set('全セグメント処理済みです。');
       return;
     }
 
@@ -4072,7 +4053,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           return;
         }
         this.llmProofreadStatus.set('AI校正エンジンを起動中...');
-        await this.startLlm();
+        await this.startLlm(false, autoMode ? 'e4b' : undefined);
         if (this.llmServerStatus() !== 'running') {
           // 起動時にKVキャッシュ確保でVRAM不足になった場合は、並列処理数を下げて再試行を促す
           if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runLlmProofread(autoMode, segments, backendOverride))) {
@@ -4205,26 +4186,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch { }
   }
 
-  /** LLM校正を実行する（手動ボタン用）。完了後にentity checkを実行する。 */
-  async runLlmProofreadWithParallel(): Promise<void> {
-    await this.runLlmProofreadParallelCore(false);
-    if (this.result()) {
-      await this.runProofread('transcription', false, 'entity');
-    }
-  }
-
-  /** 文字起こし完了後にLLM校正を自動実行する。 */
+  /** 話者分離完了後、内蔵E4Bで句読点付与を自動実行する。 */
   private async startAutoLlmProofread(): Promise<void> {
-    await this.runLlmProofreadParallelCore(true);
-  }
-
-  private async runLlmProofreadParallelCore(autoMode: boolean): Promise<void> {
     if (!this.result()) return;
-    if (this.llmBackendMode() !== 'local_gguf') {
-      await this.runLlmProofread(autoMode, undefined, 'openai_compatible');
-      return;
-    }
-    await this.runLlmProofread(autoMode, undefined, 'lemonade');
+    // 12BやローカルAIアプリの選択は全体校正などの明示操作にだけ適用する。
+    await this.runLlmProofread(true, undefined, 'lemonade');
   }
 
   private openProgressSnackbar(): void {
@@ -4477,12 +4443,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (dialog.actionKind === 'llmRerunAll') {
-      this.llmSegmentStatus.set({});
-      await this.runLlmProofreadWithParallel();
-      return;
-    }
-
     if (dialog.actionKind === 'resetProofreadSystemPrompt') {
       this.resetProofreadSystemPromptForSelectedModel();
     }
@@ -4493,6 +4453,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     if (dialog.actionKind === 'overallProofreadBeforeMerge') {
       await this.runOverallProofread(this.pendingOverallProofreadTier);
+    }
+
+    if (dialog.actionKind === 'downloadGemma12bForOverallProofread') {
+      const downloaded = await this.downloadGemma12b();
+      if (downloaded) {
+        this.openOrRunOverallProofread(false, '12b');
+      }
+      return;
     }
 
     if (dialog.actionKind === 'lowerLlmParallelOnOom') {
@@ -4555,7 +4523,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       installed = false;
     }
     if (!installed) {
-      this.snackBar.open('Gemma 4 12Bが未導入です。設定画面から12Bモデルをダウンロードしてください', undefined, { duration: 5000 });
+      this.openConfirmDialog({
+        actionKind: 'downloadGemma12bForOverallProofread',
+        title: '高精度モデルをダウンロードしますか？',
+        message: 'Gemma 4 12Bはまだダウンロードされていません。約7GBのダウンロードが必要で、回線速度によっては数分から十数分かかります。これからダウンロードしますか？',
+        confirmLabel: 'ダウンロードする',
+        cancelLabel: 'キャンセル',
+        confirmColor: 'primary',
+        cancelColor: null,
+      });
       return;
     }
     this.openOrRunOverallProofread(withConfirm, '12b');
@@ -5634,7 +5610,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private async downloadGemma12b(): Promise<void> {
+  private async downloadGemma12b(): Promise<boolean> {
+    if (this.gemma12bDownloading()) return false;
     await this.ensureSetupProgressListener();
     this.gemma12bDownloading.set(true);
     this.gemma12bDownloadMessage.set('Gemma 4 12B（QAT+MTP）をダウンロード中... （約7GB・数分〜十数分かかります）');
@@ -5643,9 +5620,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.gemma12bInstalled.set(true);
       this.gemma12bDownloadMessage.set('');
       this.snackBar.open('Gemma 4 12B のダウンロードが完了しました', undefined, { duration: 3000 });
+      return true;
     } catch (e) {
       this.gemma12bDownloadMessage.set(`ダウンロード失敗: ${e}`);
       this.snackBar.open(`Gemma 4 12B ダウンロード失敗: ${e}`, undefined, { duration: 5000 });
+      return false;
     } finally {
       this.gemma12bDownloading.set(false);
     }
@@ -7053,8 +7032,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       tokenForValidation = '';
       await setupTask;
 
-      // GPU バックエンドのインストール（local_gguf モードかつ未インストールの場合）
-      if (this.aiProofreadBuild && this.llmBackendMode() === 'local_gguf' && !this.allSetupStatus()?.llmBackend) {
+      // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
+      // 関係なくGPUバックエンドを準備する。
+      if (this.aiProofreadBuild && !this.allSetupStatus()?.llmBackend) {
         // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
         // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
@@ -7070,7 +7050,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           llm_backend: { component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
         }));
         try {
-          await this.startLlm();
+          await this.startLlm(false, 'e4b');
         } catch (e) {
           this.setupProgressMap.update(m => ({
             ...m,
@@ -7794,6 +7774,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistAppSettings();
   }
 
+  private pauseSegmentPlayback(dismissControls: boolean): void {
+    const playingId = this.playingSegmentId();
+    if (playingId === null || !this.previewAudio) return;
+
+    // 読み込み・seek中の遅延playも無効化し、現在位置と連続再生キューは保持する。
+    ++this.seekPlayGeneration;
+    this.previewAudio.pause();
+    this.previewPaused = true;
+    if (dismissControls) {
+      this.sequenceSnackBarRef?.dismiss();
+      this.sequenceSnackBarRef = null;
+    }
+    // 一時停止した行をそのまま直せるようにキャレットを末尾へ置く。
+    this.focusSegmentTextareaById(playingId);
+  }
+
   stopSegmentPlayback(): void {
     ++this.seekPlayGeneration;
     this.sequenceSnackBarRef?.dismiss();
@@ -7821,17 +7817,25 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private openPlaybackSnackbar(isLoop: boolean): void {
     this.sequenceSnackBarRef?.dismiss();
-    this.sequenceSnackBarRef = this.snackBar.openFromComponent(PlaybackControlSnackbarComponent, {
+    const ref = this.snackBar.openFromComponent(PlaybackControlSnackbarComponent, {
       data: {
         playbackRateOptions: this.playbackRateOptions,
         playbackRate: this.playbackRate,
         onRateChange: (rate: number) => this.onPlaybackRateChange(rate),
-        onStop: () => this.stopSegmentPlayback(),
+        onPause: () => this.pauseSegmentPlayback(true),
         isLoop,
       },
       duration: 0,
       horizontalPosition: 'center',
       verticalPosition: 'bottom',
+    });
+    this.sequenceSnackBarRef = ref;
+    // Escape、スワイプ、別のスナックバーによる置換など、親以外から閉じられた場合も
+    // 破棄済み参照を残さない。新しいrefへ切り替え済みなら古い通知では消さない。
+    ref.afterDismissed().subscribe(() => {
+      if (this.sequenceSnackBarRef === ref) {
+        this.sequenceSnackBarRef = null;
+      }
     });
   }
 
@@ -8625,11 +8629,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     this.proofreadChunkMaxChars.set(this.normalizeProofreadChunkMaxChars(numeric));
-    this.persistProofreadSettings();
-  }
-
-  onContinueProofreadAfterTranscriptionChange(value: boolean): void {
-    this.continueProofreadAfterTranscription.set(Boolean(value));
     this.persistProofreadSettings();
   }
 

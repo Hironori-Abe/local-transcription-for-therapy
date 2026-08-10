@@ -4,6 +4,7 @@ dist-release/
 frontend/node_modules/
 frontend/dist/
 src-tauri/target/
+src-tauri/target-ubuntu24/
 __pycache__/
 *.pyc
 .venv/

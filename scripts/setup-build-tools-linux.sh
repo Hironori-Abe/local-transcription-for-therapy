@@ -219,6 +219,59 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
         echo "[ERROR] AppDir に libreadline/libhistory が残っています。ホストの /bin/sh が壊れます。" >&2
         exit 1
       fi
+
+      # --- GTK の表示バックエンドと IME 経路をセッションに合わせる ---
+      # linuxdeploy-plugin-gtk は Wayland セッションでも GDK_BACKEND=x11 を強制する。
+      # Wayland 側の fcitx5 は GTK 組み込み im-wayland と text-input 経路を使えるため、
+      # 生成済み hook の既定値だけを置き換える。AppDir cache に存在する
+      # ユーザー指定値は hook 内で尊重し、存在しない値だけ対応する module へ救済する。
+      # X11 側の GTK_IM_MODULE は、XMODIFIERS があるときだけ xim にする。
+      # XMODIFIERS が無い環境では XIM を有効化しない。
+      # GTK_IM_MODULE_FILE は AppDir 内 GTK と同じビルドで生成された cache を使い、
+      # ホスト側の GTK immodule を混在させない（fcitx5-gtk の同梱・ABI依存は行わない）。
+      gtk_hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+      if [[ -f "$gtk_hook" ]] && ! grep -q 'LOTT_GTK_BACKEND_IME_POLICY' "$gtk_hook"; then
+        if grep -q '^export GDK_BACKEND=x11' "$gtk_hook"; then
+          sed -i \
+            '/^export GDK_BACKEND=x11/c\
+# LOTT_GTK_BACKEND_IME_POLICY\
+if [[ -n "${LOTT_GDK_BACKEND:-}" ]]; then\
+  export GDK_BACKEND="${LOTT_GDK_BACKEND}"\
+elif [[ -z "${GDK_BACKEND:-}" ]]; then\
+  if [[ "${XDG_SESSION_TYPE:-}" == "wayland" && -n "${WAYLAND_DISPLAY:-}" ]]; then\
+    export GDK_BACKEND=wayland\
+  else\
+    export GDK_BACKEND=x11\
+  fi\
+fi\
+_lott_gtk_immodules_file="$APPDIR//usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"\
+_lott_gtk_im_module_has_entry() {\
+  [[ -f "$_lott_gtk_immodules_file" ]] && grep -Fq "\\\"$1\\\"" "$_lott_gtk_immodules_file"\
+}\
+_lott_gtk_backend="${GDK_BACKEND%%,*}"\
+if [[ "$_lott_gtk_backend" == "wayland" ]]; then\
+  if [[ -n "${GTK_IM_MODULE:-}" ]]; then\
+    if ! _lott_gtk_im_module_has_entry "${GTK_IM_MODULE}" && _lott_gtk_im_module_has_entry wayland; then\
+      export GTK_IM_MODULE=wayland\
+    fi\
+  elif _lott_gtk_im_module_has_entry wayland; then\
+    export GTK_IM_MODULE=wayland\
+  fi\
+else\
+  if [[ -n "${GTK_IM_MODULE:-}" ]]; then\
+    if ! _lott_gtk_im_module_has_entry "${GTK_IM_MODULE}" && [[ -n "${XMODIFIERS:-}" ]] && _lott_gtk_im_module_has_entry xim; then\
+      export GTK_IM_MODULE=xim\
+    fi\
+  elif [[ -n "${XMODIFIERS:-}" ]] && _lott_gtk_im_module_has_entry xim; then\
+    export GTK_IM_MODULE=xim\
+  fi\
+fi' "$gtk_hook"
+          echo "[OK] GTK hook の GDK/IME 経路を Wayland/X11 セッション別に設定しました"
+        else
+          echo "[INFO] GTK hook に GDK_BACKEND=x11 の強制がないため IME rewrite をスキップします"
+        fi
+      fi
+
       # ホストの基本コマンドが動的リンクするライブラリを同梱していると、同じ経路で
       # 別の undefined symbol を踏みうる。除去はせず、把握のために一覧だけ出す。
       host_risk="$(find "$appdir/usr/lib" -maxdepth 1 \

@@ -145,6 +145,16 @@ Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStream
 - `AudioStreamServer` はパスを 2 つ持つ。`allowed_path` = ユーザーが選んだ元ファイル（区間聞き直しの許可判定）、`playback_path` = 実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）。HTTP サーバーが照合するのは `playback_path`
 - WebView 側で再生時間を読むフォールバック経路（`loadAudioDurationFromSrc`）には必ずタイムアウトを残す。デコーダが無いと `loadedmetadata` も `error` も発火せず、Promise が未解決のまま UI が固まる
 
+### Linux AppImage の GTK 表示バックエンドと IME
+
+linuxdeploy が生成する `apprun-hooks/linuxdeploy-plugin-gtk.sh` は、ビルド後に `scripts/setup-build-tools-linux.sh` が表示バックエンドと GTK IME の既定値を補正する。AppDir の `immodules.cache` には `im-wayland.so` / `im-xim.so` はあるが fcitx GTK module は無いため、Wayland セッションを X11 に固定すると、fcitx5 の日本語入力経路が暗黙的になりやすい。
+
+- `LOTT_GDK_BACKEND` があれば最優先で `GDK_BACKEND` に設定する（診断用の逃げ道）。無ければ、既存の `GDK_BACKEND` を尊重し、未設定時だけ Wayland セッションでは `wayland`、それ以外では `x11` を既定にする
+- `GTK_IM_MODULE` と `XMODIFIERS` の既存値は原則尊重する。AppDir cache に存在する GTK module はそのまま使い、存在しない GTK module の指定だけは、`XMODIFIERS` が空でない場合に限り `xim` へ救済する。`XMODIFIERS` が空の環境では `xim` を強制しない
+- Wayland では `GTK_IM_MODULE` が未設定、または AppDir cache に存在しない場合に、cache にある `im-wayland` へ救済する。cache に存在する指定は尊重する。X11 の未設定・不明な指定は `XMODIFIERS` がある場合だけ `im-xim` へ救済する。`GTK_IM_MODULE_FILE` は AppDir 同梱 GTK 用 cache を使い、ホスト GTK module との ABI 混在を避ける
+- 従来の X11 経路を試す場合は `LOTT_GDK_BACKEND=x11 /path/to/Local\ Transcription\ for\ Therapy.AppImage` とする。ユーザーが明示した `GDK_BACKEND` / `GTK_IM_MODULE` / `XMODIFIERS` は通常の起動では上書きしない
+- テキスト欄クリックで固まる場合は、まず `pgrep -af offline-transcriber` で PID を確認し、`tr '\0' '\n' < /proc/<pid>/environ | rg 'GDK_BACKEND|GTK_IM_MODULE|GTK_IM_MODULE_FILE|XMODIFIERS'` で実効値を記録する。Wayland と X11 の両方を `LOTT_GDK_BACKEND` で比較し、`journalctl --user` の `webkit` / `gtk` / `ime` / `wayland` 関連ログを採取する。合成クリック・キー注入を検証手順に使わず、物理操作で再現した場合だけ必要に応じてメインプロセスと WebKit 子プロセスを gdb attach する
+
 ### AppImage とホストコマンドの分離（LD_LIBRARY_PATH 漏れ）
 
 linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を入れる。これは**子・孫プロセスにも継承される**ため、AppImage から起動したホスト側コマンドが同梱ライブラリを掴んで壊れる。実害として、Ubuntu 24.04 の `libreadline.so.8`（8.2）は Arch 系ホストの bash 5.3（readline 8.3 リンク）が要求する `rl_print_keybinding` を持たず、`/bin/sh` が

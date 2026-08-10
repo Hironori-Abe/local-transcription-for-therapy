@@ -126,3 +126,16 @@ LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
   - 同梱 Python の `readline` 拡張モジュールをビルド時に除外し、`libreadline.so.8` / `libhistory.so.8` を AppDir から除去する。残っていればビルドを落とす。
   - `xdg-open` の子プロセスを回収し、ゾンビを残さない。
 - 補足: この症状は「外部リンク・フォルダオープンが効かない」ものです。音声ファイルを選んだ直後のフリーズは別原因（上の GStreamer の項目）です。
+
+## Linux AppImage: テキスト欄をクリックすると固まる / Wayland・IME
+
+- AppImage の GTK hook は、Wayland セッションでは `GDK_BACKEND=wayland` と `GTK_IM_MODULE=wayland`、X11 では `GDK_BACKEND=x11` を既定にします。AppDir の GTK immodule cache には `im-wayland.so` / `im-xim.so` はありますが fcitx GTK module が無いため、Wayland セッションを X11 に固定すると fcitx5 の日本語入力経路が不明確になるためです。
+- `GDK_BACKEND` / `XMODIFIERS` と、AppDir cache に存在する `GTK_IM_MODULE` は尊重します。Wayland で `GTK_IM_MODULE` が cache に無い場合は `wayland` へ、X11 で cache に無い場合は空でない `XMODIFIERS` があるときだけ `xim` へ救済します。IME なし（`XMODIFIERS` 空）の環境に XIM は強制しません。
+- Wayland 起動で問題が出る場合は、従来の X11 経路を `LOTT_GDK_BACKEND=x11 /path/to/Local\ Transcription\ for\ Therapy.AppImage` で比較できます。戻す必要がなくなったら環境変数を外してください。
+
+切り分け:
+
+1. `pgrep -af offline-transcriber` で実行 PID を確認し、`tr '\0' '\n' < /proc/<pid>/environ | rg 'GDK_BACKEND|GTK_IM_MODULE|GTK_IM_MODULE_FILE|XMODIFIERS'` を保存する。
+2. Wayland の通常起動と `LOTT_GDK_BACKEND=x11` を物理クリックで比較する。合成クリック・キー注入は Wayland 環境では入力経路の検証にならない。
+3. `journalctl --user --since '2 minutes ago' --no-pager | rg -i 'webkit|gtk|ime|input|focus|wayland|error'` を確認する。
+4. まだ再現する場合は、メインプロセスと `WebKitWebProcess` の PID を控えてから gdb attach し、`thread apply all bt` を採取する。会話・音声データを外部へ送る診断は行わない。

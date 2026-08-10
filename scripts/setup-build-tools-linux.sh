@@ -99,6 +99,12 @@ echo ""
 export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=true
 
+# WebKitGTK の音声再生は GStreamer 依存。プラグインを同梱しないと Ubuntu 以外の
+# ホストでデコーダがゼロになり、音声ファイルを開いた時点で固まる。
+# bundleMediaFramework=true（tauri.*.linux.override.json）で linuxdeploy-plugin-gstreamer が
+# ビルドホストの LGPL プラグインを AppDir へ入れる。GPL の bad は明示的に除外する。
+export GSTREAMER_INCLUDE_BAD_PLUGINS=0
+
 # --- .deb / .AppImage ビルド ---
 echo "[INFO] .deb / .AppImage パッケージをビルド中..."
 echo "[INFO] 初回は Rust のコンパイルがあるため数十分かかることがあります。"
@@ -182,6 +188,34 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       done
       [[ -n "$out" ]] || out="$APPIMAGE_DIR/${product}_${app_version}_amd64.AppImage"
       removed="$(find "$appdir" -iname 'libwayland-*' -print -delete 2>/dev/null | wc -l)"
+
+      # --- GStreamer 同梱の検証と後始末 ---
+      gst_dir="$appdir/usr/lib/gstreamer-1.0"
+      if [[ ! -d "$gst_dir" ]] || ! compgen -G "$gst_dir/libgst*.so" >/dev/null 2>&1; then
+        echo "[ERROR] AppDir に GStreamer プラグインがありません。音声の読み込み・再生ができない AppImage になります。" >&2
+        echo "[ERROR] bundleMediaFramework の設定と、ビルドホストの gstreamer1.0-plugins-base/good を確認してください。" >&2
+        exit 1
+      fi
+      # 配布ライセンス方針（AGENTS.md）: GPL プラグインを配布物に含めない。
+      for forbidden in libgstlibav.so libgstfaad.so libgstx264.so libgstmpeg2dec.so libgstasf.so; do
+        if [[ -e "$gst_dir/$forbidden" ]]; then
+          echo "[ERROR] GPL の GStreamer プラグインが AppDir に入っています: $forbidden" >&2
+          exit 1
+        fi
+      done
+      # 同梱コアはホストより古いことがある。ホスト共有のレジストリ（~/.cache/gstreamer-1.0）を
+      # 読み書きするとホスト側 GStreamer アプリのキャッシュを壊すため、専用パスへ分ける。
+      # AppRun は set -e で hook を source するため、失敗しうる行は必ず握りつぶす。
+      gst_hook="$appdir/apprun-hooks/linuxdeploy-plugin-gstreamer.sh"
+      if [[ -f "$gst_hook" ]] && ! grep -q 'GST_REGISTRY_1_0' "$gst_hook"; then
+        {
+          printf '\n_lott_gst_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/%s"\n' "$product"
+          printf 'mkdir -p "$_lott_gst_cache_dir" 2>/dev/null || true\n'
+          printf 'export GST_REGISTRY_1_0="$_lott_gst_cache_dir/gstreamer-registry.bin"\n'
+        } >>"$gst_hook"
+      fi
+      echo "[INFO] $(basename "$out"): GStreamer プラグイン $(find "$gst_dir" -name 'libgst*.so' | wc -l) 個を同梱"
+
       ln -sfn "$product.png" "$appdir/.DirIcon"
       echo "[INFO] $(basename "$out"): libwayland-* を $removed 個除去し再パッケージ"
       ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" --appimage-extract-and-run \

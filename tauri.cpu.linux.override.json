@@ -33,6 +33,11 @@
       "resources/proofread/punctuation_rules",
       "resources/python312-linux",
       "resources/ffmpeg"
-    ]
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
   }
 }

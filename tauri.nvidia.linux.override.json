@@ -28,6 +28,11 @@
       "../python_sidecar/requirements-runtime.txt",
       "resources/python312-linux",
       "resources/ffmpeg"
-    ]
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
   }
 }

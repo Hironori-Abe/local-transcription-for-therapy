@@ -27,6 +27,11 @@
       "../licenses",
       "../python_sidecar/prompt_templates",
       "resources/proofread/punctuation_rules"
-    ]
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
   }
 }

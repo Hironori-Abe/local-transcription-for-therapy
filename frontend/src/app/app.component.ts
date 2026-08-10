@@ -1372,6 +1372,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private progressUnlisten: UnlistenFn | null = null;
   private parallelDiarUnlisten: UnlistenFn | null = null;
   private voiceInputPackProgressUnlisten: UnlistenFn | null = null;
+  private playbackTranscodeUnlisten: UnlistenFn | null = null;
+  private playbackTranscodeSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
+  private readonly playbackTranscodePercent = signal(0);
+  private readonly playbackTranscodeStatusText = computed(
+    () => `再生用に音声を変換しています（初回のみ）… ${this.playbackTranscodePercent()}%`
+  );
   private voiceInputAudioContext: AudioContext | null = null;
   private voiceInputMediaStream: MediaStream | null = null;
   private voiceInputSourceNode: MediaStreamAudioSourceNode | null = null;
@@ -2017,8 +2023,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async updateEstimatedTimeFromPath(path: string): Promise<void> {
     this.estimatingTime.set(true);
     try {
-      const src = await this.resolvePlayableAudioSrc(path);
-      const duration = await this.loadAudioDurationFromSrc(src);
+      const duration = await this.loadAudioDurationForPath(path);
       this.estimatedAudioSeconds.set(duration);
       this.recalculateEstimatedTime(duration);
     } catch {
@@ -2029,6 +2034,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } finally {
       this.estimatingTime.set(false);
     }
+  }
+
+  /**
+   * 再生時間は同梱 LGPL ffmpeg で取得する。ファイル選択の時点では再生用の変換を走らせず、
+   * WebView がその形式を再生できるかどうかにも依存させない。
+   * ffmpeg が解決できない構成のときだけ、従来どおり WebView 側で読む。
+   */
+  private async loadAudioDurationForPath(path: string): Promise<number> {
+    if (this.isTauriRuntime()) {
+      try {
+        const seconds = await invoke<number>('get_audio_duration_seconds', { path });
+        if (Number.isFinite(seconds) && seconds > 0) {
+          return seconds;
+        }
+      } catch {
+        // ffmpeg 未解決などのときは WebView 側の読み取りへフォールバックする
+      }
+    }
+    const src = await this.resolvePlayableAudioSrc(path);
+    return this.loadAudioDurationFromSrc(src);
   }
 
   private async updateEstimatedTimeFromFile(file: File): Promise<void> {
@@ -2088,19 +2113,42 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return Math.max(1, Math.ceil(seconds / 60));
   }
 
-  private loadAudioDurationFromSrc(src: string): Promise<number> {
+  /**
+   * WebView のメディアバックエンドで再生時間を読む。
+   * Linux の WebKitGTK は GStreamer に依存し、対応デコーダが無いと
+   * loadedmetadata も error も返さないまま止まることがあるため、必ずタイムアウトする。
+   */
+  private loadAudioDurationFromSrc(src: string, timeoutMs = 12000): Promise<number> {
     return new Promise((resolve, reject) => {
       const audio = new Audio();
+      let settled = false;
+      const finish = (action: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        audio.onloadedmetadata = null;
+        audio.onerror = null;
+        audio.src = '';
+        action();
+      };
+      const timer = setTimeout(
+        () => finish(() => reject(new Error('audio metadata timeout'))),
+        timeoutMs
+      );
       audio.preload = 'metadata';
       audio.onloadedmetadata = () => {
         const duration = audio.duration;
-        if (Number.isFinite(duration) && duration > 0) {
-          resolve(duration);
-        } else {
-          reject(new Error('duration unavailable'));
-        }
+        finish(() => {
+          if (Number.isFinite(duration) && duration > 0) {
+            resolve(duration);
+          } else {
+            reject(new Error('duration unavailable'));
+          }
+        });
       };
-      audio.onerror = () => reject(new Error('audio load failed'));
+      audio.onerror = () => finish(() => reject(new Error('audio load failed')));
       audio.src = src;
     });
   }
@@ -2703,6 +2751,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputPackProgressUnlisten();
       this.voiceInputPackProgressUnlisten = null;
     }
+    if (this.playbackTranscodeUnlisten) {
+      this.playbackTranscodeUnlisten();
+      this.playbackTranscodeUnlisten = null;
+    }
+    this.dismissPlaybackTranscodeSnackbar();
     this.cleanupVoiceInputRecording(false);
     if (this.llmEngineUiVisible()) {
       this.stopLlm();
@@ -7723,7 +7776,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     this.previewPaused = false;
     const audio = this.getOrCreatePreviewAudio();
-    const src = await this.resolvePlayableAudioSrc(path);
+    // 再生用の変換（Linux の AAC 等）が失敗しうるため、ここで止めて理由を出す。
+    let src: string;
+    try {
+      src = await this.resolvePlayableAudioSrc(path);
+    } catch (e) {
+      this.error.set(`音声を再生できませんでした: ${this.normalizeErrorMessage(e)}`);
+      return;
+    }
     const start = Math.max(0, segment.start);
     const end = Math.max(start + 0.1, segment.end);
     const currentPlayingId = this.playingSegmentId();
@@ -8089,8 +8149,55 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.audioStreamInfo === null) {
       this.audioStreamInfo = await invoke<{ port: number; token: string }>('get_audio_stream_info');
     }
-    await invoke('set_audio_allowed_path', { path });
-    return `http://127.0.0.1:${this.audioStreamInfo.port}/${encodeURIComponent(path)}?token=${this.audioStreamInfo.token}`;
+    // Linux の同梱 GStreamer は LGPL プラグインのみのため、AAC 等は Rust 側が
+    // 同梱 LGPL ffmpeg で FLAC へ変換し、そのキャッシュのパスを返す。
+    await this.ensurePlaybackTranscodeProgressListener();
+    try {
+      const servedPath = await invoke<string>('prepare_playback_source', { path });
+      return `http://127.0.0.1:${this.audioStreamInfo.port}/${encodeURIComponent(servedPath)}?token=${this.audioStreamInfo.token}`;
+    } finally {
+      this.dismissPlaybackTranscodeSnackbar();
+    }
+  }
+
+  /**
+   * 再生用変換の進捗を表示する。変換は形式ごとに初回だけ走り、以降はキャッシュを使うため
+   * 通常はイベントが来ずスナックバーも出ない。
+   */
+  private async ensurePlaybackTranscodeProgressListener(): Promise<void> {
+    if (!this.isTauriRuntime() || this.playbackTranscodeUnlisten) {
+      return;
+    }
+    this.playbackTranscodeUnlisten = await listen<{ state: string; percent: number }>(
+      'playback-transcode-progress',
+      (event) => {
+        const { state, percent } = event.payload;
+        if (state === 'done' || state === 'error') {
+          this.dismissPlaybackTranscodeSnackbar();
+          return;
+        }
+        this.playbackTranscodePercent.set(Number.isFinite(percent) ? percent : 0);
+        if (!this.playbackTranscodeSnackBarRef) {
+          this.playbackTranscodeSnackBarRef = this.snackBar.openFromComponent(
+            ProgressSnackbarComponent,
+            {
+              data: { statusText: this.playbackTranscodeStatusText },
+              duration: 0,
+              horizontalPosition: 'center',
+              verticalPosition: 'bottom',
+            }
+          );
+        }
+      }
+    );
+  }
+
+  private dismissPlaybackTranscodeSnackbar(): void {
+    if (this.playbackTranscodeSnackBarRef) {
+      this.playbackTranscodeSnackBarRef.dismiss();
+      this.playbackTranscodeSnackBarRef = null;
+    }
+    this.playbackTranscodePercent.set(0);
   }
 
   private revokePreviewObjectUrl(): void {

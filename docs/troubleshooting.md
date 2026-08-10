@@ -76,3 +76,28 @@ unset HSA_OVERRIDE_GFX_VERSION
   - **対象 GPU arch の rocBLAS が無い**: ROCm 直起動は rocBLAS を system ROCm（`/opt/rocm*/lib/rocblas/library/*<gfx>*`）から解決します。dGPU の arch（例 gfx1102）の Tensile が無いと起動前ゲート（`system_rocm_tensile_has_arch`）で弾かれ Vulkan になります。system ROCm を導入してください（DL ビルド同梱の therock は iGPU arch 専用のことがあり dGPU には使えません）。
 - いずれも該当しなければ Vulkan で安全に動作します（機能差はなく速度のみ）。
 - 関連クラッシュ痕跡: ROCm を therock 経由で起動すると `rocBLAS error: Cannot read ... TensileLibrary.dat ... for GPU arch : gfx1102` が出ます。本アプリは therock を `LD_LIBRARY_PATH` に載せないことでこれを回避しています。
+
+## Linux AppImage: 音声ファイルを選んだ直後に固まる
+
+- 症状: AppImage を起動してモデル等のダウンロードまでは正常。ファイル選択ダイアログで音声ファイルを選んだ直後に、進捗バーが出たまま操作できなくなる。Ubuntu では再現せず、CachyOS など Ubuntu 以外のディストロで発生する。
+- 原因: Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を GStreamer に委譲します。AppImage に GStreamer プラグインを同梱していないと、同梱された GStreamer コアがホストのプラグインを見つけられず（コンパイル時の既定パスが Ubuntu の multiarch のため。Arch 系は `/usr/lib/gstreamer-1.0`）、さらにバージョンも一致しないため、**利用可能な要素がゼロ**になります。`playbin` すら作れず `loadedmetadata` も `error` も返らないので、再生時間取得の Promise が未解決のまま UI が固まります。
+- 確認方法（AppDir に対して実行）:
+
+```python
+# 同梱 GStreamer コアで要素を探す。すべて MISSING ならこの問題。
+import ctypes, os, sys
+appdir = sys.argv[1]
+lib = ctypes.CDLL(os.path.join(appdir, "usr/lib/libgstreamer-1.0.so.0"))
+lib.gst_init(None, None)
+lib.gst_element_factory_find.restype = ctypes.c_void_p
+lib.gst_element_factory_find.argtypes = [ctypes.c_char_p]
+for name in (b"playbin3", b"filesrc", b"wavparse"):
+    print(name, "FOUND" if lib.gst_element_factory_find(name) else "MISSING")
+```
+
+- 対策（実施済み）:
+  - `tauri.*.linux.override.json` に `bundle.linux.appimage.bundleMediaFramework: true` を設定し、LGPL の GStreamer プラグインを AppImage へ同梱する。
+  - 再生時間の取得を同梱 LGPL ffmpeg（`get_audio_duration_seconds`）に切り替え、WebView のメディア再生可否に依存させない。
+  - WebView 側で読むフォールバック経路にタイムアウトを入れ、どの環境でも固まらないようにする。
+  - AAC（m4a / mp4 / aac）は LGPL プラグインにデコーダが無いため、再生時のみ同梱 ffmpeg で FLAC へ変換して配信する。初回だけ「再生用に音声を変換しています」と表示され、以降はキャッシュを使う。
+- ビルド時に `[ERROR] AppDir に GStreamer プラグインがありません` で失敗する場合は、ビルドホスト（Docker イメージ）に `gstreamer1.0-plugins-base` / `-good` が入っているか確認してください。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` は配布ライセンス方針により追加してはいけません。

@@ -5622,6 +5622,7 @@ fn cleanup_stale_private_temp_files(app: &AppHandle) {
             "lott_overall_segments_",
             "lott_overall_system_prompt_",
             "lott-retranscribe-",
+            "lott-playback-",
             "offline_transcriber_diar_",
         ]),
     );
@@ -5725,7 +5726,10 @@ fn encrypt_srt_to_zip(
 struct AudioStreamServer {
     port: u16,
     token: String,
+    /// ユーザーが選んだ元ファイル。区間聞き直しなど、元音声そのものを扱う機能の許可判定に使う。
     allowed_path: Arc<Mutex<Option<String>>>,
+    /// 実際に HTTP 配信するファイル。元ファイルと同じか、再生用に変換したキャッシュ。
+    playback_path: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Serialize)]
@@ -5815,7 +5819,7 @@ fn url_decode_path(s: &str) -> String {
 
 fn serve_audio_connection(
     mut stream: std::net::TcpStream,
-    allowed_path: Arc<Mutex<Option<String>>>,
+    playback_path: Arc<Mutex<Option<String>>>,
     expected_token: Arc<String>,
 ) {
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -5861,7 +5865,7 @@ fn serve_audio_connection(
 
     // 登録済みパスと一致するか確認（パストラバーサル防止）
     let allowed = {
-        let guard = allowed_path.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = playback_path.lock().unwrap_or_else(|e| e.into_inner());
         guard.clone()
     };
     let is_allowed = allowed
@@ -5968,7 +5972,7 @@ fn serve_audio_connection(
     }
 }
 
-fn start_audio_stream_server(allowed_path: Arc<Mutex<Option<String>>>, token: Arc<String>) -> u16 {
+fn start_audio_stream_server(playback_path: Arc<Mutex<Option<String>>>, token: Arc<String>) -> u16 {
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").expect("audio stream server bind failed");
     let port = listener
@@ -5977,7 +5981,7 @@ fn start_audio_stream_server(allowed_path: Arc<Mutex<Option<String>>>, token: Ar
         .port();
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let ap = Arc::clone(&allowed_path);
+            let ap = Arc::clone(&playback_path);
             let request_token = Arc::clone(&token);
             thread::spawn(move || serve_audio_connection(stream, ap, request_token));
         }
@@ -5995,8 +5999,292 @@ fn get_audio_stream_info(state: tauri::State<'_, AudioStreamServer>) -> AudioStr
 
 #[tauri::command]
 fn set_audio_allowed_path(path: String, state: tauri::State<'_, AudioStreamServer>) {
-    let mut guard = state.allowed_path.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = if path.is_empty() { None } else { Some(path) };
+    let value = if path.is_empty() { None } else { Some(path) };
+    {
+        let mut guard = state.allowed_path.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = value.clone();
+    }
+    // 変換なしで配信する従来の挙動を保つ。変換が要る場合は prepare_playback_source が上書きする。
+    let mut guard = state
+        .playback_path
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = value;
+}
+
+// ─── Audio probing / playback transcoding ────────────────────────────────────
+// WebKitGTK（Linux）のメディア再生は GStreamer に依存し、配布 AppImage には
+// LGPL のプラグインしか同梱しない（AGENTS.md のライセンス方針）。そのため AAC 等
+// LGPL 側にデコーダが無いコーデックは、同梱 LGPL ffmpeg で FLAC へ変換してから配信する。
+// また再生時間の取得も WebView のメディアバックエンドに依存させず ffmpeg で行う。
+
+#[derive(Default)]
+struct FfmpegAudioProbe {
+    duration_seconds: Option<f64>,
+    audio_codec: Option<String>,
+}
+
+/// GStreamer の base/good（LGPL）だけで確実にデコードできるコーデック。
+fn codec_is_directly_playable(codec: &str) -> bool {
+    codec.starts_with("pcm_")
+        || matches!(
+            codec,
+            "mp3" | "mp3float" | "flac" | "vorbis" | "opus" | "wavpack"
+        )
+}
+
+fn parse_ffmpeg_duration_line(line: &str) -> Option<f64> {
+    let rest = line.trim().strip_prefix("Duration:")?.trim_start();
+    let value = rest.split(',').next()?.trim();
+    if value.starts_with("N/A") {
+        return None;
+    }
+    let mut parts = value.split(':');
+    let hours: f64 = parts.next()?.trim().parse().ok()?;
+    let minutes: f64 = parts.next()?.trim().parse().ok()?;
+    let seconds: f64 = parts.next()?.trim().parse().ok()?;
+    let total = hours * 3600.0 + minutes * 60.0 + seconds;
+    (total.is_finite() && total > 0.0).then_some(total)
+}
+
+fn parse_ffmpeg_audio_codec_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("Stream #") {
+        return None;
+    }
+    let after = trimmed.split_once("Audio: ")?.1;
+    let codec = after
+        .split([' ', ','])
+        .find(|token| !token.is_empty())?
+        .to_ascii_lowercase();
+    (!codec.is_empty()).then_some(codec)
+}
+
+/// `ffmpeg -i <path>` の stderr から再生時間と音声コーデックを読む。
+/// 入力のみ指定した ffmpeg は "At least one output file must be specified" で
+/// 非ゼロ終了するが、その前にストリーム情報を出力するので終了コードは見ない。
+fn probe_audio_with_ffmpeg(app: &AppHandle, path: &str) -> Result<FfmpegAudioProbe, String> {
+    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
+        .ok_or_else(|| "音声情報の取得に必要な ffmpeg が見つかりませんでした。".to_string())?;
+    if !Path::new(path).exists() {
+        return Err("音声ファイルが見つかりません。".to_string());
+    }
+    let mut cmd = Command::new(&ffmpeg);
+    // -nostdin: 端末が無い状況で入力待ちに落ちて固まらないようにする。
+    cmd.arg("-hide_banner").arg("-nostdin").arg("-i").arg(path);
+    apply_windows_no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut probe = FfmpegAudioProbe::default();
+    for line in stderr.lines() {
+        if probe.duration_seconds.is_none() {
+            probe.duration_seconds = parse_ffmpeg_duration_line(line);
+        }
+        if probe.audio_codec.is_none() {
+            probe.audio_codec = parse_ffmpeg_audio_codec_line(line);
+        }
+    }
+    if probe.duration_seconds.is_none() && probe.audio_codec.is_none() {
+        return Err(format!(
+            "音声情報を読み取れませんでした: {}",
+            stderr.lines().last().unwrap_or("").trim()
+        ));
+    }
+    Ok(probe)
+}
+
+/// 再生時間（秒）を同梱 LGPL ffmpeg で取得する。WebView のメディア再生可否に依存しない。
+#[tauri::command]
+async fn get_audio_duration_seconds(app: AppHandle, path: String) -> Result<f64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        probe_audio_with_ffmpeg(&app, &path)?
+            .duration_seconds
+            .ok_or_else(|| "再生時間を取得できませんでした。".to_string())
+    })
+    .await
+    .map_err(|e| format!("再生時間の取得タスクエラー: {e}"))?
+}
+
+fn playback_cache_path(app: &AppHandle, source: &str) -> Result<PathBuf, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let metadata = fs::metadata(source).map_err(|e| format!("音声ファイルを読めません: {e}"))?;
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    metadata.len().hash(&mut hasher);
+    if let Ok(modified) = metadata.modified() {
+        if let Ok(epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+            epoch.as_secs().hash(&mut hasher);
+        }
+    }
+    Ok(private_llm_temp_dir(app)?.join(format!("lott-playback-{:016x}.flac", hasher.finish())))
+}
+
+/// 再生用に FLAC へ変換する。FLAC は可逆・シーク可能で、デコーダが LGPL の
+/// gst-plugins-good に含まれるため、配布方針を崩さずに AAC 等を再生できる。
+fn transcode_for_playback(
+    app: &AppHandle,
+    source: &str,
+    dest: &Path,
+    duration_seconds: Option<f64>,
+) -> Result<(), String> {
+    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
+        .ok_or_else(|| "再生用の変換に必要な ffmpeg が見つかりませんでした。".to_string())?;
+    let partial = dest.with_extension("flac.part");
+    let _ = fs::remove_file(&partial);
+    let mut guard = TempFileGuard::new();
+    guard.push(partial.clone());
+
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-i")
+        .arg(source)
+        .arg("-vn")
+        .arg("-map")
+        .arg("0:a:0")
+        .arg("-c:a")
+        .arg("flac")
+        // AAC などは fltp でデコードされ、既定では 24bit FLAC になってキャッシュが無駄に太る。
+        // このキャッシュは再生専用（文字起こし・区間聞き直しは常に元ファイルを使う）なので 16bit で足りる。
+        .arg("-sample_fmt")
+        .arg("s16")
+        .arg("-compression_level")
+        .arg("5")
+        .arg("-progress")
+        .arg("pipe:1")
+        .arg("-nostats")
+        .arg("-f")
+        .arg("flac")
+        .arg(&partial)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_windows_no_window(&mut cmd);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+
+    let _ = app.emit(
+        "playback-transcode-progress",
+        serde_json::json!({"state": "start", "percent": 0}),
+    );
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        let mut last_percent = -1i64;
+        for line in reader.lines().map_while(Result::ok) {
+            let Some(micros) = line.trim().strip_prefix("out_time_ms=") else {
+                continue;
+            };
+            let Ok(micros) = micros.trim().parse::<i64>() else {
+                continue;
+            };
+            // out_time_ms は名前に反してマイクロ秒。
+            let Some(total) = duration_seconds.filter(|d| *d > 0.0) else {
+                continue;
+            };
+            let percent = (((micros as f64 / 1_000_000.0) / total) * 100.0).clamp(0.0, 99.0) as i64;
+            if percent > last_percent {
+                last_percent = percent;
+                let _ = app.emit(
+                    "playback-transcode-progress",
+                    serde_json::json!({"state": "progress", "percent": percent}),
+                );
+            }
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("ffmpeg の実行に失敗しました: {e}"))?;
+    let finish = |result: &Result<(), String>| {
+        let _ = app.emit(
+            "playback-transcode-progress",
+            serde_json::json!({
+                "state": if result.is_ok() { "done" } else { "error" },
+                "percent": 100,
+            }),
+        );
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let result = Err(format!(
+            "再生用の音声変換に失敗しました: {}",
+            stderr.trim()
+        ));
+        finish(&result);
+        return result;
+    }
+    let result = fs::rename(&partial, dest)
+        .map_err(|e| format!("変換した音声の保存に失敗しました: {e}"));
+    if result.is_ok() {
+        guard.paths.clear();
+    }
+    finish(&result);
+    result
+}
+
+/// 再生に使うファイルパスを決めて配信を許可する。必要なら FLAC へ変換したキャッシュを返す。
+/// 長時間ファイルの変換で UI を止めないよう、実処理は blocking スレッドで動かす。
+#[tauri::command]
+async fn prepare_playback_source(
+    app: AppHandle,
+    path: String,
+    state: tauri::State<'_, AudioStreamServer>,
+) -> Result<String, String> {
+    let allowed_path_arc = Arc::clone(&state.allowed_path);
+    let playback_path_arc = Arc::clone(&state.playback_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_playback_source_blocking(app, path, allowed_path_arc, playback_path_arc)
+    })
+    .await
+    .map_err(|e| format!("再生準備タスクエラー: {e}"))?
+}
+
+fn prepare_playback_source_blocking(
+    app: AppHandle,
+    path: String,
+    allowed_path_arc: Arc<Mutex<Option<String>>>,
+    playback_path_arc: Arc<Mutex<Option<String>>>,
+) -> Result<String, String> {
+    if path.is_empty() {
+        return Err("音声ファイルが指定されていません。".to_string());
+    }
+    {
+        let mut guard = allowed_path_arc.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(path.clone());
+    }
+
+    let mut served = path.clone();
+    // Windows(WebView2) と macOS は AAC を含めて WebView 側でデコードできるため変換しない。
+    // 変換が要るのは GStreamer に LGPL プラグインしか無い Linux だけ。
+    if cfg!(target_os = "linux") {
+        // 判定できないとき（ffmpeg 不在・解析失敗）は従来どおり元ファイルをそのまま配信する。
+        if let Ok(probe) = probe_audio_with_ffmpeg(&app, &path) {
+            let needs_transcode = probe
+                .audio_codec
+                .as_deref()
+                .map(|codec| !codec_is_directly_playable(codec))
+                .unwrap_or(false);
+            if needs_transcode {
+                let cache = playback_cache_path(&app, &path)?;
+                let cached_ready = fs::metadata(&cache).map(|m| m.len() > 0).unwrap_or(false);
+                if !cached_ready {
+                    transcode_for_playback(&app, &path, &cache, probe.duration_seconds)?;
+                }
+                served = cache.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    let mut guard = playback_path_arc.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(served.clone());
+    Ok(served)
 }
 
 #[tauri::command]
@@ -9697,6 +9985,55 @@ mod tests {
         assert!(constant_time_token_eq(expected, expected));
         assert!(!constant_time_token_eq("", expected));
         assert!(!constant_time_token_eq("0123456789abcdee", expected));
+    }
+
+    #[test]
+    fn ffmpeg_duration_line_is_parsed_into_seconds() {
+        let line = "  Duration: 00:50:12.34, start: 0.000000, bitrate: 128 kb/s";
+        let seconds = parse_ffmpeg_duration_line(line).expect("duration should parse");
+        assert!((seconds - 3012.34).abs() < 0.01);
+        assert_eq!(
+            parse_ffmpeg_duration_line("  Duration: N/A, start: 0.000000, bitrate: N/A"),
+            None
+        );
+        assert_eq!(parse_ffmpeg_duration_line("  Stream #0:0: Audio: aac"), None);
+    }
+
+    #[test]
+    fn ffmpeg_audio_codec_line_is_parsed() {
+        assert_eq!(
+            parse_ffmpeg_audio_codec_line(
+                "  Stream #0:0[0x1](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 128 kb/s"
+            )
+            .as_deref(),
+            Some("aac")
+        );
+        assert_eq!(
+            parse_ffmpeg_audio_codec_line(
+                "  Stream #0:0: Audio: pcm_s16le, 16000 Hz, mono, s16, 256 kb/s"
+            )
+            .as_deref(),
+            Some("pcm_s16le")
+        );
+        assert_eq!(
+            parse_ffmpeg_audio_codec_line("  Stream #0:0: Video: h264, yuv420p"),
+            None
+        );
+    }
+
+    #[test]
+    fn only_lgpl_decodable_codecs_skip_playback_transcoding() {
+        // gst-plugins-base/good（LGPL）だけで再生できるもの
+        for codec in ["pcm_s16le", "pcm_f32le", "mp3", "flac", "vorbis", "opus"] {
+            assert!(codec_is_directly_playable(codec), "{codec} should play directly");
+        }
+        // LGPL 側にデコーダが無く、同梱 ffmpeg での FLAC 変換が要るもの
+        for codec in ["aac", "alac", "ac3", "wmav2"] {
+            assert!(
+                !codec_is_directly_playable(codec),
+                "{codec} should be transcoded"
+            );
+        }
     }
 
     #[test]
@@ -13510,10 +13847,11 @@ fn resolve_diarization_python_bin(app: &AppHandle, _fallback_python_bin: &str) -
 
 pub fn run() {
     let audio_allowed_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let audio_playback_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let audio_stream_token =
         Arc::new(generate_audio_stream_token().expect("audio stream token generation failed"));
     let audio_stream_port = start_audio_stream_server(
-        Arc::clone(&audio_allowed_path),
+        Arc::clone(&audio_playback_path),
         Arc::clone(&audio_stream_token),
     );
 
@@ -13531,6 +13869,7 @@ pub fn run() {
             port: audio_stream_port,
             token: (*audio_stream_token).clone(),
             allowed_path: audio_allowed_path,
+            playback_path: audio_playback_path,
         })
         .manage(OpenAiUnloadState::default())
         .setup(|app| {
@@ -13639,6 +13978,8 @@ pub fn run() {
             check_segment_retranscribe_available,
             get_audio_stream_info,
             set_audio_allowed_path,
+            get_audio_duration_seconds,
+            prepare_playback_source,
             get_dev_demo_data_dir,
             dev_delete_downloaded_models,
             download_whisper_model,

@@ -131,6 +131,20 @@ bash scripts/run-dev.sh
 - 検証用スクリプト: `scripts/verify_lgpl_ffmpeg_no_pyav.py`
 - 詳細記録: `docs/lgpl-pyav-build.md`
 
+### Linux 再生バックエンド（GStreamer）と AAC 変換
+
+Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStreamer** に委譲する。AppImage は自己完結が前提のため、プラグインを同梱しないとホスト側（Ubuntu 以外、例 CachyOS）でデコーダがゼロになり、音声ファイルを開いた時点で固まる。
+
+- AppImage には GStreamer プラグインを同梱する。`tauri.*.linux.override.json` の `bundle.linux.appimage.bundleMediaFramework: true` で `linuxdeploy-plugin-gstreamer` が動く。この設定を外さない
+- 同梱するのは **LGPL のみ**（`gstreamer1.0-plugins-base` / `-good` / `-alsa` / `-pulseaudio`）。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` / `faad` は入れない。`GSTREAMER_INCLUDE_BAD_PLUGINS=0` を維持する
+- 検証は二重にかける。`scripts/Dockerfile.appimage-ubuntu24` がビルドホストのプラグイン構成を、`scripts/setup-build-tools-linux.sh` が再パッケージ前に AppDir を検査し、GPL プラグイン混入・プラグイン欠落があればビルドを落とす
+- LGPL だけで再生できる形式: wav / mp3 / flac / ogg(vorbis, opus) / webm。いずれも seek 可能なことを確認済み
+- **AAC（m4a / mp4 / aac）は LGPL 側にデコーダが無い**ため、再生時に同梱 LGPL ffmpeg で 16bit FLAC へ変換したキャッシュを配信する（`prepare_playback_source` / `transcode_for_playback`）。変換キャッシュは `app_cache_dir()/private-temp/lott-playback-*.flac`（0700・`PRIVATE_TEMP_MAX_AGE` で自動削除）。**再生専用**であり、文字起こしと区間聞き直しは常に元ファイルを使う
+- 変換は Linux のみ。Windows(WebView2) は AAC をデコードできるため従来どおり元ファイルを直接配信する
+- 再生時間（推定時間表示）は WebView ではなく同梱 ffmpeg で取得する（`get_audio_duration_seconds`）。メディアバックエンドの可否に文字起こし機能を依存させない
+- `AudioStreamServer` はパスを 2 つ持つ。`allowed_path` = ユーザーが選んだ元ファイル（区間聞き直しの許可判定）、`playback_path` = 実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）。HTTP サーバーが照合するのは `playback_path`
+- WebView 側で再生時間を読むフォールバック経路（`loadAudioDurationFromSrc`）には必ずタイムアウトを残す。デコーダが無いと `loadedmetadata` も `error` も発火せず、Promise が未解決のまま UI が固まる
+
 ## Proofreading Policy
 
 - ルールベース校正は Tauri/Rust 側で完結する

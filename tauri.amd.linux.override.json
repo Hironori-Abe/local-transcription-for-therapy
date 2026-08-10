@@ -27,6 +27,11 @@
       "../python_sidecar/requirements-amd.txt",
       "resources/python312-linux",
       "resources/ffmpeg"
-    ]
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
   }
 }

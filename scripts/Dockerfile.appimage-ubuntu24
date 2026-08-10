@@ -10,6 +10,10 @@ RUN apt-get update \
       curl \
       desktop-file-utils \
       file \
+      gstreamer1.0-alsa \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good \
+      gstreamer1.0-pulseaudio \
       libayatana-appindicator3-dev \
       libfuse2 \
       libgtk-3-dev \
@@ -24,6 +28,25 @@ RUN apt-get update \
       python3-venv \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# AppImage の WebKitGTK は音声再生を GStreamer に丸投げするため、プラグインを同梱しないと
+# Ubuntu 以外のホスト（例 CachyOS）でデコーダがゼロになり、<audio> が読み込めず固まる。
+# 配布ライセンス方針（AGENTS.md）に合わせ、同梱するのは LGPL の base/good/alsa/pulse だけ。
+# GPL の gstreamer1.0-plugins-ugly / gstreamer1.0-libav / faad は入れない。
+# AAC など LGPL 側にデコーダが無い形式は、実行時に同梱 LGPL ffmpeg で FLAC へ変換して再生する。
+RUN set -eu; \
+    plugin_dir=/usr/lib/x86_64-linux-gnu/gstreamer-1.0; \
+    for forbidden in libgstlibav.so libgstfaad.so libgstx264.so libgstmpeg2dec.so libgstasf.so; do \
+      if [ -e "$plugin_dir/$forbidden" ]; then \
+        echo "[ERROR] GPL の GStreamer プラグインが入っています: $forbidden" >&2; exit 1; \
+      fi; \
+    done; \
+    for required in libgstcoreelements.so libgsttypefindfunctions.so libgstwavparse.so libgstmpg123.so libgstflac.so libgstogg.so libgstvorbis.so libgstopus.so libgstisomp4.so libgstmatroska.so libgstplayback.so libgstaudioconvert.so libgstaudioresample.so; do \
+      if [ ! -e "$plugin_dir/$required" ]; then \
+        echo "[ERROR] 必要な GStreamer プラグインがありません: $required" >&2; exit 1; \
+      fi; \
+    done; \
+    echo "[OK] LGPL GStreamer プラグインを確認しました"
 
 # AppImage実行先のsystem Python（CachyOSでは3.14等）へ依存しない、再配置可能な
 # Python 3.12基本ランタイムを作る。Pythonパッケージ本体は初回セットアップ時に

@@ -299,7 +299,7 @@ interface OverallProofreadResultData {
 }
 
 type ProofreadRunSource = 'transcription' | 'reader';
-type CancelRunKind = 'transcription' | 'proofread' | 'diarization' | 'llmProofread';
+type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
 type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 type EditorVoiceInputMemoryTier = 'unknown' | 'low' | 'caution' | 'normal';
@@ -602,6 +602,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly initialPrompt = signal<string>('');
   readonly baseInitialPrompt = signal<string>('');
   readonly running = signal<boolean>(false);
+  /** 文字起こし開始ボタンから連続実行する、話者分離・AI句読点・固有名詞確認までの全工程。 */
+  readonly transcriptionPipelineRunning = signal<boolean>(false);
+  readonly transcriptionPipelineCanceling = signal<boolean>(false);
   readonly runningStatus = signal<string>('');
   readonly runningProgress = signal<number>(0);
   // ユーザーに見せる平滑化済み進捗。runningProgress（バックエンドからの離散値）を
@@ -1401,7 +1404,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly devDeleteModelsResult = signal<{ deleted: string[]; notFound: string[]; errors: string[] } | null>(null);
   readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'whisper_large_v3' | 'diarization' | 'llm'>('all');
   private readonly estimateMinRequired = 5;
-  private readonly estimateStorageKey = 'offline_transcriber_runtime_estimate_samples_v1';
+  private readonly estimateStorageKey = 'offline_transcriber_runtime_estimate_samples_v2';
   private readonly appSettingsStorageKey = 'offline_transcriber_app_settings_v1';
   private readonly fixedProofreadChunkSize = 12;
   private readonly fixedProofreadChunkMaxChars = 1200;
@@ -2586,6 +2589,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistEstimateSamples();
   }
 
+  /**
+   * WebKit が音声形式のメタデータを読めない環境でも、完了済みの文字起こし区間から
+   * 所要時間ログ用の音声長を補完する。
+   */
+  private resolveRuntimeLogAudioSeconds(): number | null {
+    const metadataDuration = this.estimatedAudioSeconds();
+    if (metadataDuration !== null && Number.isFinite(metadataDuration) && metadataDuration > 0) {
+      return metadataDuration;
+    }
+    const segmentDuration = Math.max(
+      0,
+      ...(this.result()?.segments ?? [])
+        .map((segment) => Number(segment.end))
+        .filter((end) => Number.isFinite(end) && end > 0)
+    );
+    return segmentDuration > 0 ? segmentDuration : null;
+  }
+
   private pickEstimateSamplesForCurrentProfile(): RuntimeEstimateSample[] {
     const diarization = this.diarization();
     const device = this.normalizeTranscriptionDeviceForEstimate(this.transcriptionDevice());
@@ -3498,6 +3519,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async runTranscription(): Promise<void> {
+    if (this.transcriptionPipelineRunning()) {
+      return;
+    }
     if (this.isTranscriptionTabDisabled() || (this.transcriptionDevice() === 'cuda' && !this.transcriptionTabVisible())) {
       this.error.set('この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
       return;
@@ -3536,6 +3560,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.errorCopiedMessage.set('');
     this.lastRunNotice.set('');
     this.hadRetryInCurrentRun.set(false);
+    this.transcriptionPipelineRunning.set(true);
+    this.transcriptionPipelineCanceling.set(false);
     this.running.set(true);
     this.openProgressSnackbar();
     this.runningStatus.set('実行準備中...');
@@ -3577,7 +3603,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.stopSegmentPlayback();
     this.result.set(null);
     this.resultSource.set(null);
-    await this.ensureProgressListener();
+    try {
+      await this.ensureProgressListener();
+    } catch (error) {
+      this.running.set(false);
+      this.transcriptionPipelineRunning.set(false);
+      this.dismissProgressSnackbar();
+      this.error.set(this.normalizeErrorMessage(error));
+      return;
+    }
     this.startRunningTicker();
     this.startSmoothProgress();
     let autoEntityCheckAfterTranscription = false;
@@ -3662,26 +3696,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.error.set(message);
       this.showAmdGpuProcessingFailure('文字起こし・話者分離', message);
     } finally {
-      const elapsed = this.runningSeconds();
-      this.lastRunElapsedSeconds.set(elapsed);
-      if (this.result() && elapsed > 0) {
-        const audioSeconds = this.estimatedAudioSeconds();
-        if (audioSeconds && audioSeconds > 0) {
-          this.recordEstimateSample({
-            audioSeconds,
-            elapsedSeconds: elapsed,
-            diarization: true,
-            device: this.normalizeTranscriptionDeviceForEstimate(
-              this.lastObservedTranscriptionDevice ?? this.transcriptionDevice()
-            ),
-            computeType: this.lastObservedComputeType ?? this.computeType(),
-            createdAt: Date.now(),
-            fileSizeBytes: this.selectedAudioFileSizeBytes()
-          });
-          this.recalculateEstimatedTime(audioSeconds);
-        }
-      }
-      this.stopRunningTicker();
       this.stopSmoothProgress();
       this.running.set(false);
       this.runningStatus.set('');
@@ -3691,7 +3705,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.runningStepTotal.set(0);
       this.runningComputeType.set('');
       this.parallelDiarizationStatus.set('');
-      if (autoEntityCheckAfterTranscription) {
+    }
+
+    try {
+      if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
         if (this.aiProofreadBuild) {
           // GPU版は、保存中の高精度モデル設定に関係なくE4Bで句読点を自動付与する。
           await this.startAutoLlmProofread();
@@ -3700,17 +3717,45 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           await this.runProofread('transcription', false, 'punct');
           autoEntityCheckAfterTranscription = false;
         }
+        // 表示する所要時間は、文字起こし開始からAI句読点付与の完了までとする。
+        // この後に続く固有名詞チェックの時間は含めない。
+        this.stopRunningTicker();
+        const elapsed = this.runningSeconds();
+        this.lastRunElapsedSeconds.set(elapsed);
+        // 所要時間ログと次回以降の予測にも、AI句読点付与までの総時間を使う。
+        if (this.proofreadCompleted() && elapsed > 0) {
+          const audioSeconds = this.resolveRuntimeLogAudioSeconds();
+          if (audioSeconds && audioSeconds > 0) {
+            this.recordEstimateSample({
+              audioSeconds,
+              elapsedSeconds: elapsed,
+              diarization: true,
+              device: this.normalizeTranscriptionDeviceForEstimate(
+                this.lastObservedTranscriptionDevice ?? this.transcriptionDevice()
+              ),
+              computeType: this.lastObservedComputeType ?? this.computeType(),
+              createdAt: Date.now(),
+              fileSizeBytes: this.selectedAudioFileSizeBytes()
+            });
+            this.recalculateEstimatedTime(audioSeconds);
+          }
+        }
       }
+      if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
+        await this.runProofread('transcription', false, 'entity');
+      }
+    } finally {
+      // 句読点付与前の失敗・中止などでもタイマーを確実に終了する。
+      this.stopRunningTicker();
+      this.lastRunElapsedSeconds.set(this.runningSeconds());
+      this.transcriptionPipelineRunning.set(false);
+      this.transcriptionPipelineCanceling.set(false);
       this.dismissProgressSnackbar();
-    }
-
-    if (autoEntityCheckAfterTranscription) {
-      await this.runProofread('transcription', false, 'entity');
     }
   }
 
   async runDiarization(): Promise<void> {
-    if (this.running() || this.proofreadRunning() || this.diarizationRunning()) {
+    if (this.transcriptionPipelineRunning() || this.running() || this.proofreadRunning() || this.diarizationRunning()) {
       return;
     }
     if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
@@ -3962,6 +4007,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.error.set(this.normalizeErrorMessage(error));
     } finally {
       this.transcriptionCanceling.set(false);
+    }
+  }
+
+  /** 統合実行の現在工程に対応するキャンセルAPIへ振り分ける。 */
+  async cancelTranscriptionPipelineRun(): Promise<void> {
+    if (!this.transcriptionPipelineRunning() || this.transcriptionPipelineCanceling()) {
+      return;
+    }
+    this.errorWasCancelledByUser.set(true);
+    this.transcriptionPipelineCanceling.set(true);
+    if (this.running()) {
+      await this.cancelTranscriptionRun();
+      return;
+    }
+    if (this.llmProofreadRunning()) {
+      await this.cancelLlmProofread();
+      return;
+    }
+    if (this.proofreadRunning()) {
+      await this.cancelProofreadRun();
     }
   }
 
@@ -4331,6 +4396,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       if (!this.running() || this.transcriptionCanceling()) {
         return;
       }
+    } else if (kind === 'transcriptionPipeline') {
+      if (!this.transcriptionPipelineRunning() || this.transcriptionPipelineCanceling()) {
+        return;
+      }
     } else if (kind === 'proofread') {
       if (!this.proofreadRunning() || this.proofreadCanceling()) {
         return;
@@ -4344,6 +4413,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     const message = kind === 'transcription'
       ? '文字起こし処理を中止しますか？'
+      : kind === 'transcriptionPipeline' ? '文字起こし・話者分離・AI句読点付与の一括処理を中止しますか？'
       : kind === 'proofread' ? '校正処理を中止しますか？'
       : kind === 'llmProofread' ? 'LLM校正処理を中止しますか？\n中断後は未処理の行から再開できます。'
       : '話者分離処理を中止しますか？';
@@ -4385,6 +4455,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (dialog.actionKind === 'cancelRun') {
       if (dialog.cancelRunKind === 'transcription') {
         await this.cancelTranscriptionRun();
+        return;
+      }
+      if (dialog.cancelRunKind === 'transcriptionPipeline') {
+        await this.cancelTranscriptionPipelineRun();
         return;
       }
       if (dialog.cancelRunKind === 'proofread') {
@@ -4883,7 +4957,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     this.error.set('');
     const targetPath = await save({
-      title: '文字起こし所要時間ログを保存',
+      title: '文字起こし・AI句読点付与 所要時間ログを保存',
       defaultPath: this.buildEstimateLogDefaultFileName(),
       filters: [{ name: 'CSV', extensions: ['csv'] }]
     });
@@ -4906,7 +4980,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         sample.computeType
       ]);
 
-    const header = ['日時', 'ファイル音声長', '文字起こし所要時間', 'ファイルサイズ', '話者分離', '実行デバイス', '計算方式'];
+    const header = ['日時', 'ファイル音声長', 'AI句読点付与までの所要時間', 'ファイルサイズ', '話者分離', '実行デバイス', '計算方式'];
     const csvLines = [header, ...rows].map((cols) => cols.map((v) => this.escapeCsvValue(v)).join(','));
     const content = csvLines.join('\n');
 
@@ -7049,16 +7123,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           ...m,
           llm_backend: { component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
         }));
-        try {
-          await this.startLlm(false, 'e4b');
-        } catch (e) {
-          this.setupProgressMap.update(m => ({
-            ...m,
-            llm_backend: { component: 'llm_backend', status: 'error', message: 'AI校正エンジンの準備に失敗しました: ' + this.normalizeErrorMessage(e) },
-          }));
-          return;
-        }
 
+        // バックエンド未導入の段階では起動を試さない。特に Linux NVIDIA 開発環境は
+        // CUDA llama-server を同梱しておらず、Vulkan 取得前の起動は必ず失敗する。
+        // 校正エンジンは実際の校正実行時に遅延起動する。
         const unlisten = await listen<{ message: string }>(
           'llm-backend-install-progress',
           (ev) => this.setupProgressMap.update(m => ({

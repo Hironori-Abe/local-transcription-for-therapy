@@ -406,17 +406,17 @@
                   </mat-option>
                 </mat-select>
               </mat-form-field>
-              <button mat-flat-button class="run-exec-btn" [color]="running() ? 'warn' : 'accent'"
-                [ngClass]="{ 'run-exec-btn-warn': running() }"
-                [disabled]="isTranscriptionTabDisabled() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || llmProofreadCanceling() || transcriptionRunLockedByImport() || !selectedAudioPath() || transcriptionCanceling() || audioFileLoading()"
-                (click)="running() ? requestCancelRun('transcription') : runTranscription()">
+              <button mat-flat-button class="run-exec-btn" [color]="transcriptionPipelineRunning() ? 'warn' : 'accent'"
+                [ngClass]="{ 'run-exec-btn-warn': transcriptionPipelineRunning() }"
+                [disabled]="isTranscriptionTabDisabled() || (!transcriptionPipelineRunning() && (proofreadRunning() || diarizationRunning() || llmProofreadRunning() || llmProofreadCanceling())) || transcriptionRunLockedByImport() || !selectedAudioPath() || transcriptionPipelineCanceling() || audioFileLoading()"
+                (click)="transcriptionPipelineRunning() ? requestCancelRun('transcriptionPipeline') : runTranscription()">
                 {{
-                running()
-                ? (transcriptionCanceling() ? '中止しています...' : '文字起こしを中止')
+                transcriptionPipelineRunning()
+                ? (transcriptionPipelineCanceling() ? '中止しています...' : '処理を中止')
                 : '文字起こし開始'
                 }}
               </button>
-              <p *ngIf="running()">文字起こし中です。しばらくお待ちください...</p>
+              <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・AI句読点付与を処理中です。しばらくお待ちください...</p>
               <ng-container *ngIf="result() as transcriptionResult">
                 <p class="copy-status">所要時間: {{ formatElapsedMinuteSecond(lastRunElapsedSeconds())}}</p>
               </ng-container>
@@ -445,7 +445,7 @@
                 </mat-form-field>
                 <button mat-flat-button class="run-exec-btn" [color]="diarizationRunning() ? 'warn' : 'primary'"
                   [ngClass]="{ 'run-exec-btn-warn': diarizationRunning() }"
-                  [disabled]="running() || proofreadRunning() || ((!diarizationRunning()) && !result()) || diarizationCanceling()"
+                  [disabled]="transcriptionPipelineRunning() || running() || proofreadRunning() || ((!diarizationRunning()) && !result()) || diarizationCanceling()"
                   (click)="diarizationRunning() ? requestCancelRun('diarization') : runDiarization()">
                   {{
                   diarizationRunning()

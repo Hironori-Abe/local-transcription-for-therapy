@@ -1282,6 +1282,56 @@ fn try_start_llama_server_vulkan(
     Ok((child, oom_flag))
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn parse_vulkan_devices(output: &str) -> Vec<(i32, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("Vulkan")?;
+            let (index, name) = rest.split_once(':')?;
+            Some((index.trim().parse().ok()?, name.trim().to_string()))
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn choose_preferred_vulkan_device_index(devices: &[(i32, String)]) -> i32 {
+    devices
+        .iter()
+        .find(|(_, name)| name.to_ascii_lowercase().contains("nvidia"))
+        .or_else(|| devices.first())
+        .map(|(index, _)| *index)
+        .unwrap_or(0)
+}
+
+/// Linux の CUDA llama-server はまだ同梱していないため、NVIDIA 機でも Vulkan 版を使う。
+/// iGPU+dGPU 構成では Vulkan0 が iGPU になることがあるので、実際に起動する llama-server
+/// 自身の列挙結果から NVIDIA デバイスを優先する。Windows は従来の Vulkan0 固定を維持する。
+fn preferred_vulkan_device_index(_bin_path: &str) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cmd = Command::new(_bin_path);
+        if let Some(bin_dir) = PathBuf::from(_bin_path).parent() {
+            if bin_dir.exists() {
+                let current_path = env::var("PATH").unwrap_or_default();
+                cmd.env("PATH", format!("{}:{current_path}", bin_dir.display()));
+                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+                cmd.env(
+                    "LD_LIBRARY_PATH",
+                    format!("{}:{current_ld}", bin_dir.display()),
+                );
+            }
+        }
+        if let Ok(output) = cmd.arg("--list-devices").output() {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            return choose_preferred_vulkan_device_index(&parse_vulkan_devices(&text));
+        }
+    }
+    0
+}
+
 /// AMD GPU 向けに、lemond がダウンロードした ROCm ビルドの llama-server を直接起動する。
 /// Vulkan 版（try_start_llama_server_vulkan）の ROCm 版。新しい rocm ビルド（b9585+）は
 /// ドラフト arch `gemma4-assistant` を解釈でき、MTP（投機的デコード）を有効化できる。
@@ -1946,9 +1996,10 @@ fn start_amd_12b_blocking(
         }
     }
 
-    // 2) Vulkan 直起動（フォールバック）。単一GPU固定（GGML_VK_VISIBLE_DEVICES=0 = ggml 順で
-    //    最良＝dGPU）で iGPU+dGPU 同時列挙による RADV 初期化ハングを避ける。
+    // 2) Vulkan 直起動（フォールバック）。単一GPU固定（Windowsは従来どおり0、
+    //    LinuxはNVIDIA優先）で iGPU+dGPU 同時列挙による RADV 初期化ハングを避ける。
     if let Some((bin, main_path, mtp_path, ctx_size)) = vulkan {
+        let vk_device_index = preferred_vulkan_device_index(&bin);
         let (child, oom_flag) = try_start_llama_server_vulkan(
             &bin,
             &main_path,
@@ -1956,7 +2007,7 @@ fn start_amd_12b_blocking(
             None, // 校正(12B)は mmproj 無し
             resolved_port,
             ctx_size,
-            Some(0),
+            Some(vk_device_index),
         )?;
         if let Ok(mut g) = child_arc.lock() {
             *g = Some(child);
@@ -2082,8 +2133,8 @@ fn amd_e4b_vulkan_launch(
 }
 
 /// E4B(標準) を Vulkan llama-server で直起動する（lemond 非経由）。**単一GPU固定**
-/// （`GGML_VK_VISIBLE_DEVICES=0` = ggml 順で最良＝dGPU）で、iGPU+dGPU 同時列挙による
-/// RADV 初期化ハング（最初の不具合と同根）を回避する。起動して resolved_port が開けば true。
+/// （WindowsはVulkan0、LinuxはNVIDIA GPUがあればその番号）で、iGPU+dGPU同時列挙による
+/// RADV初期化ハング（最初の不具合と同根）を回避する。起動して resolved_port が開けば true。
 /// 失敗・OOM・即死・タイムアウトなら残骸を kill して false を返し、呼び出し側の次段
 /// （lemond）へ退避する。12B と違い失敗をエラーにしない。
 fn try_start_amd_e4b_vulkan_direct(
@@ -2095,6 +2146,7 @@ fn try_start_amd_e4b_vulkan_direct(
     resolved_port: u16,
 ) -> bool {
     let (bin, main_path, mtp_path, ctx_size) = launch;
+    let vk_device_index = preferred_vulkan_device_index(&bin);
     let Ok((child, oom_flag)) = try_start_llama_server_vulkan(
         &bin,
         &main_path,
@@ -2102,7 +2154,7 @@ fn try_start_amd_e4b_vulkan_direct(
         mmproj_path,
         resolved_port,
         ctx_size,
-        Some(0),
+        Some(vk_device_index),
     ) else {
         return false;
     };
@@ -9426,6 +9478,24 @@ mod tests {
             Some(10075)
         );
         assert_eq!(parse_llama_server_build_number("version: unknown"), None);
+    }
+
+    #[test]
+    fn vulkan_device_parser_and_selector_prefer_nvidia_over_igpu() {
+        let devices = parse_vulkan_devices(
+            "Available devices:\n  Vulkan0: AMD Radeon Graphics (RADV RENOIR) (16260 MiB, 11941 MiB free)\n  Vulkan1: NVIDIA GeForce RTX 5060 Ti (16311 MiB, 15848 MiB free)\n",
+        );
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].0, 0);
+        assert_eq!(devices[1].0, 1);
+        assert_eq!(choose_preferred_vulkan_device_index(&devices), 1);
+    }
+
+    #[test]
+    fn vulkan_device_selector_keeps_first_device_without_nvidia() {
+        let devices = vec![(0, "AMD Radeon RX 7600M XT".to_string())];
+        assert_eq!(choose_preferred_vulkan_device_index(&devices), 0);
+        assert_eq!(choose_preferred_vulkan_device_index(&[]), 0);
     }
 
     #[test]

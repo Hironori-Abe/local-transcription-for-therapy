@@ -93,6 +93,18 @@ echo ""
 echo "[INFO] LLM 校正は llama.cpp llama-server を直接起動します。Lemonade/lemond は同梱しません。"
 echo ""
 
+# --- 同梱 Python から readline 拡張モジュールを外す ---
+# これを残すと linuxdeploy が依存の libreadline.so.8 を AppDir/usr/lib へ入れ、
+# AppRun の LD_LIBRARY_PATH 経由でホストの /bin/sh（Arch 系 bash 5.3 = readline 8.3）が
+# 古い 8.2 を掴んで `undefined symbol: rl_print_keybinding` で即死する。
+# サイドカーも pip も readline を使わないため、同梱しないのが最も安全。
+PY_DYNLOAD_DIR="src-tauri/resources/python312-linux/lib/python3.12/lib-dynload"
+if compgen -G "$PY_DYNLOAD_DIR/readline.cpython-*.so" >/dev/null 2>&1; then
+  rm -f "$PY_DYNLOAD_DIR"/readline.cpython-*.so
+  echo "[OK] 同梱 Python の readline 拡張モジュールを除外しました（ホスト /bin/sh 保護）"
+fi
+echo ""
+
 # --- AppImage ビルド用の環境（Docker/FUSE 無し対策）---
 # コンテナ内では FUSE が使えないことが多いため、linuxdeploy/appimagetool を
 # 展開実行モードで動かす。ホストで FUSE が使える場合も無害。
@@ -188,6 +200,35 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       done
       [[ -n "$out" ]] || out="$APPIMAGE_DIR/${product}_${app_version}_amd64.AppImage"
       removed="$(find "$appdir" -iname 'libwayland-*' -print -delete 2>/dev/null | wc -l)"
+
+      # --- ホストの /bin/sh を壊す同梱 readline の除去 ---
+      # AppRun は $APPDIR/usr/lib を LD_LIBRARY_PATH 先頭へ入れ、それが子・孫プロセスまで
+      # 継承される。Ubuntu 24.04 の libreadline.so.8（8.2）には Arch 系ホストの bash 5.3 が
+      # 要求する rl_print_keybinding が無いため、AppImage から起動したホストの /bin/sh が
+      #   /bin/sh: symbol lookup error: /bin/sh: undefined symbol: rl_print_keybinding
+      # で即死し、#!/bin/sh スクリプトである xdg-open などが一切動かなくなる。
+      # AppDir 内で readline を必要とするのは同梱 Python の任意モジュールだけなので、
+      # 拡張モジュールごと外す（import readline は ImportError になるだけで、pip も
+      # サイドカーも readline を使わない）。
+      # 実行時側の根本対策は Rust の apply_host_command_env（ホストコマンドへ AppDir 環境を渡さない）。
+      readline_removed="$(find "$appdir" \
+        \( -name 'libreadline.so*' -o -name 'libhistory.so*' -o -name 'readline.cpython-*.so' \) \
+        -print -delete 2>/dev/null | wc -l)"
+      echo "[INFO] $(basename "$out"): readline 関連 $readline_removed 件を除去（ホスト /bin/sh 保護）"
+      if find "$appdir" \( -name 'libreadline.so*' -o -name 'libhistory.so*' \) | grep -q .; then
+        echo "[ERROR] AppDir に libreadline/libhistory が残っています。ホストの /bin/sh が壊れます。" >&2
+        exit 1
+      fi
+      # ホストの基本コマンドが動的リンクするライブラリを同梱していると、同じ経路で
+      # 別の undefined symbol を踏みうる。除去はせず、把握のために一覧だけ出す。
+      host_risk="$(find "$appdir/usr/lib" -maxdepth 1 \
+        \( -name 'libncursesw.so*' -o -name 'libtinfo.so*' -o -name 'libcurl.so*' \
+           -o -name 'libssl.so*' -o -name 'libcrypto.so*' -o -name 'libstdc++.so*' \) \
+        -printf '%f ' 2>/dev/null)"
+      if [[ -n "${host_risk// /}" ]]; then
+        echo "[WARN] ホストコマンドと共有されうるライブラリを同梱しています: $host_risk" >&2
+        echo "[WARN] ホスト側コマンドの起動は apply_host_command_env で AppDir 環境を外すこと。" >&2
+      fi
 
       # --- GStreamer 同梱の検証と後始末 ---
       gst_dir="$appdir/usr/lib/gstreamer-1.0"

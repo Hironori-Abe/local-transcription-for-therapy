@@ -101,3 +101,28 @@ for name in (b"playbin3", b"filesrc", b"wavparse"):
   - WebView 側で読むフォールバック経路にタイムアウトを入れ、どの環境でも固まらないようにする。
   - AAC（m4a / mp4 / aac）は LGPL プラグインにデコーダが無いため、再生時のみ同梱 ffmpeg で FLAC へ変換して配信する。初回だけ「再生用に音声を変換しています」と表示され、以降はキャッシュを使う。
 - ビルド時に `[ERROR] AppDir に GStreamer プラグインがありません` で失敗する場合は、ビルドホスト（Docker イメージ）に `gstreamer1.0-plugins-base` / `-good` が入っているか確認してください。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` は配布ライセンス方針により追加してはいけません。
+
+## Linux AppImage: リンクやフォルダを開く操作が無反応になる / `rl_print_keybinding` エラー
+
+- 症状: AppImage を起動でき、ウィンドウも出るが、外部リンクや「フォルダを開く」を押しても何も起きない。`journalctl --user` に次が出る。
+
+```text
+/bin/sh: symbol lookup error: /bin/sh: undefined symbol: rl_print_keybinding
+```
+
+  同時に `xdg-open` のゾンビプロセスがアプリの子として残る。CachyOS / Arch 系ホストで再現し、Ubuntu では再現しない。
+- 原因: linuxdeploy 製の `AppRun` が `LD_LIBRARY_PATH` の先頭に `$APPDIR/usr/lib` を入れ、それが子・孫プロセスまで継承されます。ビルドホスト（Ubuntu 24.04）の `libreadline.so.8` は 8.2 で、Arch 系ホストの bash 5.3 が要求する `rl_print_keybinding` を持ちません。`/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、ホストの `/bin/sh`（= bash）が同梱 readline を掴んだ時点で起動に失敗します。同梱 readline は、同梱 Python の `readline` 拡張モジュールに引っ張られて AppDir に入っていました。
+- 手元での再現（GPU 不要）:
+
+```bash
+# 実行中の offline-transcriber の環境をそのまま使う
+APP_PID=$(pgrep -n offline-transcriber)
+APP_LD=$(tr '\0' '\n' < "/proc/$APP_PID/environ" | sed -n 's/^LD_LIBRARY_PATH=//p')
+LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
+```
+
+- 対策（実施済み）:
+  - ホスト側コマンド（`xdg-open` / `nvidia-smi` / `rocm-smi` / `rocminfo` / `kill` / `curl` / `wget` / `tar` / PATH 上の ffmpeg）の起動時に、`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` などを子プロセス環境から取り除く（`apply_host_command_env`）。同梱バイナリ（同梱 Python / llama-server / 同梱 ffmpeg）には適用しない。
+  - 同梱 Python の `readline` 拡張モジュールをビルド時に除外し、`libreadline.so.8` / `libhistory.so.8` を AppDir から除去する。残っていればビルドを落とす。
+  - `xdg-open` の子プロセスを回収し、ゾンビを残さない。
+- 補足: この症状は「外部リンク・フォルダオープンが効かない」ものです。音声ファイルを選んだ直後のフリーズは別原因（上の GStreamer の項目）です。

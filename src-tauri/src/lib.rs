@@ -1810,6 +1810,7 @@ fn amd_gpu_priority_list() -> Vec<(i32, String, u64)> {
     // rocminfo: GPU エージェントの gfx 名を列挙順（= HIP デバイス順）に集める。
     let mut info_cmd = Command::new("rocminfo");
     apply_windows_no_window(&mut info_cmd);
+    apply_host_command_env(&mut info_cmd);
     let gfx_list: Vec<String> = match info_cmd.output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()
@@ -1832,6 +1833,7 @@ fn amd_gpu_priority_list() -> Vec<(i32, String, u64)> {
     // rocm-smi: GPU[N] ごとの VRAM Total Memory (B)。
     let mut smi_cmd = Command::new("rocm-smi");
     apply_windows_no_window(&mut smi_cmd);
+    apply_host_command_env(&mut smi_cmd);
     let mut vram_by_index: std::collections::BTreeMap<i32, u64> = std::collections::BTreeMap::new();
     if let Ok(o) = smi_cmd.arg("--showmeminfo").arg("vram").output() {
         if o.status.success() {
@@ -2194,6 +2196,7 @@ fn try_start_amd_e4b_vulkan_direct(
 fn nvidia_gpu_priority_list() -> Vec<(u32, String, u64, f32)> {
     let mut smi_cmd = Command::new("nvidia-smi");
     apply_windows_no_window(&mut smi_cmd);
+    apply_host_command_env(&mut smi_cmd);
     let output = match smi_cmd
         .args([
             "--query-gpu=index,name,memory.total,compute_cap",
@@ -2235,6 +2238,7 @@ fn nvidia_gpu_priority_list() -> Vec<(u32, String, u64, f32)> {
 fn nvidia_devices_for_env() -> Vec<serde_json::Value> {
     let mut smi_cmd = Command::new("nvidia-smi");
     apply_windows_no_window(&mut smi_cmd);
+    apply_host_command_env(&mut smi_cmd);
     let output = match smi_cmd
         .args([
             "--query-gpu=index,name,memory.total,memory.free",
@@ -3685,6 +3689,7 @@ fn find_downloaded_ffmpeg_bin(app: &AppHandle) -> Option<String> {
 fn find_path_ffmpeg_bin() -> Option<String> {
     let mut cmd = Command::new("ffmpeg");
     apply_windows_no_window(&mut cmd);
+    apply_host_command_env(&mut cmd);
     cmd.arg("-version")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -3762,6 +3767,9 @@ fn extract_segment_wav_base64(
     write_private_temp_file(&temp_path, b"")?;
     temp_guard.push(temp_path.clone());
     let mut cmd = Command::new(&ffmpeg);
+    // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
+    // （PATH 解決した場合はホスト ffmpeg なので必須）。
+    apply_host_command_env(&mut cmd);
     cmd.arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
@@ -3990,6 +3998,169 @@ fn apply_windows_no_window(_cmd: &mut Command) {
     }
 }
 
+/// AppImage 実行中なら AppDir のマウント先を返す。
+///
+/// linuxdeploy 製 AppRun は `APPDIR` を export する。古い/自作 AppRun で無い場合に備え、
+/// 実行ファイルパスの `/tmp/.mount_xxxx` 祖先からも解決する。
+#[cfg(target_os = "linux")]
+fn appimage_dir() -> Option<&'static Path> {
+    use std::sync::OnceLock;
+    static APPDIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    APPDIR
+        .get_or_init(|| {
+            if let Some(value) = env::var_os("APPDIR") {
+                let path = PathBuf::from(value);
+                if path.is_dir() {
+                    return Some(path);
+                }
+            }
+            let exe = env::current_exe().ok()?;
+            exe.ancestors()
+                .find(|dir| {
+                    dir.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with(".mount_"))
+                })
+                .map(|dir| dir.to_path_buf())
+        })
+        .as_deref()
+}
+
+/// AppDir 内を指す探索パス（`:` 区切りの複数値）。ホストコマンドへ渡すと同梱ライブラリや
+/// 同梱モジュールを掴ませてしまう。AppDir 配下のエントリだけを落とし、ホスト側の値は残す。
+///
+/// 実際の設定元: linuxdeploy の `AppRun.wrapped`（`LD_LIBRARY_PATH` / `PATH` / `PYTHONPATH` /
+/// `PERLLIB` / `QT_PLUGIN_PATH` / `XDG_DATA_DIRS` / `GSETTINGS_SCHEMA_DIR`）、
+/// `apprun-hooks/linuxdeploy-plugin-gtk.sh`（`GTK_PATH` / `GIO_EXTRA_MODULES` ほか）、
+/// `apprun-hooks/linuxdeploy-plugin-gstreamer.sh`（`GST_PLUGIN_*`）。
+#[cfg(target_os = "linux")]
+const APPDIR_PATH_LIST_VARS: &[&str] = &[
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "XDG_DATA_DIRS",
+    "XDG_CONFIG_DIRS",
+    "GI_TYPELIB_PATH",
+    "GTK_PATH",
+    "GSETTINGS_SCHEMA_DIR",
+    "GIO_EXTRA_MODULES",
+    "GIO_MODULE_DIR",
+    "GST_PLUGIN_PATH",
+    "GST_PLUGIN_PATH_1_0",
+    "GST_PLUGIN_SYSTEM_PATH",
+    "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "PYTHONPATH",
+    "PERLLIB",
+    "QT_PLUGIN_PATH",
+];
+
+/// AppDir 内を指す単一値の環境変数。値そのものが AppDir 配下なら削除する。
+#[cfg(target_os = "linux")]
+const APPDIR_SCALAR_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "GTK_EXE_PREFIX",
+    "GTK_DATA_PREFIX",
+    "GTK_IM_MODULE_FILE",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GDK_PIXBUF_MODULEDIR",
+    "GST_PLUGIN_SCANNER",
+    "GST_PLUGIN_SCANNER_1_0",
+    "GST_PTP_HELPER_1_0",
+    "GST_REGISTRY_1_0",
+    "FONTCONFIG_FILE",
+    "FONTCONFIG_PATH",
+    "PYTHONHOME",
+];
+
+/// ホスト側コマンド（`xdg-open` / `nvidia-smi` / `curl` など、OS 側にインストール済みの
+/// 実行ファイル）を起動する `Command` から、AppImage 由来のライブラリ探索環境を取り除く。
+///
+/// AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を入れ、これが子・孫プロセスまで
+/// 継承される。その結果、ホストの `/bin/sh`（Arch 系では readline 8.3 にリンク）が AppDir 同梱の
+/// 古い `libreadline.so.8`（Ubuntu 24.04 = 8.2）を掴み、
+/// `symbol lookup error: undefined symbol: rl_print_keybinding` で即死する。
+/// `/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、外部リンク/フォルダを開く操作が
+/// 丸ごと失敗していた。同種の不整合は libstdc++ / libcurl など他のライブラリでも起こりうるため、
+/// ライブラリ単位ではなく「ホストコマンドには AppDir の環境を渡さない」で根本を塞ぐ。
+///
+/// 同梱バイナリ（同梱 Python・同梱 llama-server 等）は AppDir 内のライブラリに依存するため、
+/// この関数を適用してはならない。
+fn apply_host_command_env(_cmd: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(appdir) = appimage_dir() else {
+            return;
+        };
+        for (var, action) in host_command_env_overrides(appdir, |name| env::var_os(name)) {
+            match action {
+                Some(value) => _cmd.env(&var, value),
+                None => _cmd.env_remove(&var),
+            };
+        }
+    }
+}
+
+/// `apply_host_command_env` の純粋部分。AppDir 配下を指す環境変数について
+/// 「置き換える値（Some）／削除する（None）」を返す。変更不要な変数は返さない。
+#[cfg(target_os = "linux")]
+fn host_command_env_overrides<F>(
+    appdir: &Path,
+    read_env: F,
+) -> Vec<(std::ffi::OsString, Option<std::ffi::OsString>)>
+where
+    F: Fn(&str) -> Option<std::ffi::OsString>,
+{
+    let mut overrides = Vec::new();
+
+    for var in APPDIR_PATH_LIST_VARS {
+        let Some(value) = read_env(var) else {
+            continue;
+        };
+        let total = env::split_paths(&value).count();
+        let kept: Vec<PathBuf> = env::split_paths(&value)
+            .filter(|entry| !entry.starts_with(appdir))
+            .collect();
+        if kept.len() == total {
+            continue;
+        }
+        let replacement = match env::join_paths(&kept) {
+            Ok(joined) if !joined.is_empty() => Some(joined),
+            // PATH を空にするとホストコマンド自体を解決できなくなるため、標準パスへ戻す。
+            _ if *var == "PATH" => Some(std::ffi::OsString::from("/usr/local/bin:/usr/bin:/bin")),
+            _ => None,
+        };
+        overrides.push((std::ffi::OsString::from(*var), replacement));
+    }
+
+    for var in APPDIR_SCALAR_VARS {
+        let Some(value) = read_env(var) else {
+            continue;
+        };
+        if Path::new(&value).starts_with(appdir) {
+            overrides.push((std::ffi::OsString::from(*var), None));
+        }
+    }
+
+    // linuxdeploy-plugin-gtk の hook がアプリ自身のために入れる値。パスではないので
+    // 上の判定では拾えないが、ホスト側アプリ（xdg-open が起動するブラウザ等）へ
+    // 引き継ぐ理由はないため外す。
+    for var in ["GDK_BACKEND", "GTK_THEME"] {
+        if read_env(var).is_some() {
+            overrides.push((std::ffi::OsString::from(var), None));
+        }
+    }
+
+    overrides
+}
+
+/// `spawn()` して待たない子プロセスをゾンビのまま残さないよう、回収用スレッドを立てる。
+/// （`xdg-open` のようにアプリ側で終了コードを使わないケース向け）
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reap_detached_child(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 #[derive(Copy, Clone)]
 enum RunningTaskKind {
     Transcription,
@@ -4077,6 +4248,7 @@ fn kill_process_tree_by_pid(pid: u32) -> Result<(), String> {
 
     let mut cmd = Command::new("kill");
     apply_windows_no_window(&mut cmd);
+    apply_host_command_env(&mut cmd);
     let output = cmd
         .arg("-TERM")
         .arg(pid.to_string())
@@ -6070,6 +6242,9 @@ fn probe_audio_with_ffmpeg(app: &AppHandle, path: &str) -> Result<FfmpegAudioPro
         return Err("音声ファイルが見つかりません。".to_string());
     }
     let mut cmd = Command::new(&ffmpeg);
+    // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
+    // （PATH 解決した場合はホスト ffmpeg なので必須）。
+    apply_host_command_env(&mut cmd);
     // -nostdin: 端末が無い状況で入力待ちに落ちて固まらないようにする。
     cmd.arg("-hide_banner").arg("-nostdin").arg("-i").arg(path);
     apply_windows_no_window(&mut cmd);
@@ -6139,6 +6314,9 @@ fn transcode_for_playback(
     guard.push(partial.clone());
 
     let mut cmd = Command::new(&ffmpeg);
+    // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
+    // （PATH 解決した場合はホスト ffmpeg なので必須）。
+    apply_host_command_env(&mut cmd);
     cmd.arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
@@ -6510,10 +6688,13 @@ fn open_external_url(url: String) -> Result<(), String> {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open")
+        let mut cmd = Command::new("xdg-open");
+        apply_host_command_env(&mut cmd);
+        let child = cmd
             .arg(normalized)
             .spawn()
             .map_err(|e| format!("URL を開けませんでした: {e}"))?;
+        reap_detached_child(child);
         return Ok(());
     }
 
@@ -7150,6 +7331,7 @@ fn spawn_file_download(url: &str, dest_file: &Path) -> Result<Child, String> {
 
     let mut curl = Command::new("curl");
     apply_windows_no_window(&mut curl);
+    apply_host_command_env(&mut curl);
     curl.args([
         "-fL",
         "--retry",
@@ -7169,6 +7351,7 @@ fn spawn_file_download(url: &str, dest_file: &Path) -> Result<Child, String> {
         Err(curl_err) => {
             let mut wget = Command::new("wget");
             apply_windows_no_window(&mut wget);
+            apply_host_command_env(&mut wget);
             wget.arg("-O")
                 .arg(dest_file)
                 .arg(url)
@@ -7451,6 +7634,7 @@ fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), 
             .map_err(|e| format!("一時展開ディレクトリを作成できませんでした: {e}"))?;
         let mut tar = Command::new("tar");
         apply_windows_no_window(&mut tar);
+        apply_host_command_env(&mut tar);
         let status = tar
             .arg("-xzf")
             .arg(archive)
@@ -7693,6 +7877,7 @@ fn extract_ffmpeg_lgpl_archive(archive: &Path, dest_dir: &Path) -> Result<(), St
             .map_err(|e| format!("一時展開ディレクトリを作成できませんでした: {e}"))?;
         let mut tar = Command::new("tar");
         apply_windows_no_window(&mut tar);
+        apply_host_command_env(&mut tar);
         let status = tar
             .arg("-xf")
             .arg(archive)
@@ -8034,6 +8219,7 @@ async fn check_gpu_availability(app: AppHandle) -> serde_json::Value {
 fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
     let mut nvidia_cmd = Command::new("nvidia-smi");
     apply_windows_no_window(&mut nvidia_cmd);
+    apply_host_command_env(&mut nvidia_cmd);
     let cuda_available = nvidia_cmd
         .args(["--query-gpu=name", "--format=csv,noheader"])
         .output()
@@ -8043,6 +8229,7 @@ fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
     let rocm_kfd = std::path::Path::new("/dev/kfd").exists();
     let mut rocm_cmd = Command::new("rocm-smi");
     apply_windows_no_window(&mut rocm_cmd);
+    apply_host_command_env(&mut rocm_cmd);
     let rocm_smi_ok = rocm_cmd
         .arg("--showproductname")
         .output()
@@ -8352,10 +8539,13 @@ fn open_llm_models_folder(app: AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
+        let mut cmd = Command::new("xdg-open");
+        apply_host_command_env(&mut cmd);
+        let child = cmd
             .arg(&dir_str)
             .spawn()
             .map_err(|e| format!("フォルダを開けませんでした: {e}"))?;
+        reap_detached_child(child);
     }
 
     Ok(())
@@ -9799,6 +9989,77 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AppImage の AppRun が入れる $APPDIR 配下のライブラリ探索パスを、ホストコマンド
+    /// （xdg-open / nvidia-smi など）へ渡さないこと。渡すと Arch 系ホストの /bin/sh が
+    /// 同梱 libreadline.so.8 を掴んで `undefined symbol: rl_print_keybinding` で死ぬ。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn host_command_env_drops_appdir_entries_and_keeps_host_ones() {
+        use std::collections::HashMap;
+        use std::ffi::OsString;
+
+        let appdir = Path::new("/tmp/.mount_LoTTxy");
+        let env: HashMap<&str, &str> = HashMap::from([
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_LoTTxy/usr/lib:/opt/rocm/lib:/tmp/.mount_LoTTxy/usr/lib/x86_64-linux-gnu",
+            ),
+            ("PATH", "/tmp/.mount_LoTTxy/usr/bin:/usr/bin:/bin"),
+            ("GST_PLUGIN_SYSTEM_PATH", "/tmp/.mount_LoTTxy/usr/lib/gstreamer-1.0"),
+            ("PYTHONHOME", "/tmp/.mount_LoTTxy/usr/"),
+            // hook が入れる GTK_PATH は AppDir + ホストの複合値。ホスト側だけ残す。
+            (
+                "GTK_PATH",
+                "/tmp/.mount_LoTTxy/usr/lib/x86_64-linux-gnu/gtk-3.0:/usr/lib/x86_64-linux-gnu/gtk-3.0",
+            ),
+            ("XDG_CONFIG_DIRS", "/etc/xdg"),
+        ]);
+        let overrides: HashMap<OsString, Option<OsString>> =
+            host_command_env_overrides(appdir, |name| env.get(name).map(OsString::from))
+                .into_iter()
+                .collect();
+
+        assert_eq!(
+            overrides.get(&OsString::from("LD_LIBRARY_PATH")),
+            Some(&Some(OsString::from("/opt/rocm/lib")))
+        );
+        assert_eq!(
+            overrides.get(&OsString::from("PATH")),
+            Some(&Some(OsString::from("/usr/bin:/bin")))
+        );
+        // AppDir だけを指していた変数は削除する。
+        assert_eq!(
+            overrides.get(&OsString::from("GST_PLUGIN_SYSTEM_PATH")),
+            Some(&None)
+        );
+        assert_eq!(overrides.get(&OsString::from("PYTHONHOME")), Some(&None));
+        assert_eq!(
+            overrides.get(&OsString::from("GTK_PATH")),
+            Some(&Some(OsString::from("/usr/lib/x86_64-linux-gnu/gtk-3.0")))
+        );
+        // ホスト由来の値には触らない。
+        assert!(!overrides.contains_key(&OsString::from("XDG_CONFIG_DIRS")));
+    }
+
+    /// AppDir を全部取り除くと PATH が空になる場合は、標準パスへ戻す（空にしない）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn host_command_env_never_leaves_path_empty() {
+        use std::collections::HashMap;
+        use std::ffi::OsString;
+
+        let appdir = Path::new("/tmp/.mount_LoTTxy");
+        let env: HashMap<&str, &str> = HashMap::from([("PATH", "/tmp/.mount_LoTTxy/usr/bin")]);
+        let overrides = host_command_env_overrides(appdir, |name| env.get(name).map(OsString::from));
+        assert_eq!(
+            overrides,
+            vec![(
+                OsString::from("PATH"),
+                Some(OsString::from("/usr/local/bin:/usr/bin:/bin"))
+            )]
+        );
+    }
 
     #[test]
     fn srt_timestamp_uses_hours_and_milliseconds() {

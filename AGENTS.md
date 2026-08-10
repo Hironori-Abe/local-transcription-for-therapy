@@ -145,6 +145,21 @@ Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStream
 - `AudioStreamServer` はパスを 2 つ持つ。`allowed_path` = ユーザーが選んだ元ファイル（区間聞き直しの許可判定）、`playback_path` = 実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）。HTTP サーバーが照合するのは `playback_path`
 - WebView 側で再生時間を読むフォールバック経路（`loadAudioDurationFromSrc`）には必ずタイムアウトを残す。デコーダが無いと `loadedmetadata` も `error` も発火せず、Promise が未解決のまま UI が固まる
 
+### AppImage とホストコマンドの分離（LD_LIBRARY_PATH 漏れ）
+
+linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を入れる。これは**子・孫プロセスにも継承される**ため、AppImage から起動したホスト側コマンドが同梱ライブラリを掴んで壊れる。実害として、Ubuntu 24.04 の `libreadline.so.8`（8.2）は Arch 系ホストの bash 5.3（readline 8.3 リンク）が要求する `rl_print_keybinding` を持たず、`/bin/sh` が
+
+```text
+/bin/sh: symbol lookup error: /bin/sh: undefined symbol: rl_print_keybinding
+```
+
+で即死する。`/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、外部リンク・フォルダを開く操作が丸ごと失敗する（0.9.8 の AppImage で確認）。
+
+- **ホスト側コマンド（`xdg-open` / `nvidia-smi` / `rocm-smi` / `rocminfo` / `kill` / `curl` / `wget` / `tar` / PATH 上の ffmpeg）を起動するときは `apply_host_command_env` を必ず呼ぶ**。`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` / `G*_MODULE*` / `PYTHONHOME` 等を子プロセス環境から取り除く（AppImage 以外では no-op）。ライブラリ単位のもぐら叩きにせず、この境界で塞ぐ
+- **同梱バイナリ（同梱 Python・同梱 llama-server・同梱 ffmpeg）には適用しない**。AppDir 内のライブラリ（`libssl` / `libffi` など）が必要で、剥がすと動かなくなる
+- 同梱 Python の `readline` 拡張モジュールはビルド時に除外する（`setup-build-tools-linux.sh`）。これが linuxdeploy に `libreadline.so.8` を AppDir へ引き込む唯一の経路で、pip もサイドカーも readline を使わない。再パッケージ前に AppDir へ残っていればビルドを落とす
+- `spawn()` して待たない子プロセス（`xdg-open`）は `reap_detached_child` で回収する。放置するとゾンビが積もり、別の不具合の切り分けを濁す
+
 ## Proofreading Policy
 
 - ルールベース校正は Tauri/Rust 側で完結する

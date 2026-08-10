@@ -5,6 +5,7 @@ frontend/node_modules/
 frontend/dist/
 src-tauri/target/
 src-tauri/target-ubuntu24/
+src-tauri/resources/python312-linux/
 __pycache__/
 *.pyc
 .venv/

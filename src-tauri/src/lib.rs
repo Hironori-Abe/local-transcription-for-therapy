@@ -2569,6 +2569,7 @@ async fn install_llm_backend(app: AppHandle, backend: String) -> Result<String, 
     tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = Command::new(&python_bin);
         apply_windows_no_window(&mut cmd);
+        configure_python_command(&app_clone, &python_bin, &mut cmd);
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .arg(&script_path)
@@ -4992,11 +4993,80 @@ fn get_python_bin(_app: &AppHandle) -> String {
         }
     }
 
-    // 3. フォールバック
+    // 3. Linux release: AppImage/.debに同梱したPython 3.12を使用する。
+    // rolling release側のsystem Python（CachyOSの3.14等）やPEP 668には依存しない。
+    #[cfg(target_os = "linux")]
+    if !cfg!(debug_assertions) {
+        if let Ok(resource_dir) = _app.path().resource_dir() {
+            for relative in [
+                "resources/python312-linux/bin/python3.12",
+                "python312-linux/bin/python3.12",
+            ] {
+                let bundled = resource_dir.join(relative);
+                if bundled.is_file() {
+                    return bundled.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+
+    // 4. フォールバック（開発環境、または旧Linux配布物）
     if cfg!(target_os = "windows") {
         "py".to_string()
     } else {
         "python3".to_string()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bundled_linux_python_root(python_bin: &str) -> Option<PathBuf> {
+    let root = Path::new(python_bin).parent()?.parent()?.to_path_buf();
+    if root
+        .join("lib")
+        .join("python3.12")
+        .join("encodings")
+        .is_dir()
+    {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+/// Python子プロセスへ共通環境を適用する。
+///
+/// Linux AppImageではランチャーが追加したPYTHONPATHを使わず、同梱Python 3.12と
+/// app_local_data_dir配下の専用site-packagesだけを参照する。Windowsと開発時の
+/// system/venv Pythonの動作は従来どおり維持する。
+fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command) {
+    cmd.env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+
+    #[cfg(target_os = "linux")]
+    if let Some(runtime_root) = bundled_linux_python_root(python_bin) {
+        if let Ok(app_data_dir) = app.path().app_local_data_dir() {
+            let package_dir = app_data_dir.join("python312-site-packages");
+            let _ = fs::create_dir_all(&package_dir);
+            cmd.env("PYTHONHOME", &runtime_root)
+                .env("PYTHONPATH", &package_dir)
+                // setup_venv_cli.py内の全pip installを読み取り専用AppImageではなく
+                // アプリ専用データ領域へ向ける。
+                .env("PIP_TARGET", &package_dir);
+
+            let runtime_lib = runtime_root.join("lib");
+            let current_ld = env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+            let mut library_path = runtime_lib.into_os_string();
+            if !current_ld.is_empty() {
+                library_path.push(":");
+                library_path.push(current_ld);
+            }
+            cmd.env("LD_LIBRARY_PATH", library_path);
+        }
+        if let Ok(app_cache_dir) = app.path().app_cache_dir() {
+            let pip_cache_dir = app_cache_dir.join("python-pip");
+            let _ = fs::create_dir_all(&pip_cache_dir);
+            cmd.env("PIP_CACHE_DIR", pip_cache_dir);
+        }
     }
 }
 
@@ -5138,6 +5208,7 @@ fn install_diarization_model_impl(
 
     let mut pip_cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut pip_cmd);
+    configure_python_command(app, &python_bin, &mut pip_cmd);
     pip_cmd
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
@@ -5170,6 +5241,7 @@ fn install_diarization_model_impl(
 
     let mut dl_cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut dl_cmd);
+    configure_python_command(app, &python_bin, &mut dl_cmd);
     dl_cmd
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
@@ -5581,6 +5653,7 @@ fn run_encrypt_script(app: &AppHandle, args: &[&str], password: &str) -> Result<
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg(&script_path);
@@ -6212,6 +6285,7 @@ fn check_transcription_runtime_support_blocking(
     if is_cpu_only_build(&app) {
         let mut cmd = Command::new(&python_bin);
         apply_windows_no_window(&mut cmd);
+        configure_python_command(&app, &python_bin, &mut cmd);
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .arg("-c")
@@ -6250,6 +6324,7 @@ fn check_transcription_runtime_support_blocking(
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(&app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg("-c")
@@ -7728,6 +7803,7 @@ fn detect_compute_env_blocking(app: AppHandle) -> serde_json::Value {
     let hf_hub_cache = get_app_hf_hub_cache(&app);
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(&app, &python_bin, &mut cmd);
     // HIP_VISIBLE_DEVICES は設定しない（全デバイスを列挙するため）
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
@@ -7802,6 +7878,7 @@ fn download_whisper_model_blocking(app: AppHandle, model_name: String) -> Result
     let hf_hub_cache = get_app_hf_hub_cache(&app);
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(&app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("HF_HUB_CACHE", hf_hub_cache.as_os_str())
@@ -8391,6 +8468,7 @@ fn proofread_transcription_llm_blocking_with_kind(
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(&app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg(&script_path)
@@ -10725,6 +10803,7 @@ fn execute_transcription(
     let hf_hub_cache = get_app_hf_hub_cache(app);
     let mut cmd = Command::new(python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(app, python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("HF_HUB_CACHE", hf_hub_cache.as_os_str())
@@ -10899,6 +10978,7 @@ fn execute_diarization(
 ) -> Result<SidecarExecResult, String> {
     let mut cmd = Command::new(python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(app, python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         // pyannote/torch 系で Windows の OpenMP 重複初期化を回避するため、
@@ -11934,6 +12014,7 @@ fn run_overall_proofread_blocking(
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(&app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg(&script_path)
@@ -12466,6 +12547,7 @@ fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg(&script_path)
@@ -12489,6 +12571,7 @@ fn download_gemma_12b_blocking(app: &AppHandle) -> Result<(), String> {
 
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
+    configure_python_command(app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg(&script_path)
@@ -12539,7 +12622,9 @@ fn check_python_venv(_app: &AppHandle) -> (bool, String) {
     #[cfg(not(target_os = "windows"))]
     {
         let python_bin = get_python_bin(_app);
-        let ok = std::process::Command::new(&python_bin)
+        let mut cmd = std::process::Command::new(&python_bin);
+        configure_python_command(_app, &python_bin, &mut cmd);
+        let ok = cmd
             .args([
                 "-c",
                 "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('faster_whisper') else 1)",
@@ -12741,6 +12826,7 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
             "cuda"
         };
         let mut cmd = Command::new(&python_bin);
+        configure_python_command(_app, &python_bin, &mut cmd);
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .args([

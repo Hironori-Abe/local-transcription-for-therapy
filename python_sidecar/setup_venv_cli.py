@@ -3,7 +3,9 @@
 setup_venv_cli.py: Python 環境へのパッケージインストール。
 
 Windows NSIS 配布: resources/python312/python.exe から直接実行される。venv は作らない。
-Linux 配布: システム Python (python3) または PYTHON_BIN で指定された Python から実行される。
+Linux AppImage/.deb配布: 同梱Python 3.12から実行し、Rust側がPIP_TARGETで
+app_local_data_dir配下のアプリ専用site-packagesへ導入する。
+Linux開発環境: PYTHON_BINまたはsystem Pythonから実行される。
 
 引数: <requirements_file> [--variant cuda|rocm]
 """

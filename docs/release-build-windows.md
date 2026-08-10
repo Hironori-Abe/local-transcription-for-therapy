@@ -201,13 +201,21 @@ AMD版はGPU処理に失敗した場合にCPUへフォールバックせず、�
 | override | 用途 |
 | --- | --- |
 | `tauri.nvidia.windows.override.json` | 安定版 / NVIDIA RTX 主軸 / Windows NSIS（`setup-build-tools.bat` が使用） |
-| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。venv 非同梱・LLM ランタイム未同梱 |
+| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムを同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入。LLM ランタイム未同梱 |
 | `tauri.amd.windows.override.json` | AMD / Windows NSIS ビルド用（詳細調整予定） |
-| `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux（詳細調整予定） |
+| `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux。自己完結Python 3.12基本ランタイムを同梱（詳細調整予定） |
 | `tauri.editor.windows.override.json` | 軽量 Editor 版 / Windows NSIS（LLM 校正ランタイム非搭載のため `nsis/editor-hooks.nsh` を使用） |
 | `tauri.editor.linux.override.json` | 軽量 Editor 版 / Linux（deb + AppImage） |
 
 CUDA 版・ROCm 版・Editor 版は `identifier` を分け、同一 PC に併存できます。
+
+Linux配布用AppImageは、glibc互換性とPythonバージョンを固定するためUbuntu 24.04
+コンテナでビルドします。Dockerデーモンへ一般ユーザーで接続できない環境では
+`sudo`または`pkexec`を付けます。
+
+```sh
+sudo bash scripts/build-appimage-docker.sh
+```
 
 - CUDA: `net.gakkousya.lott`
 - AMD: `net.gakkousya.lott-amd`

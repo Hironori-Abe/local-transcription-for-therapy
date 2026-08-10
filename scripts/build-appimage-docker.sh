@@ -35,11 +35,14 @@ docker run --rm \
   bash -lc '
     set -euo pipefail
     build_status=0
+    mkdir -p /workspace/src-tauri/resources/python312-linux
+    cp -a /opt/lott-python312/. /workspace/src-tauri/resources/python312-linux/
     bash scripts/setup-build-tools-linux.sh || build_status=$?
     chown -R "$HOST_UID:$HOST_GID" \
       /workspace/src-tauri/target-ubuntu24 \
       /workspace/frontend/dist \
       /workspace/licenses \
+      /workspace/src-tauri/resources/python312-linux \
       /workspace/src-tauri/resources/ffmpeg 2>/dev/null || true
     exit "$build_status"
   '

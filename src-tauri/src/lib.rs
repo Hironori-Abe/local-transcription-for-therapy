@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    env, fs,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -5205,6 +5207,55 @@ fn bundled_linux_python_root(python_bin: &str) -> Option<PathBuf> {
     }
 }
 
+/// AppImage の初回セットアップで app_local_data_dir に入れた pip の NVIDIA runtime。
+///
+/// pip の nvidia-* wheel は兄弟ライブラリを DT_RUNPATH (`$ORIGIN`) で参照するが、
+/// LD_LIBRARY_PATH に別の CUDA があると、そちらが先に解決される。ディレクトリ名を
+/// ソートして、毎回同じ探索順になるようにする。壊れた途中インストールは除外する。
+#[cfg(target_os = "linux")]
+fn python_nvidia_library_dirs(package_dir: &Path) -> Vec<PathBuf> {
+    let nvidia_dir = package_dir.join("nvidia");
+    let mut paths = fs::read_dir(nvidia_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .map(|entry| entry.path().join("lib"))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    paths.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
+    paths.dedup();
+    paths
+}
+
+/// Python sidecar 用の Linux ライブラリ探索順を組み立てる。
+///
+/// pip の CUDA runtime を inherited な system/AppImage path より前に置く一方、
+/// 同梱 Python の runtime lib は従来どおり inherited path より前に残す。
+#[cfg(target_os = "linux")]
+fn python_sidecar_ld_library_path(
+    runtime_lib: &Path,
+    package_dir: &Path,
+    current_ld: Option<&OsStr>,
+) -> OsString {
+    let mut entries = python_nvidia_library_dirs(package_dir);
+    entries.push(runtime_lib.to_path_buf());
+
+    let mut result = OsString::new();
+    for path in entries {
+        if !result.is_empty() {
+            result.push(":");
+        }
+        result.push(path.as_os_str());
+    }
+    if let Some(current_ld) = current_ld.filter(|value| !value.is_empty()) {
+        if !result.is_empty() {
+            result.push(":");
+        }
+        result.push(current_ld);
+    }
+    result
+}
+
 /// Python子プロセスへ共通環境を適用する。
 ///
 /// Linux AppImageではランチャーが追加したPYTHONPATHを使わず、同梱Python 3.12と
@@ -5227,11 +5278,11 @@ fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command
 
             let runtime_lib = runtime_root.join("lib");
             let current_ld = env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
-            let mut library_path = runtime_lib.into_os_string();
-            if !current_ld.is_empty() {
-                library_path.push(":");
-                library_path.push(current_ld);
-            }
+            let library_path = python_sidecar_ld_library_path(
+                &runtime_lib,
+                &package_dir,
+                Some(current_ld.as_os_str()),
+            );
             cmd.env("LD_LIBRARY_PATH", library_path);
         }
         if let Ok(app_cache_dir) = app.path().app_cache_dir() {
@@ -10059,6 +10110,68 @@ mod tests {
                 Some(OsString::from("/usr/local/bin:/usr/bin:/bin"))
             )]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn python_sidecar_prefers_sorted_pip_nvidia_paths_and_keeps_runtime_path() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let root = std::env::temp_dir().join(format!(
+            "lott-python-cuda-path-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is before unix epoch")
+                .as_nanos()
+        ));
+        let package_dir = root.join("python312-site-packages");
+        fs::create_dir_all(package_dir.join("nvidia/cuda_runtime/lib")).unwrap();
+        fs::create_dir_all(package_dir.join("nvidia/cublas/lib")).unwrap();
+        fs::create_dir_all(package_dir.join("nvidia/incomplete")).unwrap();
+
+        let rendered = python_sidecar_ld_library_path(
+            Path::new("/app/python312-linux/lib"),
+            &package_dir,
+            Some(OsStr::new(
+                "/app/usr/lib:/home/tester/.local/cuda-12.9/lib64",
+            )),
+        );
+        let entries = rendered
+            .to_string_lossy()
+            .split(':')
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries,
+            vec![
+                package_dir
+                    .join("nvidia/cublas/lib")
+                    .to_string_lossy()
+                    .into_owned(),
+                package_dir
+                    .join("nvidia/cuda_runtime/lib")
+                    .to_string_lossy()
+                    .into_owned(),
+                "/app/python312-linux/lib".to_string(),
+                "/app/usr/lib".to_string(),
+                "/home/tester/.local/cuda-12.9/lib64".to_string(),
+            ]
+        );
+
+        let empty_package_dir = root.join("empty-site-packages");
+        fs::create_dir_all(&empty_package_dir).unwrap();
+        let without_pip = python_sidecar_ld_library_path(
+            Path::new("/app/python312-linux/lib"),
+            &empty_package_dir,
+            Some(OsStr::new("/app/usr/lib")),
+        );
+        assert_eq!(
+            without_pip,
+            OsString::from("/app/python312-linux/lib:/app/usr/lib")
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

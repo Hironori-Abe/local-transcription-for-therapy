@@ -151,29 +151,26 @@ NSIS インストーラーには venv が含まれません。代わりに Pytho
 
 ### 配布ファイル名
 
-Tauri の出力名（`Local Transcription for Therapy_X.Y.Z_x64-setup.exe`）は空白・括弧を含み URL に不向きなため、
-Release へのアップロード時に以下へリネームする（NSIS インストーラーはファイル名変更で動作に影響しない）。
+Tauri の出力名（Windows では `Local Transcription for Therapy_X.Y.Z_x64-setup.exe`）は空白・括弧を含みます。
+Windows / Linux のビルドスクリプトは、ビルド後に `scripts/collect_release_artifacts.py` を呼び出し、
+手作業のリネームなしで `dist/vX.Y.Z/` へ以下の規約名の成果物を作成します。
 
-| 配布ライン | アセット名 | 扱い |
-| --- | --- | --- |
-| Full CUDA 版 | `LoTT-vX.Y.Z-windows-x64-cuda-setup.exe` | 主配布（安定版） |
-| Full AMD 版 | `LoTT-vX.Y.Z-windows-x64-rocm-setup.exe` | **一般公開対象外**（experimental。利用者が自身のGPU向けにソースからビルド） |
-| CPU 版 | `LoTT-vX.Y.Z-windows-x64-cpu-setup.exe` | 動作確認・試用向け（常用非推奨） |
-| Editor 版 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | 軽量版 |
+| 配布ライン | Windows アセット名 | Linux アセット名 | 扱い |
+| --- | --- | --- | --- |
+| Full CUDA 版 | `LoTT-vX.Y.Z-windows-x64-cuda-setup.exe` | `LoTT-vX.Y.Z-linux-x64-cuda.AppImage` / `LoTT-vX.Y.Z-linux-x64-cuda.deb` | 主配布（安定版） |
+| Full AMD 版 | `LoTT-vX.Y.Z-windows-x64-rocm-setup.exe` | `LoTT-vX.Y.Z-linux-x64-rocm.AppImage` / `LoTT-vX.Y.Z-linux-x64-rocm.deb` | **一般公開対象外**（experimental。利用者が自身のGPU向けにソースからビルド） |
+| CPU 版 | `LoTT-vX.Y.Z-windows-x64-cpu-setup.exe` | `LoTT-vX.Y.Z-linux-x64-cpu.AppImage` / `LoTT-vX.Y.Z-linux-x64-cpu.deb` | 動作確認・試用向け（常用非推奨） |
+| Editor 版 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | `LoTT-vX.Y.Z-linux-x64-editor.AppImage` / `LoTT-vX.Y.Z-linux-x64-editor.deb` | 軽量版 |
 
 - GitHub Release のアセット上限は 1 ファイル 2 GiB。llama-server 同梱の約 1GB インストーラーは添付可能
 - AMD 版はGPU世代ごとの互換性検証が十分になるまで一般向けReleaseへ添付しない
 
 ### SHA256SUMS.txt の生成
 
-アップロードする全アセットに対して生成し、Release に添付する（`sha256sum -c SHA256SUMS.txt` で検証可能な形式）。
-
-```powershell
-# リネーム後のアセットを置いたフォルダで
-Get-FileHash *.exe -Algorithm SHA256 |
-  ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
-  Set-Content SHA256SUMS.txt -Encoding ascii
-```
+`scripts/collect_release_artifacts.py` が、`dist/vX.Y.Z/` の全アセット（`SHA256SUMS.txt` 自身を除く）を対象に
+小文字ハッシュ・半角スペース2つ・ファイル名の形式で `SHA256SUMS.txt` を生成します。
+配布ラインを続けてビルドした場合も、同じ出力先にある全アセットを一覧へ反映します。
+生成したフォルダで `sha256sum -c SHA256SUMS.txt` を実行して検証できます。
 
 ### リリースノート
 
@@ -205,20 +202,27 @@ AMD版はGPU処理に失敗した場合にCPUへフォールバックせず、�
 | `tauri.amd.windows.override.json` | AMD / Windows NSIS ビルド用（詳細調整予定） |
 | `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux。自己完結Python 3.12基本ランタイムを同梱（詳細調整予定） |
 | `tauri.editor.windows.override.json` | 軽量 Editor 版 / Windows NSIS（LLM 校正ランタイム非搭載のため `nsis/editor-hooks.nsh` を使用） |
+| `tauri.cpu.linux.override.json` | CPU 版 / Linux（deb + AppImage） |
 | `tauri.editor.linux.override.json` | 軽量 Editor 版 / Linux（deb + AppImage） |
 
-CUDA 版・ROCm 版・Editor 版は `identifier` を分け、同一 PC に併存できます。
+CUDA 版・ROCm 版・CPU 版・Editor 版は `identifier` を分け、同一 PC に併存できます。
 
-Linux配布用AppImageは、glibc互換性とPythonバージョンを固定するためUbuntu 24.04
+Linux配布用の .deb / AppImage は、glibc互換性とPythonバージョンを固定するためUbuntu 24.04
 コンテナでビルドします。Dockerデーモンへ一般ユーザーで接続できない環境では
 `sudo`または`pkexec`を付けます。
 
 ```sh
+# 引数無し: NVIDIA CUDA
 sudo bash scripts/build-appimage-docker.sh
+# 配布ラインを明示する場合
+sudo bash scripts/build-appimage-docker.sh --amd
+sudo bash scripts/build-appimage-docker.sh --cpu
+sudo bash scripts/build-appimage-docker.sh --editor
 ```
 
 - CUDA: `net.gakkousya.lott`
 - AMD: `net.gakkousya.lott-amd`
+- CPU: `net.gakkousya.lott-cpu`
 - Editor: `net.gakkousya.lott-editor`
 
 Editor 版のビルド例:

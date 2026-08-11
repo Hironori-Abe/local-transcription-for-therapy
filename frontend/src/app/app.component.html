@@ -60,7 +60,7 @@
             </span>
           </div>
           <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
-          <p class="gpu-setup-desc">文字起こし・話者分離には GPU ランタイムが必要です。以下のツールキットをインストールして、アプリを再起動してください。</p>
+          <p class="gpu-setup-desc">文字起こし・話者分離には GPU ランタイムが必要です。以下の内容を確認し、必要なものをインストールしてからアプリを再起動してください。</p>
 
           <div class="gpu-setup-columns">
             <div class="gpu-setup-section" *ngIf="showCudaInstallLinks()">
@@ -68,17 +68,27 @@
                 <mat-icon class="material-symbols-outlined gpu-setup-brand-icon">memory</mat-icon>
                 NVIDIA GPU の場合
               </div>
-              <p class="gpu-setup-section-note">CUDA Toolkit 12.X （11や13は不可） と cuDNN 9.x の両方が必要です。</p>
-              <div class="gpu-setup-links">
-                <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cuda-12-9-2-download-archive')">
-                  <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                  CUDA Toolkit 12.9.2
-                </button>
-                <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cudnn-downloads')">
-                  <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                  cuDNN 9.X
-                </button>
-              </div>
+              <ng-container *ngIf="runtimePlatform() === 'linux'; else cudaWindowsSetup">
+                <p class="gpu-setup-section-note">
+                  Linux 版では CUDA Toolkit と cuDNN を個別にインストールする必要はありません。
+                  必要な CUDA ライブラリはセットアップ時にアプリ専用の Python 環境へ導入されます。
+                  必要なのは NVIDIA プロプライエタリドライバーだけです。
+                  端末で <code>nvidia-smi</code> を実行して GPU 名が表示されるか確認してください。
+                </p>
+              </ng-container>
+              <ng-template #cudaWindowsSetup>
+                <p class="gpu-setup-section-note">CUDA Toolkit 12.X （11や13は不可） と cuDNN 9.x の両方が必要です。</p>
+                <div class="gpu-setup-links">
+                  <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cuda-12-9-2-download-archive')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    CUDA Toolkit 12.9.2
+                  </button>
+                  <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cudnn-downloads')">
+                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
+                    cuDNN 9.X
+                  </button>
+                </div>
+              </ng-template>
             </div>
 
             <div class="gpu-setup-section" *ngIf="showRocmInstallLinks()">
@@ -417,7 +427,7 @@
                 }}
               </button>
               <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・AI句読点付与を処理中です。しばらくお待ちください...</p>
-              <ng-container *ngIf="result() as transcriptionResult">
+              <ng-container *ngIf="result() && lastRunElapsedSeconds() > 0">
                 <p class="copy-status">所要時間: {{ formatElapsedMinuteSecond(lastRunElapsedSeconds())}}</p>
               </ng-container>
             </div>

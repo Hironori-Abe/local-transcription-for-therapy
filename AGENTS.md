@@ -370,10 +370,13 @@ Tauri build override 方針:
 - `tauri.nvidia.windows.override.json` は Full CUDA / Windows NSIS ビルド用（`scripts/setup-build-tools.bat` から使用）
 - `tauri.nvidia.linux.override.json` は Full CUDA / Linux（deb + AppImage）ビルド用。venv・`python312` embeddable を同梱せず、venv は初回起動後のセットアップで構築する（`scripts/setup-build-tools-linux.sh` から使用）。Linux CUDA 用 llama-server の同梱/DL 経路は未確立で、現状 LLM 校正ランタイムは含めない
 - `tauri.amd.windows.override.json` は AMD / Windows NSIS ビルド用（後日詳細調整予定）
-- `tauri.amd.linux.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する
+- `tauri.amd.linux.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する。話者分離モデルは同梱せず、インストール後に `app_local_data_dir()/models/` へ取得する
+- `tauri.cpu.linux.override.json` は CPU / Linux（deb + AppImage）ビルド用で、`requirements-runtime.txt` を使う
 - `tauri.editor.windows.override.json` は軽量 Editor 版 / Windows NSIS ビルド用。`identifier` を `net.gakkousya.lott-editor` に分離し、LLM 校正ランタイム非搭載のため `installerHooks` を `nsis/editor-hooks.nsh` に差し替える（Full 版は `nsis/nvidia-hooks.nsh`）
 - `tauri.editor.linux.override.json` は軽量 Editor 版 / Linux（deb + AppImage）ビルド用（GPU runtime を持たないため OS 差のみ。NSIS フックは Linux では不要）
 - CUDA版・ROCm版・CPU版・Editor版は `identifier` を分け、同一PCに併存できるようにする（CUDA: `net.gakkousya.lott`、AMD: `net.gakkousya.lott-amd`、CPU: `net.gakkousya.lott-cpu`、Editor: `net.gakkousya.lott-editor`）
+- Linux の配布ビルドは Ubuntu 24.04 Docker 経路（`scripts/build-appimage-docker.sh`）を使う。引数無しは NVIDIA、`--amd` / `--cpu` / `--editor` で配布ラインを選び、選択値を `scripts/setup-build-tools-linux.sh` へそのまま渡す。両スクリプトは不明なオプションをエラー終了する
+- Linux / Windows とも、規約名の成果物は `dist/v{version}/` に揃う。
 
 ### NSIS ビルド時の注意点
 
@@ -392,6 +395,7 @@ Tauri build override 方針:
 - ROCm / AMD 版は当面 experimental とし、LLM 校正と pyannote / PyTorch ROCm から検証する
 - AMD iGPU / dGPU / NPU の並行処理は、DL した llama.cpp ROCm / Vulkan llama-server や `llama_cpp` HIPBLAS / Vulkan を優先して検証する
 - `faster-whisper` / `ctranslate2` の GPU ASR は CUDA 主軸。gfx1150（Radeon 890M）と gfx1102（RX 7600M XT）では GPU 動作確認済み。ROCmでは `CT2_CUDA_ALLOCATOR=cub_caching` を `transcribe_cli.py` が自動設定する。gfx1102はネイティブ実行し、`HSA_OVERRIDE_GFX_VERSION` は通常使用しない。gfx1103はv4.7.xホイール非収録だが、品質影響が未検証のためoverrideを自動設定しない
+- Linux AppImage の Python sidecar は、`app_local_data_dir()/python312-site-packages/nvidia/*/lib` を優先し、ユーザー導入 CUDA/cuDNN との混在を避ける。Windows 側の CUDA 探索順は変更しない。
 - ハードウェア拡張時も、オフライン要件とデータ保護要件を維持する
 
 ## Engineering Priorities

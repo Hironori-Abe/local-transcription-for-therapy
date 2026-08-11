@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # setup-build-tools-linux.sh
 # Ubuntu 向け NSIS に相当するビルドスクリプト。
-# .deb / .AppImage パッケージ（NVIDIA 版）をビルドする。
-# AMD 版は --amd、Editor 版は --editor オプションで切り替え可能。
+# .deb / .AppImage パッケージを配布ライン別にビルドする。
+# 引数無しは NVIDIA、--amd / --cpu / --editor で各ラインを明示する。
 #
 # glibc 互換のため、リリースビルドは古めの Ubuntu（例 24.04）コンテナ内で
 # 実行すること。詳細は scripts/run-dev-docker-ubuntu.sh を参照。
@@ -11,38 +11,166 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT_DIR="$(pwd)"
 
-TAURI_TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
-if [[ "$TAURI_TARGET_DIR" != /* ]]; then
-  TAURI_TARGET_DIR="$ROOT_DIR/$TAURI_TARGET_DIR"
-fi
 LICENSE_VENV_DIR="${LOTT_VENV_DIR:-.venv312}"
 
 CONFIG_NVIDIA="tauri.nvidia.linux.override.json"
 CONFIG_AMD="tauri.amd.linux.override.json"
+CONFIG_CPU="tauri.cpu.linux.override.json"
 CONFIG_EDITOR="tauri.editor.linux.override.json"
 BUILD_CONFIG="$CONFIG_NVIDIA"
 BUILD_LINE="NVIDIA CUDA"
+BUILD_OPTION=""
+BUILD_VARIANT="nvidia"
+DRY_RUN=0
+
+usage() {
+  cat <<EOF
+Usage: $0 [--amd | --cpu | --editor] [--dry-run]
+
+  (デフォルト) NVIDIA CUDA 版 .deb / .AppImage をビルドします。
+  --amd        AMD ROCm 版をビルドします。
+  --cpu        CPU 版をビルドします。
+  --editor     軽量 Editor 版をビルドします。
+  --dry-run    ビルドせず、選択した設定・AppDir 選別・規約名の生成予定だけを表示します。
+  -h, --help   このヘルプを表示します。
+EOF
+}
+
+select_build_line() {
+  local option="$1"
+  local line="$2"
+  local config="$3"
+  local variant="$4"
+  if [[ -n "$BUILD_OPTION" ]]; then
+    echo "[ERROR] 配布ライン指定は1つだけ指定してください。" >&2
+    exit 2
+  fi
+  BUILD_OPTION="$option"
+  BUILD_LINE="$line"
+  BUILD_CONFIG="$config"
+  BUILD_VARIANT="$variant"
+}
 
 # --- オプション解析 ---
 for arg in "$@"; do
   case "$arg" in
-    --amd) BUILD_CONFIG="$CONFIG_AMD"; BUILD_LINE="AMD ROCm" ;;
-    --editor) BUILD_CONFIG="$CONFIG_EDITOR"; BUILD_LINE="Editor" ;;
+    --amd) select_build_line "--amd" "AMD ROCm" "$CONFIG_AMD" "amd" ;;
+    --cpu) select_build_line "--cpu" "CPU" "$CONFIG_CPU" "cpu" ;;
+    --editor) select_build_line "--editor" "Editor" "$CONFIG_EDITOR" "editor" ;;
+    --dry-run) DRY_RUN=1 ;;
     --help|-h)
-      echo "Usage: $0 [--amd | --editor]"
-      echo "  (デフォルト) NVIDIA CUDA 版 .deb / .AppImage をビルドします。"
-      echo "  --amd        AMD ROCm 版をビルドします。"
-      echo "  --editor     軽量 Editor 版をビルドします。"
+      usage
       exit 0
       ;;
-    *) echo "[WARN] 不明なオプション: $arg" ;;
+    *)
+      echo "[ERROR] 不明なオプション: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
   esac
 done
 
+if ! command -v python3 &>/dev/null; then
+  echo "[ERROR] python3 が見つかりません。" >&2
+  exit 1
+fi
+
+TAURI_TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
+if [[ "$TAURI_TARGET_DIR" != /* ]]; then
+  TAURI_TARGET_DIR="$ROOT_DIR/$TAURI_TARGET_DIR"
+fi
+APPIMAGE_DIR="$TAURI_TARGET_DIR/release/bundle/appimage"
+BUILD_MARKER="$TAURI_TARGET_DIR/.appimage-build-start"
+
+read_config_value() {
+  local key="$1"
+  python3 - "$ROOT_DIR" "$BUILD_CONFIG" "$key" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+override_path = root / sys.argv[2]
+base_path = root / "src-tauri/tauri.conf.json"
+key = sys.argv[3]
+override = json.loads(override_path.read_text(encoding="utf-8"))
+base = json.loads(base_path.read_text(encoding="utf-8"))
+value = override.get(key) or base.get(key)
+if not isinstance(value, str) or not value:
+    raise SystemExit(f"missing string config value: {key}")
+print(value)
+PY
+}
+
+PRODUCT_NAME="$(read_config_value productName)"
+IDENTIFIER="$(read_config_value identifier)"
+
+appdir_is_current_build() {
+  local candidate="$1"
+  local candidate_product
+  candidate_product="$(basename "$candidate" .AppDir)"
+
+  if [[ "$candidate_product" != "$PRODUCT_NAME" ]]; then
+    APPDIR_MATCH_REASON="別の配布ライン: $candidate_product"
+    return 1
+  fi
+
+  if [[ ! -e "$BUILD_MARKER" ]]; then
+    APPDIR_MATCH_REASON="productName 一致（BUILD_MARKER なし）"
+    return 0
+  fi
+
+  if [[ -e "$candidate/usr/bin/offline-transcriber" && "$candidate/usr/bin/offline-transcriber" -nt "$BUILD_MARKER" ]] \
+      || [[ "$candidate" -nt "$BUILD_MARKER" ]]; then
+    APPDIR_MATCH_REASON="productName 一致（BUILD_MARKER より新しい AppDir）"
+    return 0
+  fi
+
+  echo "[WARN] 今回のビルドで再生成されていない AppDir を再梱包します: $(basename "$candidate")（BUILD_MARKER より新しくありません）" >&2
+  APPDIR_MATCH_REASON="productName 一致（BUILD_MARKER より新しくないため警告）"
+  return 0
+}
+
+print_appdir_selection() {
+  local candidate
+  local found=0
+  if [[ ! -d "$APPIMAGE_DIR" ]]; then
+    echo "[INFO] AppImage AppDir はまだありません。"
+    return 0
+  fi
+  for candidate in "$APPIMAGE_DIR"/*.AppDir; do
+    [[ -d "$candidate" ]] || continue
+    if appdir_is_current_build "$candidate"; then
+      echo "[INFO] AppDir 対象: $(basename "$candidate")（$APPDIR_MATCH_REASON）"
+      found=1
+    else
+      echo "[INFO] AppDir 対象外のためスキップ: $(basename "$candidate")（$APPDIR_MATCH_REASON）"
+    fi
+  done
+  if [[ "$found" -eq 0 ]]; then
+    echo "[INFO] 今回の配布ラインに再梱包できる AppDir はありません。"
+  fi
+}
+
 echo "=== Build .deb / .AppImage (Ubuntu) ==="
 echo "  配布ライン: $BUILD_LINE"
-echo "  設定ファイル: $BUILD_CONFIG"
+echo "  override 設定ファイル: $BUILD_CONFIG"
+echo "  productName: $PRODUCT_NAME"
+echo "  identifier: $IDENTIFIER"
 echo ""
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[DRY-RUN] Tauri: build --config $BUILD_CONFIG --bundles deb appimage"
+  echo "[DRY-RUN] AppDir 選別規則: productName 一致を必須とし、別の配布ラインはスキップ。同一ラインは AppDir または offline-transcriber が BUILD_MARKER より新しければ対象、古くても WARN 付きで再梱包。BUILD_MARKER なしは mtime 比較せず対象"
+  print_appdir_selection
+  python3 scripts/collect_release_artifacts.py \
+    --platform linux \
+    --variant "$BUILD_VARIANT" \
+    --source-dir "$TAURI_TARGET_DIR/release/bundle/deb" \
+    --source-dir "$APPIMAGE_DIR" \
+    --dry-run
+  exit 0
+fi
 
 # --- cargo チェック ---
 if ! command -v cargo &>/dev/null; then
@@ -68,10 +196,6 @@ echo "[OK] $("${TAURI_CMD[@]}" -V)"
 echo ""
 
 # --- LGPL FFmpeg CLI のダウンロード ---
-if ! command -v python3 &>/dev/null; then
-  echo "[ERROR] python3 が見つかりません。"
-  exit 1
-fi
 echo "[INFO] LGPL FFmpeg CLI を確認中..."
 python3 scripts/setup_ffmpeg_lgpl.py --platform linux --variant lgpl
 echo ""
@@ -121,8 +245,6 @@ export GSTREAMER_INCLUDE_BAD_PLUGINS=0
 echo "[INFO] .deb / .AppImage パッケージをビルド中..."
 echo "[INFO] 初回は Rust のコンパイルがあるため数十分かかることがあります。"
 echo ""
-APPIMAGE_DIR="$TAURI_TARGET_DIR/release/bundle/appimage"
-BUILD_MARKER="$TAURI_TARGET_DIR/.appimage-build-start"
 mkdir -p "$(dirname "$BUILD_MARKER")"
 touch "$BUILD_MARKER"
 # AppImage バンドラは AppRun/linuxdeploy を GitHub から取得するため、
@@ -138,7 +260,8 @@ until [[ $build_attempt -ge 3 ]]; do
   complete_appdir=""
   for candidate in "$APPIMAGE_DIR"/*.AppDir; do
     if [[ -x "$candidate/AppRun" && -x "$candidate/usr/bin/offline-transcriber" \
-          && "$candidate/usr/bin/offline-transcriber" -nt "$BUILD_MARKER" ]]; then
+          && "$candidate/usr/bin/offline-transcriber" -nt "$BUILD_MARKER" \
+          && "$(basename "$candidate" .AppDir)" == "$PRODUCT_NAME" ]]; then
       complete_appdir="$candidate"
       break
     fi
@@ -189,14 +312,23 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
   fi
   if [[ -x "$APPIMAGETOOL" && -f "$APPIMAGE_RUNTIME" ]]; then
     app_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+    selected_appdir_count=0
     for appdir in "$APPIMAGE_DIR"/*.AppDir; do
       [[ -d "$appdir" ]] || continue
+      if ! appdir_is_current_build "$appdir"; then
+        echo "[INFO] AppDir 対象外のためスキップ: $(basename "$appdir")（$APPDIR_MATCH_REASON）"
+        continue
+      fi
+      selected_appdir_count=$((selected_appdir_count + 1))
       product="$(basename "$appdir" .AppDir)"
+      echo "[INFO] AppDir を再梱包します: $product（$APPDIR_MATCH_REASON）"
       out=""
       for existing_appimage in "$APPIMAGE_DIR/$product"*.AppImage; do
         [[ -f "$existing_appimage" ]] || continue
-        out="$existing_appimage"
-        break
+        if [[ "$existing_appimage" -nt "$BUILD_MARKER" ]]; then
+          out="$existing_appimage"
+          break
+        fi
       done
       [[ -n "$out" ]] || out="$APPIMAGE_DIR/${product}_${app_version}_amd64.AppImage"
       removed="$(find "$appdir" -iname 'libwayland-*' -print -delete 2>/dev/null | wc -l)"
@@ -317,15 +449,45 @@ fi' "$gtk_hook"
         && echo "[OK] 再パッケージ完了: $(basename "$out")" \
         || echo "[WARN] 再パッケージに失敗しました。生成 AppImage は新しめのホストで EGL クラッシュするおそれ。" >&2
     done
+    if [[ "$selected_appdir_count" -eq 0 ]]; then
+      echo "[INFO] 今回の配布ラインに再梱包できる AppDir はありません。"
+    fi
   else
     echo "[WARN] appimagetool を取得できませんでした。libwayland-* 除去をスキップします。" >&2
     echo "[WARN] 生成 AppImage は CachyOS 等の新しめホストで EGL クラッシュするおそれがあります。" >&2
   fi
 fi
 
+list_new_artifacts() {
+  local found=0
+  local artifact
+  local artifact_dir
+  for artifact_dir in "$TAURI_TARGET_DIR/release/bundle/deb" "$APPIMAGE_DIR"; do
+    [[ -d "$artifact_dir" ]] || continue
+    while IFS= read -r -d '' artifact; do
+      printf '  %s (%s bytes)\n' "$(basename "$artifact")" "$(stat -c '%s' "$artifact")"
+      found=1
+    done < <(find "$artifact_dir" -maxdepth 1 -type f \
+      \( -name '*.deb' -o -name '*.AppImage' \) -newer "$BUILD_MARKER" -print0 | sort -z)
+  done
+  if [[ "$found" -eq 0 ]]; then
+    echo "  [WARN] BUILD_MARKER 以降に生成された .deb / .AppImage が見つかりません。"
+  fi
+}
+
 echo ""
 echo "[OK] ビルドが完了しました。"
-echo "[OK] .deb 出力先:      $TAURI_TARGET_DIR/release/bundle/deb/"
-echo "[OK] .AppImage 出力先: $TAURI_TARGET_DIR/release/bundle/appimage/"
+echo "[OK] 生成成果物（今回の BUILD_MARKER 以降）:"
+list_new_artifacts
+echo ""
+echo "[INFO] リリース用の規約名へ成果物を配置中..."
+if ! python3 scripts/collect_release_artifacts.py \
+  --platform linux \
+  --variant "$BUILD_VARIANT" \
+  --source-dir "$TAURI_TARGET_DIR/release/bundle/deb" \
+  --source-dir "$APPIMAGE_DIR"; then
+  echo "[ERROR] リリース用成果物の集約に失敗しました。" >&2
+  exit 1
+fi
 echo ""
 echo "[INFO] Python パッケージはインストール後にアプリのセットアップ UI からインストールしてください。"

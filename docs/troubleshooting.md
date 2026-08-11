@@ -27,6 +27,16 @@ where.exe cublas64_12.dll
 where.exe cudnn64_9.dll
 ```
 
+## Linux AppImage: CUDA/cuDNN 混在による cuBLAS エラー
+
+- 原因: ユーザー導入の CUDA/cuDNN が `LD_LIBRARY_PATH` に混ざると、pip 版 `nvidia-*` と異なる版が解決されることがあります。新しい AppImage は pip 版を優先します。
+- 旧版の一時回避: `env -u CUDA_HOME -u LD_LIBRARY_PATH "/path/to/Local Transcription for Therapy.AppImage"` で起動してください。
+- 確認:
+
+```bash
+tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'CUDA_HOME|LD_LIBRARY_PATH'
+```
+
 ## 文字起こしが「モデルが見つからない」「オフライン」エラーで失敗する
 
 - 本アプリは通常運用時、モデル取得ライブラリ（Hugging Face Hub）を**オフラインモードに固定**しています（意図しないインターネット接続を防ぐためのフェイルクローズ設計）。そのため、文字起こしモデル（Whisper）が未取得の状態では実行時に自動ダウンロードされず、`LocalEntryNotFoundError` / "outgoing traffic has been disabled" のようなエラーになります。
@@ -127,15 +137,18 @@ LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
   - `xdg-open` の子プロセスを回収し、ゾンビを残さない。
 - 補足: この症状は「外部リンク・フォルダオープンが効かない」ものです。音声ファイルを選んだ直後のフリーズは別原因（上の GStreamer の項目）です。
 
-## Linux AppImage: テキスト欄をクリックすると固まる / Wayland・IME
+## Linux AppImage: テキスト欄をクリックすると固まる / 日本語入力ができない
 
-- AppImage の GTK hook は、Wayland セッションでは `GDK_BACKEND=wayland` と `GTK_IM_MODULE=wayland`、X11 では `GDK_BACKEND=x11` を既定にします。AppDir の GTK immodule cache には `im-wayland.so` / `im-xim.so` はありますが fcitx GTK module が無いため、Wayland セッションを X11 に固定すると fcitx5 の日本語入力経路が不明確になるためです。
-- `GDK_BACKEND` / `XMODIFIERS` と、AppDir cache に存在する `GTK_IM_MODULE` は尊重します。Wayland で `GTK_IM_MODULE` が cache に無い場合は `wayland` へ、X11 で cache に無い場合は空でない `XMODIFIERS` があるときだけ `xim` へ救済します。IME なし（`XMODIFIERS` 空）の環境に XIM は強制しません。
-- Wayland 起動で問題が出る場合は、従来の X11 経路を `LOTT_GDK_BACKEND=x11 /path/to/Local\ Transcription\ for\ Therapy.AppImage` で比較できます。戻す必要がなくなったら環境変数を外してください。
+- 原因: AppImage のビルドツール（linuxdeploy）が生成する GTK フックは、Wayland セッションでも一律に `GDK_BACKEND=x11` を強制していました。さらに AppImage 同梱の GTK には fcitx 用モジュールが無いため、X11 に固定されると日本語入力の経路がありませんでした。
+- 対策: ビルド時にこの強制を外し、Wayland セッションでは Wayland、それ以外では X11 を既定にします。日本語入力は Wayland では fcitx5 の Wayland 経路、X11 では XIM 経由になります。
+- Wayland での起動・表示に問題が出る環境では、従来の X11 経路に戻して比較できます。
 
-切り分け:
+```bash
+LOTT_GDK_BACKEND=x11 "/path/to/Local Transcription for Therapy_0.9.8_amd64.AppImage"
+```
 
-1. `pgrep -af offline-transcriber` で実行 PID を確認し、`tr '\0' '\n' < /proc/<pid>/environ | rg 'GDK_BACKEND|GTK_IM_MODULE|GTK_IM_MODULE_FILE|XMODIFIERS'` を保存する。
-2. Wayland の通常起動と `LOTT_GDK_BACKEND=x11` を物理クリックで比較する。合成クリック・キー注入は Wayland 環境では入力経路の検証にならない。
-3. `journalctl --user --since '2 minutes ago' --no-pager | rg -i 'webkit|gtk|ime|input|focus|wayland|error'` を確認する。
-4. まだ再現する場合は、メインプロセスと `WebKitWebProcess` の PID を控えてから gdb attach し、`thread apply all bt` を採取する。会話・音声データを外部へ送る診断は行わない。
+- これで直る場合は表示バックエンド側の問題です。X11 に戻しても直らない場合は、実行中の設定を控えて報告してください。
+
+```bash
+tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
+```

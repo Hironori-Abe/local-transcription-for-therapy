@@ -193,8 +193,13 @@ if "%HAS_WARN%"=="1" (
 ) else (
   echo [OK] Build completed.
 )
-echo [OK] Installer path:
-echo      src-tauri\target\release\bundle\nsis\Local Transcription for Therapy_*_x64-setup.exe
+echo [INFO] Collecting release artifacts under the release naming convention...
+"%PYTHON312_DEST%\python.exe" scripts\collect_release_artifacts.py --platform windows --variant nvidia --source-dir "src-tauri\target\release\bundle\nsis"
+if errorlevel 1 (
+  echo [ERROR] Failed to collect release artifacts.
+  goto :hold_error
+)
+echo [OK] Release artifacts and SHA256SUMS.txt were collected under the output path listed above.
 echo.
 echo [INFO] Python packages are installed via the app's setup UI after first launch.
 goto :hold_success

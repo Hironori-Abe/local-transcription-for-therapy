@@ -1367,6 +1367,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private llmProofreadTickerId: ReturnType<typeof setInterval> | null = null;
   private llmProgressOffset = 0;
   private llmTotalProcessedCount = 0;
+  private overallProofreadProgressCurrent = 0;
+  private overallProofreadProgressStarted = false;
   private _gemmaCheckBypassed = false;
   private progressSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
   private progressUnlisten: UnlistenFn | null = null;
@@ -4714,10 +4716,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     }
 
+    await this.ensureProgressListener();
     this.overallProofreadRunning.set(true);
     this.overallProofreadError.set('');
     this.overallProofreadResult.set(null);
     this.overallProofreadDismissedIds.set(new Set());
+    this.overallProofreadProgressCurrent = 0;
+    this.overallProofreadProgressStarted = false;
     this.overallProofreadStatus.set('しばらくお待ち下さい...');
 
     // VRAM不足で並列処理数を下げる確認ダイアログを出した場合は、結果ダイアログを開かない
@@ -7471,7 +7476,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.progressUnlisten = await listen<{ stage?: string; message?: string; progress?: number; current?: number; total?: number }>(
       'transcription-progress',
       (event) => {
-        if (!this.running() && !this.diarizationRunning() && !this.proofreadRunning() && !this.llmProofreadRunning()) {
+        if (!this.running() && !this.diarizationRunning() && !this.proofreadRunning() && !this.llmProofreadRunning() && !this.overallProofreadRunning()) {
           return;
         }
         const payload = event.payload ?? {};
@@ -7527,6 +7532,32 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             return;
           }
           // LLM固有ステージ以外（whisper進捗など）はそのまま通過
+        } else if (this.overallProofreadRunning()) {
+          if (stage === 'overall_proofread') {
+            const total = typeof payload.total === 'number' && Number.isFinite(payload.total)
+              ? Math.floor(payload.total)
+              : null;
+            if (total !== null && total > 0) {
+              const current = typeof payload.current === 'number' && Number.isFinite(payload.current)
+                ? payload.current
+                : this.overallProofreadProgressCurrent;
+              this.overallProofreadProgressCurrent = Math.min(
+                Math.max(0, Math.floor(current)),
+                total,
+              );
+              this.overallProofreadProgressStarted = true;
+              this.overallProofreadStatus.set(
+                this.formatOverallProofreadProgress(this.overallProofreadProgressCurrent, total),
+              );
+            }
+            return;
+          }
+          if (stage === 'llm_loading' && !this.overallProofreadProgressStarted) {
+            if (typeof payload.message === 'string' && payload.message.length > 0) {
+              this.overallProofreadStatus.set(payload.message);
+            }
+          }
+          return;
         }
 
 
@@ -7616,6 +7647,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
       }
     );
+  }
+
+  private formatOverallProofreadProgress(current: number, total: number): string {
+    const safeTotal = Math.max(0, Math.floor(total));
+    const safeCurrent = Math.min(Math.max(0, Math.floor(current)), safeTotal);
+    return `校正中: ${safeCurrent} / ${safeTotal} 行`;
   }
 
   private getProgressStageOrder(): ReadonlyArray<string> {

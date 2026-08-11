@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Local Transcription for Therapy
+Comment=Local Japanese transcription desktop app
+Exec=lott
+Icon=net.gakkousya.lott
+Terminal=false
+StartupWMClass=lott-bin
+Categories=AudioVideo;Audio;

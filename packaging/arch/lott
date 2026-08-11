@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+# NVIDIA + WebKitGTKのGBM/Wayland問題を避ける既定値。
+# 利用者が明示した環境変数は尊重し、LOTT_GDK_BACKENDを最優先する。
+if [ -n "${LOTT_GDK_BACKEND:-}" ]; then
+  export GDK_BACKEND="$LOTT_GDK_BACKEND"
+elif [ -z "${GDK_BACKEND:-}" ]; then
+  export GDK_BACKEND=x11
+fi
+
+if [ "${WEBKIT_DISABLE_DMABUF_RENDERER+x}" != x ]; then
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+fi
+
+exec '/usr/lib/Local Transcription for Therapy/lott-bin' "$@"

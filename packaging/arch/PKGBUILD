@@ -1,0 +1,129 @@
+pkgname=local-transcription-for-therapy-cuda
+pkgver=0.9.8
+pkgrel=2
+pkgdesc='Local transcription and proofreading for therapy sessions (NVIDIA CUDA)'
+arch=('x86_64')
+url='https://github.com/Hironori-Abe/local-transcription-for-therapy'
+license=('Apache-2.0')
+depends=(
+  'glibc'
+  'glib2'
+  'gtk3'
+  'gst-plugins-base'
+  'gst-plugins-good'
+  'webkit2gtk-4.1'
+  'xdg-utils'
+  'xorg-xwayland'
+)
+optdepends=(
+  'cuda: NVIDIA CUDA transcription runtime'
+  'fcitx5-gtk: Japanese input through fcitx5'
+  'nvidia-utils: NVIDIA proprietary driver userspace libraries'
+  'pipewire-pulse: audio playback through PipeWire/PulseAudio'
+)
+makedepends=(
+  'nodejs'
+  'npm'
+  'pkgconf'
+  'rust'
+)
+provides=('local-transcription-for-therapy')
+conflicts=('local-transcription-for-therapy')
+options=('!debug')
+source=()
+sha256sums=()
+
+_product_name='Local Transcription for Therapy'
+_repo_root="${LOTT_REPO_ROOT:-$(cd "$startdir/../.." && pwd)}"
+
+build() {
+  cd "$_repo_root"
+
+  test -x node_modules/.bin/tauri
+  test -x src-tauri/resources/python312-linux/bin/python3.12
+  test -x src-tauri/resources/ffmpeg/ffmpeg
+
+  # Arch/CachyOSのWebKitGTKへリンクしたrelease本体だけを作る。
+  # resourcesはpackage()でArchの標準配置へ明示的に収録する。
+  node_modules/.bin/tauri build \
+    --config tauri.nvidia.linux.override.json \
+    --config '{"bundle":{"resources":[]}}' \
+    --no-bundle
+}
+
+package() {
+  local app_dir="$pkgdir/usr/lib/$_product_name"
+  local sidecar_dir="$app_dir/_up_/python_sidecar"
+
+  install -Dm755 "$_repo_root/src-tauri/target/release/offline-transcriber" \
+    "$app_dir/lott-bin"
+  install -Dm755 "$startdir/lott" \
+    "$pkgdir/usr/bin/lott"
+  install -Dm644 "$startdir/net.gakkousya.lott.desktop" \
+    "$pkgdir/usr/share/applications/net.gakkousya.lott.desktop"
+  install -Dm644 "$_repo_root/src-tauri/icons/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/net.gakkousya.lott.png"
+
+  install -Dm644 "$_repo_root/LICENSE" "$app_dir/_up_/LICENSE"
+  install -Dm644 "$_repo_root/NOTICE" "$app_dir/_up_/NOTICE"
+  install -Dm644 "$_repo_root/THIRD_PARTY_LICENSES.md" \
+    "$app_dir/_up_/THIRD_PARTY_LICENSES.md"
+  install -Dm644 "$_repo_root/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$_repo_root/NOTICE" \
+    "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+  install -Dm644 "$_repo_root/THIRD_PARTY_LICENSES.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES.md"
+
+  mkdir -p "$app_dir/_up_/licenses"
+  cp -a --no-preserve=ownership "$_repo_root/licenses/." "$app_dir/_up_/licenses/"
+
+  mkdir -p "$sidecar_dir"
+  local sidecar_file
+  for sidecar_file in \
+    transcribe_cli.py \
+    diarize_cli.py \
+    proofread_llm_cli.py \
+    overall_proofread_cli.py \
+    detect_env_cli.py \
+    download_whisper_model_cli.py \
+    download_gemma_gguf_cli.py \
+    download_llama_backend_cli.py \
+    download_diarization_model_cli.py \
+    encrypt_office_cli.py \
+    setup_venv_cli.py \
+    requirements-runtime.txt; do
+    install -m644 "$_repo_root/python_sidecar/$sidecar_file" \
+      "$sidecar_dir/$sidecar_file"
+  done
+  cp -a --no-preserve=ownership \
+    "$_repo_root/python_sidecar/prompt_templates" "$sidecar_dir/"
+
+  mkdir -p "$app_dir/resources/proofread"
+  cp -a --no-preserve=ownership \
+    "$_repo_root/src-tauri/resources/proofread/punctuation_rules" \
+    "$app_dir/resources/proofread/"
+  mkdir -p "$app_dir/resources/python312-linux"
+  cp -a --no-preserve=ownership \
+    "$_repo_root/src-tauri/resources/python312-linux/." \
+    "$app_dir/resources/python312-linux/"
+  mkdir -p "$app_dir/resources/ffmpeg"
+  cp -a --no-preserve=ownership \
+    "$_repo_root/src-tauri/resources/ffmpeg/." \
+    "$app_dir/resources/ffmpeg/"
+
+  # UbuntuのPython標準ライブラリに含まれるホスト絶対パスのsymlinkは、
+  # Archパッケージへ持ち込まない。サイドカーとpipはどちらも使用しない。
+  rm -f "$app_dir/resources/python312-linux/lib/python3.12/sitecustomize.py"
+  find "$app_dir/resources/python312-linux/lib/python3.12/lib-dynload" \
+    -maxdepth 1 -type f -name 'readline.cpython-*.so' -delete 2>/dev/null || true
+
+  chmod 0755 "$app_dir/resources/python312-linux/bin/python3.12"
+  chmod 0755 "$app_dir/resources/ffmpeg/ffmpeg"
+
+  if find "$app_dir" -xtype l -print -quit | grep -q .; then
+    echo 'Broken symbolic link found in packaged resources:' >&2
+    find "$app_dir" -xtype l -print >&2
+    return 1
+  fi
+}

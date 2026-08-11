@@ -232,6 +232,11 @@ SUDO_CMD=()
 ensure_sudo() {
   SUDO_CMD=()
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    if [[ -r /proc/self/status ]] && awk '$1 == "NoNewPrivs:" && $2 == "1" { found = 1 } END { exit !found }' /proc/self/status; then
+      warn "Privilege escalation is disabled for this terminal (NoNewPrivs=1)."
+      warn "Open an independent terminal from the desktop application launcher (not a Codex/VS Code integrated terminal), verify that 'grep NoNewPrivs /proc/self/status' reports 0, and rerun this setup there."
+      return 1
+    fi
     if ! have sudo; then
       warn "sudo was not found. Cannot install system packages automatically."
       return 1
@@ -260,13 +265,39 @@ apt_has_package() {
   apt-cache show "$1" >/dev/null 2>&1
 }
 
+verify_linux_audio_plugins() {
+  local required=(playbin3 id3demux mpg123audiodec flacdec)
+  local missing=()
+  local element
+
+  if ! have gst-inspect-1.0; then
+    missing=("gst-inspect-1.0" "${required[@]}")
+  else
+    for element in "${required[@]}"; do
+      if ! gst-inspect-1.0 "$element" >/dev/null 2>&1; then
+        missing+=("$element")
+      fi
+    done
+  fi
+
+  if [[ "${#missing[@]}" -ne 0 ]]; then
+    warn "Required system GStreamer components are missing: ${missing[*]}"
+    if have pacman; then
+      die "Install the system prerequisites in an unrestricted terminal with 'sudo pacman -S --needed gst-plugins-base gst-plugins-good', then rerun this setup."
+    fi
+    die "Install the system prerequisites with 'sudo apt-get install gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio', then rerun this setup."
+  fi
+
+  ok "Verified Linux audio playback dependencies: ${required[*]}"
+}
+
 _install_pacman_system_packages() {
-    if ! confirm_default_yes "Install/update CachyOS/Arch system packages for Tauri, Python, and optional native package builds?"; then
+  if ! confirm_default_yes "Install/update CachyOS/Arch system packages for Tauri, Python, and optional native package builds?"; then
     info "Skipped pacman system package installation."
     return
   fi
 
-  ensure_sudo || return
+  ensure_sudo || die "Administrator privileges are required to install CachyOS/Arch system packages."
 
   # Ubuntu パッケージとの対応:
   #   build-essential → base-devel  |  libwebkit2gtk-4.1-dev → webkit2gtk-4.1
@@ -282,6 +313,8 @@ _install_pacman_system_packages() {
     ffmpeg
     file
     gnupg
+    gst-plugins-base
+    gst-plugins-good
     gtk3
     libayatana-appindicator
     libxml2
@@ -312,8 +345,10 @@ _install_pacman_system_packages() {
 
   info "Installing pacman packages..."
   if ! "${SUDO_CMD[@]}" pacman -S --needed --noconfirm "${packages[@]}"; then
-    warn "pacman package installation failed. Some native builds or Tauri dev may fail."
+    die "pacman package installation failed. Resolve the error above, then rerun scripts/setup-dev.sh."
   fi
+
+  verify_linux_audio_plugins
 }
 
 install_system_packages() {
@@ -336,7 +371,7 @@ install_system_packages() {
     return
   fi
 
-  ensure_sudo || return
+  ensure_sudo || die "Administrator privileges are required to install Ubuntu system packages."
 
   info "Updating apt package index..."
   if ! "${SUDO_CMD[@]}" apt-get update; then
@@ -350,6 +385,9 @@ install_system_packages() {
     ffmpeg
     file
     gpg
+    gstreamer1.0-plugins-base
+    gstreamer1.0-plugins-good
+    gstreamer1.0-pulseaudio
     libayatana-appindicator3-dev
     libgtk-3-dev
     libopenblas-dev
@@ -417,8 +455,9 @@ install_system_packages() {
 
   info "Installing apt packages..."
   if ! "${SUDO_CMD[@]}" apt-get install -y "${packages[@]}"; then
-    warn "apt package installation failed. Some native builds or Tauri dev may fail."
+    die "apt package installation failed. Resolve the error above, then rerun scripts/setup-dev.sh."
   fi
+  verify_linux_audio_plugins
 }
 
 check_rocm_clang_linker() {
@@ -1445,6 +1484,10 @@ if [[ "$ONLY_RUST" == "1" ]]; then
   exit 0
 fi
 
+# Linux development uses the host WebKitGTK/GStreamer runtime. Keep this system-level
+# prerequisite explicit: do not start package installation or project setup until the
+# required playback elements are already discoverable.
+verify_linux_audio_plugins
 install_system_packages
 install_rocm_packages
 install_amd_npu_packages

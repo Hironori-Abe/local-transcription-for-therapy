@@ -87,6 +87,40 @@ unset HSA_OVERRIDE_GFX_VERSION
 - いずれも該当しなければ Vulkan で安全に動作します（機能差はなく速度のみ）。
 - 関連クラッシュ痕跡: ROCm を therock 経由で起動すると `rocBLAS error: Cannot read ... TensileLibrary.dat ... for GPU arch : gfx1102` が出ます。本アプリは therock を `LD_LIBRARY_PATH` に載せないことでこれを回避しています。
 
+## Linux 開発環境: MP3の再生開始時に固まる
+
+- 症状: `scripts/run-dev.sh` で起動した開発版へMP3を読み込み、区間再生を開始すると応答しなくなる。
+- 原因: WebKitGTKが利用するホストGStreamerに `gst-plugins-good` がなく、MP3先頭のID3タグを処理する `id3demux` や、配布方針で利用するLGPLデコーダが欠落している。MP3デコーダ単体が存在してもID3タグを剥がせず、WebKitGTKが `loadedmetadata` / `error` のどちらも返さない場合がある。
+- 確認方法:
+
+```sh
+gst-inspect-1.0 id3demux mpg123audiodec flacdec
+```
+
+- 対策: ディストリビューションに応じて、以下のシステムパッケージを明示的に導入する。その後 `scripts/setup-dev.sh` を再実行し、`[OK] Verified Linux audio playback dependencies` が表示されてから `scripts/run-dev.sh` を起動する。セットアップは不足を検出した場合、システムを自動変更せず、必要なコマンドを表示して停止する。
+
+```sh
+# CachyOS / Arch
+sudo pacman -S --needed gst-plugins-base gst-plugins-good
+
+# Ubuntu / Debian
+sudo apt-get install gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio
+```
+
+### `sudo: no new privileges` でセットアップが停止する場合
+
+CodexやVS Codeなど、権限昇格を禁止したサンドボックス内から端末を起動すると、子プロセスへLinuxの `NoNewPrivs=1` が継承される。この状態では正しいパスワードを入力しても `sudo` / `pkexec` はrootになれず、スクリプト内から制約を解除することもできない。
+
+デスクトップのアプリケーションランチャーから独立したKonsole等を起動し、次の値が `0` であることを確認してからセットアップを実行する。
+
+```sh
+grep NoNewPrivs /proc/self/status
+cd /home/seitoku/Code/local-transcription-for-therapy
+bash scripts/setup-dev.sh
+```
+
+`setup-dev.sh` は `NoNewPrivs=1` を `sudo` 実行前に検出し、実行可能な端末へ移るよう案内して停止する。
+
 ## Linux AppImage: 音声ファイルを選んだ直後に固まる
 
 - 症状: AppImage を起動してモデル等のダウンロードまでは正常。ファイル選択ダイアログで音声ファイルを選んだ直後に、進捗バーが出たまま操作できなくなる。Ubuntu では再現せず、CachyOS など Ubuntu 以外のディストロで発生する。

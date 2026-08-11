@@ -33,6 +33,31 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+check_linux_audio_plugins() {
+  if ! have gst-inspect-1.0; then
+    die "GStreamer tools were not found. Run scripts/setup-dev.sh to install the required LGPL GStreamer plugins."
+  fi
+
+  # WebKitGTK delegates <audio> playback to GStreamer. In particular, MP3 files with
+  # ID3 metadata require id3demux before the MP3 decoder is reached. If gst-plugins-good
+  # is absent, WebKitGTK may neither emit loadedmetadata nor error and appear to freeze.
+  local required_plugins=(playbin3 id3demux mpg123audiodec flacdec)
+  local missing_plugins=()
+  local plugin
+  for plugin in "${required_plugins[@]}"; do
+    if ! gst-inspect-1.0 "$plugin" >/dev/null 2>&1; then
+      missing_plugins+=("$plugin")
+    fi
+  done
+  if [[ "${#missing_plugins[@]}" -gt 0 ]]; then
+    warn "Required GStreamer plugins are missing: ${missing_plugins[*]}"
+    if have pacman; then
+      die "Run 'bash scripts/setup-dev.sh' and allow CachyOS/Arch system package installation. The setup must finish with the GStreamer verification [OK] before rerunning this script."
+    fi
+    die "Run 'bash scripts/setup-dev.sh' and allow Ubuntu system package installation. The setup must finish with the GStreamer verification [OK] before rerunning this script."
+  fi
+}
+
 # rustup でインストールされた cargo は ~/.cargo/bin にあるが、setup-dev.sh を
 # 実行した直後の（あるいは新規に開いた）シェルでは PATH に乗っていないことがある。
 # ここで env を読み込むことで、setup-dev.sh → run-dev.sh を 1 シェルで完結できる。
@@ -133,6 +158,7 @@ fi
 have npm || die "npm was not found. Please run scripts/setup-dev.sh first."
 load_cargo_env
 have cargo || die "cargo was not found. Run scripts/setup-dev.sh first, or 'source \$HOME/.cargo/env'."
+check_linux_audio_plugins
 if [[ "$PYTHON_BIN" == */* && ! -x "$PYTHON_BIN" ]]; then
   die "Python executable was not found or is not executable: $PYTHON_BIN"
 fi

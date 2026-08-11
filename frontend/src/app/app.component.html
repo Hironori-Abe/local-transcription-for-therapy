@@ -1278,9 +1278,17 @@
             <div class="segment-col-content">
               <div class="content-header-filter">
                 <span>内容</span>
-                <span class="reader-hint shortcut-hint">
+                <span class="reader-hint shortcut-hint" tabindex="0"
+                  [attr.aria-label]="shortcutHintsAriaLabel"
+                  [style.--shortcut-hint-cycle-duration]="shortcutHintCycleDuration">
                   <mat-icon class="material-symbols-outlined shortcut-hint-icon" aria-hidden="true">lightbulb</mat-icon>
-                  <span class="shortcut-hint-text">{{ currentShortcutHint() }}</span>
+                  <span class="shortcut-hint-viewport" aria-hidden="true">
+                    <span *ngFor="let hint of shortcutHints; let hintIndex = index"
+                      class="shortcut-hint-text"
+                      [style.--shortcut-hint-delay]="(hintIndex * shortcutHintDisplaySeconds - shortcutHintFadeSeconds) + 's'">
+                      {{ hint }}
+                    </span>
+                  </span>
                 </span>
                 <span class="content-filter-toggle-wrap">
                   <mat-button-toggle-group class="content-filter-toggle" [value]="segmentRowFilter()"

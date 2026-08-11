@@ -1,5 +1,5 @@
 ﻿import { CommonModule } from '@angular/common';
-import { ApplicationRef, Component, AfterViewInit, HostListener, NgZone, OnDestroy, OnInit, QueryList, ViewChildren, computed, isDevMode, signal } from '@angular/core';
+import { ApplicationRef, ChangeDetectionStrategy, Component, AfterViewInit, HostListener, NgZone, OnDestroy, OnInit, QueryList, ViewChildren, computed, isDevMode, signal } from '@angular/core';
 import { TextFieldModule } from '@angular/cdk/text-field';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 import { ScrollingModule as ScrollingModuleExperimental } from '@angular/cdk-experimental/scrolling';
@@ -509,6 +509,7 @@ interface SegmentTextHistory {
 @Component({
   selector: 'app-root',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CommonModule,
     MatToolbarModule,
@@ -950,7 +951,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         break;
       }
     }
-    this.overallProofreadBtnAboveViewport.set(scrolledPast);
+    if (this.overallProofreadBtnAboveViewport() !== scrolledPast) {
+      this.ngZone.run(() => this.overallProofreadBtnAboveViewport.set(scrolledPast));
+    }
     this._overallProofreadScrollRaf = null;
   };
   private readonly _overallProofreadScrollListener = (): void => {
@@ -993,8 +996,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     'Ctrl+Shift+E（話者を切替）',
     'Ctrl+Shift+M（音声入力）'
   ];
-  readonly shortcutHintIndex = signal<number>(0);
-  readonly currentShortcutHint = computed(() => this.shortcutHints[this.shortcutHintIndex()]);
+  // 全ヒントを最初から描画し、CSS の合成レイヤー内だけで切り替える。
+  // 実行中に Angular signal や textContent を更新しないことで、sticky な編集画面全体の
+  // Layout / Paint を避ける。
+  readonly shortcutHintDisplaySeconds = 5;
+  readonly shortcutHintFadeSeconds = 0.5;
+  readonly shortcutHintCycleDuration = `${this.shortcutHints.length * this.shortcutHintDisplaySeconds}s`;
+  readonly shortcutHintsAriaLabel = `キーボードショートカットのヒント: ${this.shortcutHints.join('、')}`;
   readonly hiddenSegmentIds = signal<Record<number, boolean>>({});
   readonly diarizationModelChecked = signal<boolean>(false);
   readonly diarizationModelExists = signal<boolean>(true);
@@ -1395,7 +1403,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private previewPaused = false;
   private readonly shortcutSeekSeconds = 5;
   private shortcutFocusRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private shortcutHintIntervalHandle: ReturnType<typeof setInterval> | null = null;
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
   private previewLoopEnabled = false;
   private previewSequenceSegmentIds: number[] = [];
@@ -2708,26 +2715,28 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.applyAppSettings();
     this.loadEstimateSamples();
     void this.initializeStartupState();
-    window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
-    // ショートカットヒント（表の内容ヘッダー）を5秒ごとにローテーション
-    this.shortcutHintIntervalHandle = setInterval(() => {
-      const nextIndex = (this.shortcutHintIndex() + 1) % this.shortcutHints.length;
-      this.shortcutHintIndex.set(nextIndex);
-    }, 5000);
+    this.ngZone.runOutsideAngular(() => {
+      window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
+    });
   }
 
   ngAfterViewInit(): void {
     this.segmentViewports.changes.subscribe(() =>
       requestAnimationFrame(this._refreshSegmentTableInView)
     );
-    window.addEventListener('scroll', this._refreshSegmentTableInView, { passive: true });
+    this.ngZone.runOutsideAngular(() =>
+      window.addEventListener('scroll', this._refreshSegmentTableInView, { passive: true })
+    );
   }
 
   private readonly _refreshSegmentTableInView = (): void => {
     const viewport = this.activeSegmentViewport;
     const el = viewport?.elementRef.nativeElement as HTMLElement | undefined;
     const rect = el?.getBoundingClientRect();
-    this.isSegmentTableInView.set(!!rect && rect.bottom > 0 && rect.top < window.innerHeight);
+    const inView = !!rect && rect.bottom > 0 && rect.top < window.innerHeight;
+    if (this.isSegmentTableInView() !== inView) {
+      this.ngZone.run(() => this.isSegmentTableInView.set(inView));
+    }
   };
 
   ngOnDestroy(): void {
@@ -2770,10 +2779,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.shortcutFocusRetryTimer !== null) {
       clearTimeout(this.shortcutFocusRetryTimer);
       this.shortcutFocusRetryTimer = null;
-    }
-    if (this.shortcutHintIntervalHandle !== null) {
-      clearInterval(this.shortcutHintIntervalHandle);
-      this.shortcutHintIntervalHandle = null;
     }
   }
 

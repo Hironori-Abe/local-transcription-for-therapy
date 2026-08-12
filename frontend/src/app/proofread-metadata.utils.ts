@@ -181,3 +181,118 @@ export function getSensitiveEntityHighlightLevelValue(
   const organizationNames = sensitive.organizationNames ?? [];
   return kinds.length > 0 || names.length > 0 || organizationNames.length > 0 ? 'yellow' : 'none';
 }
+
+export function compactProofreadHintTextValue(valueRaw: string, maxLength = 120): string {
+  const value = (valueRaw ?? '').replace(/\s+/g, ' ').trim();
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength)}...`;
+}
+
+export function isPunctuationOnlyProofreadReasonValue(reasonRaw: string): boolean {
+  const reason = (reasonRaw ?? '').trim();
+  return reason === '文末句点の補完'
+    || reason === '句読点・記号の調整'
+    || reason === 'sentence_final_period_added'
+    || reason === 'punctuation_adjustment'
+    || /^「[、。！？…・]」を追加$/.test(reason);
+}
+
+/**
+ * LLM の自由記述ではなく実際の差分から、校正理由を生成する。
+ * 句読点・空白以外も変化した場合は空文字を返し、呼び出し側の原文比較表示へ委ねる。
+ */
+export function describeProofreadDiffReasonValue(previous: string, revised: string): string {
+  if (previous === revised) {
+    return '';
+  }
+  const punctuationMarks = ['、', '。', '！', '？', '!', '?', '…', '・'];
+  const punctuationSet = new Set(punctuationMarks);
+  const isStrippedCharacter = (character: string): boolean =>
+    punctuationSet.has(character)
+    || character === ' '
+    || character === '\t'
+    || character === '\r'
+    || character === '\n'
+    || character === '　';
+  const strip = (value: string): string =>
+    Array.from(value).filter((character) => !isStrippedCharacter(character)).join('');
+  if (strip(previous) !== strip(revised)) {
+    return '';
+  }
+
+  const countMarks = (value: string): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const character of value) {
+      if (punctuationSet.has(character)) {
+        counts.set(character, (counts.get(character) ?? 0) + 1);
+      }
+    }
+    return counts;
+  };
+  const before = countMarks(previous);
+  const after = countMarks(revised);
+  const added: string[] = [];
+  let removedAny = false;
+  for (const mark of punctuationMarks) {
+    const delta = (after.get(mark) ?? 0) - (before.get(mark) ?? 0);
+    if (delta > 0) {
+      added.push(mark);
+    } else if (delta < 0) {
+      removedAny = true;
+    }
+  }
+  if (added.length > 0 && !removedAny) {
+    return `${added.join('')}を追加`;
+  }
+  return '句読点・記号の調整';
+}
+
+export function buildSensitiveEntityProofreadHintValue(
+  sensitive: NormalizedSensitiveEntityMetadata
+): string | null {
+  if (!sensitive.hasSensitiveEntity) {
+    return null;
+  }
+  const compactNames = (values: string[]): string =>
+    compactProofreadHintTextValue(values.length > 0 ? values.join('、') : '名称不明');
+  const redNames = [...sensitive.personNames, ...sensitive.locationNames];
+  if (sensitive.personNames.length > 0) {
+    return `人名・地名混入の可能性: ${compactNames(redNames)}`;
+  }
+  if (sensitive.locationNames.length > 0) {
+    return `地名混入の可能性: ${compactNames(sensitive.locationNames)}`;
+  }
+  if (sensitive.organizationNames.length > 0) {
+    return `組織名など混入の可能性: ${compactNames(sensitive.organizationNames)}`;
+  }
+  if (sensitive.kinds.includes('person') && sensitive.personDetectionSource === 'honorific') {
+    return '人名混入の可能性: さん／君などの検出';
+  }
+  return `固有名詞混入の可能性: ${compactNames(sensitive.names)}`;
+}
+
+export function buildProofreadHintValue(
+  originalText: string,
+  revisedText: string,
+  reasonRaw: string,
+  sensitiveEntityRaw?: unknown
+): string {
+  const sensitive = normalizeSensitiveEntityMetadataValue(sensitiveEntityRaw);
+  const sensitiveHint = buildSensitiveEntityProofreadHintValue(sensitive);
+  if (sensitiveHint) {
+    return sensitiveHint;
+  }
+  const reason = (reasonRaw ?? '').trim();
+  if (isPunctuationOnlyProofreadReasonValue(reason)) {
+    return `句読点の調整：（元文） ${compactProofreadHintTextValue(originalText)}`;
+  }
+  if (reason && reason !== 'llm_correction') {
+    return `AI: ${compactProofreadHintTextValue(reason)}`;
+  }
+  if (!revisedText || revisedText === originalText) {
+    return 'AI：（変更無し）';
+  }
+  return `AI（元文）: 「${compactProofreadHintTextValue(originalText)}」`;
+}

@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildProofreadHintValue,
+  buildSensitiveEntityProofreadHintValue,
+  compactProofreadHintTextValue,
+  describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
+  isPunctuationOnlyProofreadReasonValue,
   normalizeLintIssuesValue,
   normalizeProofreadMetadataValue,
   normalizeSensitiveEntityMetadataValue
@@ -77,4 +82,67 @@ test('getSensitiveEntityHighlightLevelValue preserves red, yellow, and none rule
   assert.equal(getSensitiveEntityHighlightLevelValue({ hasSensitiveEntity: true, locationNames: ['東京'] }), 'red');
   assert.equal(getSensitiveEntityHighlightLevelValue({ hasSensitiveEntity: true, organizationNames: ['相談室'] }), 'yellow');
   assert.equal(getSensitiveEntityHighlightLevelValue({ hasSensitiveEntity: true, kinds: [] }), 'none');
+});
+
+test('describeProofreadDiffReasonValue reports only actual punctuation changes', () => {
+  assert.equal(describeProofreadDiffReasonValue('今日は晴れ', '今日は、晴れ。'), '、。を追加');
+  assert.equal(describeProofreadDiffReasonValue('今日は、晴れ。', '今日は晴れ！'), '句読点・記号の調整');
+  assert.equal(describeProofreadDiffReasonValue('今日は晴れ', '今日は雨'), '');
+  assert.equal(describeProofreadDiffReasonValue('同じ', '同じ'), '');
+  assert.equal(describeProofreadDiffReasonValue('a b', 'a\tb'), '句読点・記号の調整');
+});
+
+test('punctuation reason and compact text helpers preserve existing display rules', () => {
+  assert.equal(isPunctuationOnlyProofreadReasonValue(' 文末句点の補完 '), true);
+  assert.equal(isPunctuationOnlyProofreadReasonValue('「。」を追加'), true);
+  assert.equal(isPunctuationOnlyProofreadReasonValue('llm_correction'), false);
+  assert.equal(compactProofreadHintTextValue('  a\n  b  '), 'a b');
+  assert.equal(compactProofreadHintTextValue('abcdef', 3), 'abc...');
+});
+
+test('sensitive-entity hints preserve person, location, organization, and honorific wording', () => {
+  const base = {
+    hasSensitiveEntity: true,
+    kinds: [] as string[],
+    names: [] as string[],
+    personNames: [] as string[],
+    organizationNames: [] as string[],
+    locationNames: [] as string[],
+    personDetectionSource: ''
+  };
+  assert.equal(buildSensitiveEntityProofreadHintValue({ ...base, hasSensitiveEntity: false }), null);
+  assert.equal(
+    buildSensitiveEntityProofreadHintValue({ ...base, personNames: ['山田'], locationNames: ['東京'] }),
+    '人名・地名混入の可能性: 山田、東京'
+  );
+  assert.equal(
+    buildSensitiveEntityProofreadHintValue({ ...base, locationNames: ['東京'] }),
+    '地名混入の可能性: 東京'
+  );
+  assert.equal(
+    buildSensitiveEntityProofreadHintValue({ ...base, organizationNames: ['相談室'] }),
+    '組織名など混入の可能性: 相談室'
+  );
+  assert.equal(
+    buildSensitiveEntityProofreadHintValue({ ...base, kinds: ['person'], personDetectionSource: 'honorific' }),
+    '人名混入の可能性: さん／君などの検出'
+  );
+});
+
+test('buildProofreadHintValue prioritizes warnings and preserves fallback wording', () => {
+  assert.equal(
+    buildProofreadHintValue('元文', '修正文', '文末句点の補完'),
+    '句読点の調整：（元文） 元文'
+  );
+  assert.equal(buildProofreadHintValue('元文', '修正文', '表記修正'), 'AI: 表記修正');
+  assert.equal(buildProofreadHintValue('同じ', '同じ', 'llm_correction'), 'AI：（変更無し）');
+  assert.equal(buildProofreadHintValue('元文', '修正文', 'llm_correction'), 'AI（元文）: 「元文」');
+  assert.equal(
+    buildProofreadHintValue('元文', '修正文', '表記修正', {
+      hasSensitiveEntity: true,
+      kinds: ['location'],
+      names: ['東京']
+    }),
+    '地名混入の可能性: 東京'
+  );
 });

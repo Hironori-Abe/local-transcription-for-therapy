@@ -36,11 +36,12 @@ import {
   normalizeTranscriptionLanguageValue
 } from './app-utils';
 import {
+  buildProofreadHintValue,
+  describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
+  isPunctuationOnlyProofreadReasonValue,
   normalizeProofreadMetadataValue,
-  normalizeSensitiveEntityMetadataValue,
   type ExportProofreadMetadata,
-  type NormalizedSensitiveEntityMetadata,
   type ProofreadHighlightLevel,
   type SensitiveEntityHighlightInput
 } from './proofread-metadata.utils';
@@ -1540,22 +1541,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     reasonRaw: string,
     sensitiveEntityRaw?: unknown
   ): string {
-    const sensitive = this.normalizeSensitiveEntityMetadata(sensitiveEntityRaw);
-    const sensitiveHint = this.buildSensitiveEntityProofreadHint(sensitive);
-    if (sensitiveHint) {
-      return sensitiveHint;
-    }
-    const reason = (reasonRaw ?? '').trim();
-    if (this.isPunctuationOnlyProofreadReason(reason)) {
-      return `句読点の調整：（元文） ${this.compactProofreadHintText(originalText)}`;
-    }
-    if (reason && !this.isPunctuationOnlyProofreadReason(reason) && reason !== 'llm_correction') {
-      return `AI: ${this.compactProofreadHintText(reason)}`;
-    }
-    if (!revisedText || revisedText === originalText) {
-      return 'AI：（変更無し）';
-    }
-    return `AI（元文）: 「${this.compactProofreadHintText(originalText)}」`;
+    return buildProofreadHintValue(originalText, revisedText, reasonRaw, sensitiveEntityRaw);
   }
 
   /**
@@ -1568,65 +1554,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * - 単語レベルの変更: 空文字を返し、buildProofreadHint 側の（元文）比較表示に委ねる。
    */
   private describeProofreadDiffReason(prev: string, revised: string): string {
-    if (prev === revised) {
-      return '';
-    }
-    const punctMarks = ['、', '。', '！', '？', '!', '?', '…', '・'];
-    const punctSet = new Set(punctMarks);
-    const isStripChar = (c: string): boolean =>
-      punctSet.has(c) || c === ' ' || c === '\t' || c === '\r' || c === '\n' || c === '　';
-    const strip = (s: string): string => Array.from(s).filter((c) => !isStripChar(c)).join('');
-    if (strip(prev) !== strip(revised)) {
-      // 句読点以外（語）も変わっている → （元文）比較表示に委ねる
-      return '';
-    }
-    const countMarks = (s: string): Map<string, number> => {
-      const m = new Map<string, number>();
-      for (const c of s) {
-        if (punctSet.has(c)) {
-          m.set(c, (m.get(c) ?? 0) + 1);
-        }
-      }
-      return m;
-    };
-    const before = countMarks(prev);
-    const after = countMarks(revised);
-    const added: string[] = [];
-    let removedAny = false;
-    for (const mark of punctMarks) {
-      const delta = (after.get(mark) ?? 0) - (before.get(mark) ?? 0);
-      if (delta > 0) {
-        added.push(mark);
-      } else if (delta < 0) {
-        removedAny = true;
-      }
-    }
-    if (added.length > 0 && !removedAny) {
-      return `${added.join('')}を追加`;
-    }
-    return '句読点・記号の調整';
-  }
-
-  private buildSensitiveEntityProofreadHint(sensitive: NormalizedSensitiveEntityMetadata): string | null {
-    if (!sensitive.hasSensitiveEntity) {
-      return null;
-    }
-    const compactNames = (values: string[]): string =>
-      this.compactProofreadHintText(values.length > 0 ? values.join('、') : '名称不明');
-    const redNames = [...sensitive.personNames, ...sensitive.locationNames];
-    if (sensitive.personNames.length > 0) {
-      return `人名・地名混入の可能性: ${compactNames(redNames)}`;
-    }
-    if (sensitive.locationNames.length > 0) {
-      return `地名混入の可能性: ${compactNames(sensitive.locationNames)}`;
-    }
-    if (sensitive.organizationNames.length > 0) {
-      return `組織名など混入の可能性: ${compactNames(sensitive.organizationNames)}`;
-    }
-    if (sensitive.kinds.includes('person') && sensitive.personDetectionSource === 'honorific') {
-      return '人名混入の可能性: さん／君などの検出';
-    }
-    return `固有名詞混入の可能性: ${compactNames(sensitive.names)}`;
+    return describeProofreadDiffReasonValue(prev, revised);
   }
 
   private normalizeProofreadMetadata(
@@ -1645,10 +1573,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       sensitiveEntityRaw,
       lintIssuesRaw
     );
-  }
-
-  private normalizeSensitiveEntityMetadata(raw: unknown): NormalizedSensitiveEntityMetadata {
-    return normalizeSensitiveEntityMetadataValue(raw);
   }
 
   private getSensitiveEntityHighlightLevel(sensitive?: SensitiveEntityHighlightInput): ProofreadHighlightLevel {
@@ -1685,12 +1609,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private isPunctuationOnlyProofreadReason(reasonRaw: string): boolean {
-    const reason = (reasonRaw ?? '').trim();
-    return reason === '文末句点の補完'
-      || reason === '句読点・記号の調整'
-      || reason === 'sentence_final_period_added'
-      || reason === 'punctuation_adjustment'
-      || /^「[、。！？…・]」を追加$/.test(reason);
+    return isPunctuationOnlyProofreadReasonValue(reasonRaw);
   }
 
   async onSegmentRowFilterChange(value: string): Promise<void> {
@@ -1773,18 +1692,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private isCautionSegment(segment: TranscriptionSegment): boolean {
     const hasUnassignedSpeaker = this.getAssignedSpeakerKey(segment).trim().length === 0;
     return this.getProofreadHighlightLevel(segment.id) !== 'none' || hasUnassignedSpeaker;
-  }
-
-  private compactProofreadHintText(valueRaw: string): string {
-    return this.compactProofreadHintTextWithMax(valueRaw, 120);
-  }
-
-  private compactProofreadHintTextWithMax(valueRaw: string, maxLen: number): string {
-    const value = (valueRaw ?? '').replace(/\s+/g, ' ').trim();
-    if (value.length <= maxLen) {
-      return value;
-    }
-    return `${value.slice(0, maxLen)}...`;
   }
 
   formatEstimatedMinutes(minutes: number | null): string {

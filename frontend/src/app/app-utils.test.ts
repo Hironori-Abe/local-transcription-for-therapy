@@ -2,14 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  appendRuntimeEstimateSampleValue,
   buildDefaultExportFileName,
   buildDocxExportRowsValue,
   buildExportSpeakerLabelByRowIdValue,
+  buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
   buildLocationDetectionScopeValue,
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
+  calculateRuntimeEstimateValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatMinuteSecondValue,
@@ -28,7 +31,12 @@ import {
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
-  normalizeTranscriptionLanguageValue
+  normalizeTranscriptionLanguageValue,
+  parseRuntimeEstimateSamplesValue,
+  pickRuntimeEstimateSamplesValue,
+  resolveRuntimeLogAudioSecondsValue,
+  resolveEstimateComputeTypeValue,
+  secondsToEstimatedMinutesValue
 } from './app-utils.ts';
 
 test('buildDefaultExportFileName preserves every existing filename format', () => {
@@ -68,6 +76,138 @@ test('normalizeErrorMessageValue safely handles values JSON cannot represent', (
   assert.equal(normalizeErrorMessageValue(undefined), fallback);
   assert.equal(normalizeErrorMessageValue(Symbol('error')), fallback);
   assert.equal(normalizeErrorMessageValue({ toJSON: () => { throw new Error('serialize failure'); } }), fallback);
+});
+
+test('buildFinalInitialPromptValue preserves prompt trimming and concatenation', () => {
+  assert.equal(
+    buildFinalInitialPromptValue('  基本指示  ', '  固有名詞を維持する  '),
+    '基本指示\n追加指示: 固有名詞を維持する'
+  );
+  assert.equal(buildFinalInitialPromptValue('  基本指示  ', ' \n '), '基本指示');
+  assert.equal(buildFinalInitialPromptValue('', '追加のみ'), '\n追加指示: 追加のみ');
+  assert.equal(buildFinalInitialPromptValue(' \n ', ''), '');
+});
+
+test('runtime estimate helpers preserve minute rounding and effective compute types', () => {
+  assert.equal(secondsToEstimatedMinutesValue(Number.NaN), 0);
+  assert.equal(secondsToEstimatedMinutesValue(Number.POSITIVE_INFINITY), 0);
+  assert.equal(secondsToEstimatedMinutesValue(0), 0);
+  assert.equal(secondsToEstimatedMinutesValue(-1), 0);
+  assert.equal(secondsToEstimatedMinutesValue(0.1), 1);
+  assert.equal(secondsToEstimatedMinutesValue(60), 1);
+  assert.equal(secondsToEstimatedMinutesValue(60.1), 2);
+  assert.equal(resolveEstimateComputeTypeValue('cpu', 'float32'), 'int8');
+  assert.equal(resolveEstimateComputeTypeValue('cuda', 'auto'), 'float16');
+  assert.equal(resolveEstimateComputeTypeValue('cuda', 'int8_float16'), 'int8_float16');
+});
+
+test('runtime estimate sample selection requires an exact profile match', () => {
+  const samples = [
+    { audioSeconds: 60, elapsedSeconds: 30, diarization: true, device: 'cuda', computeType: 'float16', createdAt: 1 },
+    { audioSeconds: 90, elapsedSeconds: 45, diarization: true, device: 'cuda', computeType: 'float16', createdAt: 2 },
+    { audioSeconds: 60, elapsedSeconds: 60, diarization: false, device: 'cuda', computeType: 'float16', createdAt: 3 },
+    { audioSeconds: 60, elapsedSeconds: 120, diarization: true, device: 'cpu', computeType: 'int8', createdAt: 4 },
+    { audioSeconds: 60, elapsedSeconds: 40, diarization: true, device: 'cuda', computeType: 'float32', createdAt: 5 }
+  ];
+
+  assert.deepEqual(
+    pickRuntimeEstimateSamplesValue(samples, true, 'cuda', 'float16'),
+    [samples[0], samples[1]]
+  );
+  assert.deepEqual(pickRuntimeEstimateSamplesValue(samples, false, 'cuda', 'float16'), [samples[2]]);
+  assert.deepEqual(pickRuntimeEstimateSamplesValue(samples, true, 'cpu', 'int8'), [samples[3]]);
+  assert.deepEqual(pickRuntimeEstimateSamplesValue(samples, false, 'cpu', 'int8'), []);
+  assert.equal(samples.length, 5);
+});
+
+test('saved runtime estimate samples skip corrupt entries and normalize devices', () => {
+  const serialized = JSON.stringify([
+    null,
+    'invalid',
+    {},
+    { audioSeconds: 60, elapsedSeconds: 30, diarization: true, device: 'cpu', computeType: 'int8', createdAt: 1 },
+    { audioSeconds: 90, elapsedSeconds: 45, diarization: false, device: 'unknown', computeType: 'float16', createdAt: 2, fileSizeBytes: 1234 },
+    { audioSeconds: -1, elapsedSeconds: -2, diarization: true, computeType: 'float32', createdAt: 3 },
+    { audioSeconds: 1, elapsedSeconds: 1, diarization: 'yes', computeType: 'float16', createdAt: 4 }
+  ]);
+
+  assert.deepEqual(parseRuntimeEstimateSamplesValue(serialized, false), [
+    { audioSeconds: 60, elapsedSeconds: 30, diarization: true, device: 'cpu', computeType: 'int8', createdAt: 1, fileSizeBytes: null },
+    { audioSeconds: 90, elapsedSeconds: 45, diarization: false, device: 'cuda', computeType: 'float16', createdAt: 2, fileSizeBytes: 1234 },
+    { audioSeconds: -1, elapsedSeconds: -2, diarization: true, device: 'cuda', computeType: 'float32', createdAt: 3, fileSizeBytes: null }
+  ]);
+  assert.equal(parseRuntimeEstimateSamplesValue(serialized, true)[1]?.device, 'cpu');
+  assert.deepEqual(parseRuntimeEstimateSamplesValue(null, false), []);
+  assert.deepEqual(parseRuntimeEstimateSamplesValue('{', false), []);
+  assert.deepEqual(parseRuntimeEstimateSamplesValue('{}', false), []);
+});
+
+test('runtime estimate sample append rejects invalid durations and keeps the newest 120', () => {
+  const original = Array.from({ length: 120 }, (_, index) => ({
+    audioSeconds: 60,
+    elapsedSeconds: 30,
+    diarization: true,
+    device: 'cuda',
+    computeType: 'float16',
+    createdAt: index
+  }));
+  const added = {
+    audioSeconds: 90,
+    elapsedSeconds: 45,
+    diarization: true,
+    device: 'cuda',
+    computeType: 'float16',
+    createdAt: 120
+  };
+
+  const next = appendRuntimeEstimateSampleValue(original, added);
+  assert.equal(next?.length, 120);
+  assert.equal(next?.[0]?.createdAt, 1);
+  assert.equal(next?.[119]?.createdAt, 120);
+  assert.equal(original.length, 120);
+  assert.equal(original[0]?.createdAt, 0);
+  assert.equal(appendRuntimeEstimateSampleValue(original, { ...added, audioSeconds: 0 }), null);
+  assert.equal(appendRuntimeEstimateSampleValue(original, { ...added, elapsedSeconds: Number.NaN }), null);
+});
+
+test('runtime log audio duration prefers metadata and falls back to the latest segment end', () => {
+  const segments = [{ end: 12.5 }, { end: '20' }, { end: -1 }, { end: 'invalid' }];
+  assert.equal(resolveRuntimeLogAudioSecondsValue(30, segments), 30);
+  assert.equal(resolveRuntimeLogAudioSecondsValue(Number.NaN, segments), 20);
+  assert.equal(resolveRuntimeLogAudioSecondsValue(null, segments), 20);
+  assert.equal(resolveRuntimeLogAudioSecondsValue(0, [{ end: 0 }, { end: Number.NaN }]), null);
+});
+
+test('runtime estimate calculation preserves RTF percentile selection and readiness', () => {
+  const samples = [0.5, 0.1, 0.4, 0.3, 0.2].map((rtf, index) => ({
+    audioSeconds: 100,
+    elapsedSeconds: 100 * rtf,
+    diarization: true,
+    device: 'cuda',
+    computeType: 'float16',
+    createdAt: index
+  }));
+  assert.deepEqual(calculateRuntimeEstimateValue(600, samples), {
+    ready: true,
+    minMinutes: 2,
+    avgMinutes: 3,
+    avgSeconds: 180
+  });
+  assert.deepEqual(calculateRuntimeEstimateValue(600, samples.slice(0, 4)), {
+    ready: false,
+    minMinutes: null,
+    avgMinutes: null,
+    avgSeconds: null
+  });
+  assert.deepEqual(calculateRuntimeEstimateValue(600, [
+    ...samples.slice(0, 4),
+    { ...samples[4], audioSeconds: 0 }
+  ]), {
+    ready: false,
+    minMinutes: null,
+    avgMinutes: null,
+    avgSeconds: null
+  });
 });
 
 test('document export speaker labels preserve numbering and placeholder rules', () => {

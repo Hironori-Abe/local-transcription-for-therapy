@@ -1,5 +1,6 @@
 export type DefaultExportFileKind = 'docx' | 'xlsx' | 'srt' | 'json' | 'runtime-csv';
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
+export type ConcreteComputeType = Exclude<NormalizedComputeType, 'auto'>;
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
 export type NormalizedTranscriptionDevice = 'cuda' | 'cpu';
 export type LocationDetectionMode = 'commonOnly' | 'selectedRegions';
@@ -17,6 +18,23 @@ export interface LocationDetectionScope {
   area?: LocationAreaCode;
   prefectures: string[];
   prefecturesByArea?: Partial<Record<LocationAreaCode, string[]>>;
+}
+
+export interface RuntimeEstimateSample {
+  audioSeconds: number;
+  elapsedSeconds: number;
+  diarization: boolean;
+  device: string;
+  computeType: string;
+  createdAt: number;
+  fileSizeBytes?: number | null;
+}
+
+export interface RuntimeEstimateCalculation {
+  ready: boolean;
+  minMinutes: number | null;
+  avgMinutes: number | null;
+  avgSeconds: number | null;
 }
 
 export interface DocumentExportSourceRow {
@@ -124,6 +142,159 @@ export function normalizeErrorMessageValue(error: unknown): string {
   } catch {
     return '予期しないエラーが発生しました。';
   }
+}
+
+export function buildFinalInitialPromptValue(baseRaw: string, extraRaw: string): string {
+  const base = baseRaw.trim();
+  const extra = extraRaw.trim();
+  if (!extra) {
+    return base;
+  }
+  return `${base}\n追加指示: ${extra}`;
+}
+
+export function secondsToEstimatedMinutesValue(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(seconds / 60));
+}
+
+export function resolveEstimateComputeTypeValue(
+  transcriptionDevice: string,
+  selectedComputeType: NormalizedComputeType
+): ConcreteComputeType {
+  if (transcriptionDevice === 'cpu') {
+    return 'int8';
+  }
+  return selectedComputeType === 'auto' ? 'float16' : selectedComputeType;
+}
+
+export function pickRuntimeEstimateSamplesValue(
+  samples: ReadonlyArray<RuntimeEstimateSample>,
+  diarization: boolean,
+  device: string,
+  computeType: ConcreteComputeType
+): RuntimeEstimateSample[] {
+  return samples.filter((sample) =>
+    sample.diarization === diarization
+    && sample.device === device
+    && sample.computeType === computeType
+  );
+}
+
+export function parseRuntimeEstimateSamplesValue(
+  serialized: string | null,
+  cpuOnly: boolean
+): RuntimeEstimateSample[] {
+  if (!serialized) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  const samples: RuntimeEstimateSample[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== 'object') {
+      continue;
+    }
+    const sample = value as Record<string, unknown>;
+    if (
+      !Number.isFinite(sample['audioSeconds'])
+      || !Number.isFinite(sample['elapsedSeconds'])
+      || typeof sample['diarization'] !== 'boolean'
+      || typeof sample['computeType'] !== 'string'
+      || !Number.isFinite(sample['createdAt'])
+    ) {
+      continue;
+    }
+    samples.push({
+      audioSeconds: Number(sample['audioSeconds']),
+      elapsedSeconds: Number(sample['elapsedSeconds']),
+      diarization: sample['diarization'],
+      device: typeof sample['device'] === 'string'
+        ? normalizeTranscriptionDeviceValue(sample['device'], cpuOnly)
+        : 'cuda',
+      computeType: sample['computeType'],
+      createdAt: Number(sample['createdAt']),
+      fileSizeBytes: Number.isFinite(sample['fileSizeBytes'])
+        ? Number(sample['fileSizeBytes'])
+        : null
+    });
+  }
+  return samples;
+}
+
+export function appendRuntimeEstimateSampleValue(
+  samples: ReadonlyArray<RuntimeEstimateSample>,
+  sample: RuntimeEstimateSample,
+  maxSamples = 120
+): RuntimeEstimateSample[] | null {
+  if (!Number.isFinite(sample.audioSeconds) || sample.audioSeconds <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(sample.elapsedSeconds) || sample.elapsedSeconds <= 0) {
+    return null;
+  }
+  const next = [...samples, sample];
+  return next.length > maxSamples ? next.slice(next.length - maxSamples) : next;
+}
+
+export function resolveRuntimeLogAudioSecondsValue(
+  metadataDuration: number | null,
+  segments: ReadonlyArray<{ end: unknown }>
+): number | null {
+  if (metadataDuration !== null && Number.isFinite(metadataDuration) && metadataDuration > 0) {
+    return metadataDuration;
+  }
+  const segmentDuration = Math.max(
+    0,
+    ...segments
+      .map((segment) => Number(segment.end))
+      .filter((end) => Number.isFinite(end) && end > 0)
+  );
+  return segmentDuration > 0 ? segmentDuration : null;
+}
+
+export function calculateRuntimeEstimateValue(
+  durationSeconds: number,
+  samples: ReadonlyArray<RuntimeEstimateSample>,
+  minRequired = 5
+): RuntimeEstimateCalculation {
+  const unavailable: RuntimeEstimateCalculation = {
+    ready: false,
+    minMinutes: null,
+    avgMinutes: null,
+    avgSeconds: null
+  };
+  if (samples.length < minRequired) {
+    return unavailable;
+  }
+
+  const rtfs = samples
+    .map((sample) => sample.elapsedSeconds / sample.audioSeconds)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (rtfs.length < minRequired) {
+    return unavailable;
+  }
+
+  const minRtf = rtfs[Math.floor((rtfs.length - 1) * 0.3)];
+  const avgRtf = rtfs[Math.floor((rtfs.length - 1) * 0.6)];
+  const avgSeconds = durationSeconds * avgRtf;
+  return {
+    ready: true,
+    minMinutes: secondsToEstimatedMinutesValue(durationSeconds * minRtf),
+    avgMinutes: secondsToEstimatedMinutesValue(avgSeconds),
+    avgSeconds: Number.isFinite(avgSeconds) && avgSeconds > 0 ? avgSeconds : null
+  };
 }
 
 export function buildExportSpeakerLabelByRowIdValue(

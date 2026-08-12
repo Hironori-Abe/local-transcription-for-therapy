@@ -21,13 +21,16 @@ import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.co
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import {
+  appendRuntimeEstimateSampleValue,
   buildDefaultExportFileName,
   buildDocxExportRowsValue,
+  buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
   buildLocationDetectionScopeValue,
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
+  calculateRuntimeEstimateValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatMinuteSecondValue,
@@ -45,9 +48,15 @@ import {
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeTranscriptionLanguageValue,
+  parseRuntimeEstimateSamplesValue,
+  pickRuntimeEstimateSamplesValue,
+  resolveRuntimeLogAudioSecondsValue,
+  resolveEstimateComputeTypeValue,
+  type ConcreteComputeType,
   type DocumentExportSourceRow,
   type LocationAreaCode,
-  type LocationDetectionScope
+  type LocationDetectionScope,
+  type RuntimeEstimateSample
 } from './app-utils';
 import {
   buildDiarizationEditedTextMapValue,
@@ -158,18 +167,7 @@ interface ReadTextFileResponse {
 }
 
 type ComputeTypeOption = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
-type ConcreteComputeType = Exclude<ComputeTypeOption, 'auto'>;
 type TranscriptionDeviceOption = 'cuda' | 'cpu';
-interface RuntimeEstimateSample {
-  audioSeconds: number;
-  elapsedSeconds: number;
-  diarization: boolean;
-  device: string;
-  computeType: string;
-  createdAt: number;
-  fileSizeBytes?: number | null;
-}
-
 interface ProofreadSegmentInput {
   id: number;
   text: string;
@@ -1464,12 +1462,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private buildFinalInitialPrompt(): string {
-    const base = this.baseInitialPrompt().trim();
-    const extra = this.initialPrompt().trim();
-    if (!extra) {
-      return base;
-    }
-    return `${base}\n追加指示: ${extra}`;
+    return buildFinalInitialPromptValue(this.baseInitialPrompt(), this.initialPrompt());
   }
 
   private async getDevDemoDataDir(): Promise<string | null> {
@@ -1740,40 +1733,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private recalculateEstimatedTime(durationSeconds: number): void {
     const samples = this.pickEstimateSamplesForCurrentProfile();
     this.estimateSampleCount.set(samples.length);
-    if (samples.length < this.estimateMinRequired) {
-      this.estimateReady.set(false);
-      this.estimatedMinMinutes.set(null);
-      this.estimatedAvgMinutes.set(null);
-      this.estimatedAvgSeconds.set(null);
-      return;
-    }
-
-    const rtfs = samples
-      .map((s) => s.elapsedSeconds / s.audioSeconds)
-      .filter((v) => Number.isFinite(v) && v > 0)
-      .sort((a, b) => a - b);
-    if (rtfs.length < this.estimateMinRequired) {
-      this.estimateReady.set(false);
-      this.estimatedMinMinutes.set(null);
-      this.estimatedAvgMinutes.set(null);
-      this.estimatedAvgSeconds.set(null);
-      return;
-    }
-
-    const minRtf = rtfs[Math.floor((rtfs.length - 1) * 0.3)];
-    const avgRtf = rtfs[Math.floor((rtfs.length - 1) * 0.6)];
-    this.estimateReady.set(true);
-    this.estimatedMinMinutes.set(this.secondsToEstimatedMinutes(durationSeconds * minRtf));
-    this.estimatedAvgMinutes.set(this.secondsToEstimatedMinutes(durationSeconds * avgRtf));
-    const avgSeconds = durationSeconds * avgRtf;
-    this.estimatedAvgSeconds.set(Number.isFinite(avgSeconds) && avgSeconds > 0 ? avgSeconds : null);
-  }
-
-  private secondsToEstimatedMinutes(seconds: number): number {
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      return 0;
-    }
-    return Math.max(1, Math.ceil(seconds / 60));
+    const estimate = calculateRuntimeEstimateValue(durationSeconds, samples, this.estimateMinRequired);
+    this.estimateReady.set(estimate.ready);
+    this.estimatedMinMinutes.set(estimate.minMinutes);
+    this.estimatedAvgMinutes.set(estimate.avgMinutes);
+    this.estimatedAvgSeconds.set(estimate.avgSeconds);
   }
 
   /**
@@ -1822,33 +1786,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     try {
       const raw = window.localStorage.getItem(this.estimateStorageKey);
-      if (!raw) {
-        this.estimateSamples = [];
-        return;
-      }
-      const parsed = JSON.parse(raw) as unknown[];
-      if (!Array.isArray(parsed)) {
-        this.estimateSamples = [];
-        return;
-      }
-      this.estimateSamples = parsed
-        .map((v) => v as Partial<RuntimeEstimateSample>)
-        .filter((s) =>
-          Number.isFinite(s.audioSeconds) &&
-          Number.isFinite(s.elapsedSeconds) &&
-          typeof s.diarization === 'boolean' &&
-          typeof s.computeType === 'string' &&
-          Number.isFinite(s.createdAt)
-        )
-        .map((s) => ({
-          audioSeconds: Number(s.audioSeconds),
-          elapsedSeconds: Number(s.elapsedSeconds),
-          diarization: Boolean(s.diarization),
-          device: typeof s.device === 'string' ? this.normalizeTranscriptionDeviceForEstimate(s.device) : 'cuda',
-          computeType: String(s.computeType),
-          createdAt: Number(s.createdAt),
-          fileSizeBytes: Number.isFinite(s.fileSizeBytes) ? Number(s.fileSizeBytes) : null
-        }));
+      this.estimateSamples = parseRuntimeEstimateSamplesValue(raw, this.cpuOnlyBuild);
     } catch {
       this.estimateSamples = [];
     }
@@ -2132,16 +2070,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private recordEstimateSample(sample: RuntimeEstimateSample): void {
-    if (!Number.isFinite(sample.audioSeconds) || sample.audioSeconds <= 0) {
+    const next = appendRuntimeEstimateSampleValue(this.estimateSamples, sample);
+    if (!next) {
       return;
     }
-    if (!Number.isFinite(sample.elapsedSeconds) || sample.elapsedSeconds <= 0) {
-      return;
-    }
-    this.estimateSamples.push(sample);
-    if (this.estimateSamples.length > 120) {
-      this.estimateSamples = this.estimateSamples.slice(this.estimateSamples.length - 120);
-    }
+    this.estimateSamples = next;
     this.persistEstimateSamples();
   }
 
@@ -2150,37 +2083,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 所要時間ログ用の音声長を補完する。
    */
   private resolveRuntimeLogAudioSeconds(): number | null {
-    const metadataDuration = this.estimatedAudioSeconds();
-    if (metadataDuration !== null && Number.isFinite(metadataDuration) && metadataDuration > 0) {
-      return metadataDuration;
-    }
-    const segmentDuration = Math.max(
-      0,
-      ...(this.result()?.segments ?? [])
-        .map((segment) => Number(segment.end))
-        .filter((end) => Number.isFinite(end) && end > 0)
+    return resolveRuntimeLogAudioSecondsValue(
+      this.estimatedAudioSeconds(),
+      this.result()?.segments ?? []
     );
-    return segmentDuration > 0 ? segmentDuration : null;
   }
 
   private pickEstimateSamplesForCurrentProfile(): RuntimeEstimateSample[] {
     const diarization = this.diarization();
     const device = this.normalizeTranscriptionDeviceForEstimate(this.transcriptionDevice());
     const compute = this.resolveEstimateComputeType();
-    const sameDiarization = this.estimateSamples.filter((s) => s.diarization === diarization);
-    const sameDevice = sameDiarization.filter((s) => s.device === device);
-    return sameDevice.filter((s) => s.computeType === compute);
+    return pickRuntimeEstimateSamplesValue(this.estimateSamples, diarization, device, compute);
   }
 
   private resolveEstimateComputeType(): ConcreteComputeType {
-    if (this.transcriptionDevice() === 'cpu') {
-      return 'int8';
-    }
-    const selected = this.computeType();
-    if (selected !== 'auto') {
-      return selected;
-    }
-    return 'float16';
+    return resolveEstimateComputeTypeValue(this.transcriptionDevice(), this.computeType());
   }
 
   private detectTauriRuntime(): boolean {

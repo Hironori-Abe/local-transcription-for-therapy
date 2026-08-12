@@ -20,6 +20,21 @@ import { PasswordDialogComponent } from './password-dialog.component';
 import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.component';
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
+import {
+  buildDefaultExportFileName,
+  formatAudioDurationValue,
+  formatElapsedMinuteSecondValue,
+  formatMinuteSecondValue,
+  normalizeComputeTypeValue,
+  normalizeLlmMaxBatchValue,
+  normalizeLlmNCtxValue,
+  normalizeLlmParallelValue,
+  normalizeProofreadChunkMaxCharsValue,
+  normalizeProofreadChunkSizeValue,
+  normalizeThemeModeValue,
+  normalizeTranscriptionDeviceValue,
+  normalizeTranscriptionLanguageValue
+} from './app-utils';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -1806,17 +1821,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeProofreadChunkSize(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 12;
-    }
-    return Math.max(1, Math.min(64, Math.round(value)));
+    return normalizeProofreadChunkSizeValue(value);
   }
 
   private normalizeProofreadChunkMaxChars(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 1200;
-    }
-    return Math.max(200, Math.min(6000, Math.round(value)));
+    return normalizeProofreadChunkMaxCharsValue(value);
   }
 
   private isPunctuationOnlyProofreadReason(reasonRaw: string): boolean {
@@ -1930,13 +1939,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   formatAudioDuration(seconds: number | null): string {
-    if (seconds === null || Number.isNaN(seconds) || seconds <= 0) {
-      return '-';
-    }
-    const total = Math.floor(seconds);
-    const min = Math.floor(total / 60);
-    const sec = total % 60;
-    return `${min}分${sec}秒`;
+    return formatAudioDurationValue(seconds);
   }
 
   getAudioDurationMessage(): string {
@@ -2291,7 +2294,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeThemeMode(value: unknown): ThemeMode {
-    return value === 'light' || value === 'dark' ? value : 'system';
+    return normalizeThemeModeValue(value);
   }
 
   private themeModeLabel(mode: ThemeMode): string {
@@ -2362,26 +2365,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeComputeType(valueRaw: string): ComputeTypeOption {
-    const value = (valueRaw ?? '').trim().toLowerCase();
-    if (this.cpuOnlyBuild && value !== 'auto' && value !== 'int8' && value !== 'float32') {
-      return 'float32';
-    }
-    switch (value) {
-      case 'auto':
-      case 'float16':
-      case 'float32':
-      case 'int8_float16':
-      case 'int8':
-        return value;
-      default:
-        return this.cpuOnlyBuild ? 'float32' : 'auto';
-    }
+    return normalizeComputeTypeValue(valueRaw, this.cpuOnlyBuild);
   }
 
   /** 文字起こし言語コードを正規化する。選択肢に無い値は既定の ja に戻す。 */
   private normalizeTranscriptionLanguage(valueRaw: string): string {
-    const value = (valueRaw ?? '').trim().toLowerCase();
-    return this.transcriptionLanguageOptions.some((o) => o.value === value) ? value : 'ja';
+    return normalizeTranscriptionLanguageValue(valueRaw, this.transcriptionLanguageOptions);
   }
 
   onTranscriptionLanguageChange(value: string): void {
@@ -2390,25 +2379,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeTranscriptionDevice(valueRaw: string): TranscriptionDeviceOption {
-    if (this.cpuOnlyBuild) {
-      return 'cpu';
-    }
-    const value = (valueRaw ?? '').trim().toLowerCase();
-    if (value === 'cpu') {
-      return 'cpu';
-    }
-    return 'cuda';
+    return normalizeTranscriptionDeviceValue(valueRaw, this.cpuOnlyBuild);
   }
 
   private normalizeTranscriptionDeviceForEstimate(valueRaw: string): 'cuda' | 'cpu' {
-    if (this.cpuOnlyBuild) {
-      return 'cpu';
-    }
-    const value = (valueRaw ?? '').trim().toLowerCase();
-    if (value === 'cpu') {
-      return 'cpu';
-    }
-    return 'cuda';
+    return normalizeTranscriptionDeviceValue(valueRaw, this.cpuOnlyBuild);
   }
 
   private normalizeLocationArea(valueRaw: unknown): LocationAreaCode {
@@ -4746,8 +4721,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const targetPath = await save({
       title: '文字起こし結果を保存',
       defaultPath: hasPassword
-        ? this.buildJsonDefaultFileName().replace(/\.json$/, '.zip')
-        : this.buildJsonDefaultFileName(),
+        ? buildDefaultExportFileName('json').replace(/\.json$/, '.zip')
+        : buildDefaultExportFileName('json'),
       filters: hasPassword
         ? [{ name: 'ZIP', extensions: ['zip'] }]
         : [{ name: 'JSON', extensions: ['json'] }]
@@ -4791,7 +4766,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     const targetPath = await save({
       title: '文字起こし結果（Word）を保存',
-      defaultPath: this.buildWordDefaultFileName(),
+      defaultPath: buildDefaultExportFileName('docx'),
       filters: [{ name: 'Word', extensions: ['docx'] }]
     });
 
@@ -4838,7 +4813,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     const targetPath = await save({
       title: '文字起こし結果（Excel）を保存',
-      defaultPath: this.buildXlsxDefaultFileName(),
+      defaultPath: buildDefaultExportFileName('xlsx'),
       filters: [{ name: 'Excel', extensions: ['xlsx'] }]
     });
 
@@ -4890,8 +4865,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const targetPath = await save({
       title: '文字起こし結果（SRT字幕）を保存',
       defaultPath: hasPassword
-        ? this.buildSrtDefaultFileName().replace(/\.srt$/, '.zip')
-        : this.buildSrtDefaultFileName(),
+        ? buildDefaultExportFileName('srt').replace(/\.srt$/, '.zip')
+        : buildDefaultExportFileName('srt'),
       filters: hasPassword
         ? [{ name: 'パスワード付きZIP', extensions: ['zip'] }]
         : [{ name: 'SRT字幕', extensions: ['srt'] }]
@@ -4931,7 +4906,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.error.set('');
     const targetPath = await save({
       title: '文字起こし・AI句読点付与 所要時間ログを保存',
-      defaultPath: this.buildEstimateLogDefaultFileName(),
+      defaultPath: buildDefaultExportFileName('runtime-csv'),
       filters: [{ name: 'CSV', extensions: ['csv'] }]
     });
 
@@ -4950,62 +4925,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.error.set(this.normalizeErrorMessage(error));
     }
-  }
-
-  private buildWordDefaultFileName(): string {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mi = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}.docx`;
-  }
-
-  private buildXlsxDefaultFileName(): string {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mi = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    const msec = String(now.getMilliseconds()).padStart(3, '0');
-    return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}_${msec}.xlsx`;
-  }
-
-  private buildSrtDefaultFileName(): string {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mi = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}.srt`;
-  }
-
-  private buildJsonDefaultFileName(): string {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mi = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    return `lott_${yyyy}${mm}${dd}_${hh}${mi}${ss}.json`;
-  }
-
-  private buildEstimateLogDefaultFileName(): string {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mi = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
-    return `lott_runtime_log_${yyyy}${mm}${dd}_${hh}${mi}${ss}.csv`;
   }
 
   private focusFirstSpeakerAliasInput(): void {
@@ -6335,18 +6254,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeLlmNCtx(value: number): number {
-    if (!Number.isFinite(value) || value <= 0) return 0; // 0=自動
-    return Math.max(4096, Math.min(131072, Math.round(value / 512) * 512));
+    return normalizeLlmNCtxValue(value);
   }
 
   private normalizeLlmMaxBatch(value: number): number {
-    if (!Number.isFinite(value)) return 40;
-    return Math.max(1, Math.min(100, Math.round(value)));
+    return normalizeLlmMaxBatchValue(value);
   }
 
   private normalizeLlmParallel(value: number): number {
-    if (!Number.isFinite(value) || value <= 0) return 0;
-    return Math.max(1, Math.min(24, Math.round(value)));
+    return normalizeLlmParallelValue(value);
   }
 
   private getStoredLlmInferenceParams(): { nCtx: number; maxBatch: number } {
@@ -7400,19 +7316,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   formatMinuteSecond(seconds: number): string {
-    const totalSec = Math.max(0, Math.floor(seconds));
-    const min = Math.floor(totalSec / 60);
-    const sec = totalSec % 60;
-    const mm = String(min).padStart(2, '0');
-    const ss = String(sec).padStart(2, '0');
-    return `${mm}:${ss}`;
+    return formatMinuteSecondValue(seconds);
   }
 
   formatElapsedMinuteSecond(seconds: number): string {
-    const totalSec = Math.max(0, Math.floor(seconds));
-    const min = Math.floor(totalSec / 60);
-    const sec = totalSec % 60;
-    return `${min}分${sec}秒`;
+    return formatElapsedMinuteSecondValue(seconds);
   }
 
   isSegmentPlaying(segmentId: number): boolean {

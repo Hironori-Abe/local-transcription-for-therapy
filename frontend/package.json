@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "start": "ng serve --host 0.0.0.0 --port 4200",
-    "build": "ng build"
+    "build": "ng build",
+    "test": "node --test src/app/app-utils.test.ts"
   },
   "dependencies": {
     "@angular/animations": "^21.2.17",

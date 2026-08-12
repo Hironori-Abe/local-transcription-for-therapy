@@ -22,41 +22,126 @@ import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import {
   appendRuntimeEstimateSampleValue,
+  aggregateDownloadProgressPercentValue,
+  arrayBufferToBase64Value,
   buildDefaultExportFileName,
   buildDocxExportRowsValue,
   buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
   buildLocationDetectionScopeValue,
+  buildConsecutiveSpeakerRunMapValue,
+  buildSegmentRowNumberMapValue,
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
+  buildUniqueSpeakersValue,
+  buildVoiceInputContextValue,
+  canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
+  changedRangeEndValue,
+  coalescingInputKindValue,
+  countSubstringOccurrencesValue,
+  computeEnvBackendLabelValue,
+  confirmDialogButtonClassValue,
+  displaySpeakerValue,
+  downloadProgressBytesLabelValue,
+  downloadProgressPercentValue,
+  editorVoiceInputDownloadButtonColorValue,
+  editorVoiceInputMemoryTierValue,
+  editorVoiceInputMemoryWarningValue,
+  editorVoiceInputUnavailableTooltipValue,
+  encodePcm16WavValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
+  formatEstimatedMinutesValue,
   formatMinuteSecondValue,
+  formatOverallProofreadProgressValue,
+  filterOverallProofreadVisibleItemsValue,
+  generateNextSegmentIdValue,
+  getAudioPreprocessPresetHintValue,
+  getAudioPreprocessSettingsForPresetValue,
+  getAudioDurationMessageValue,
+  getEditableTextFromMapValue,
+  getEstimatedTimeMessageValue,
+  getImportCompletedMessageValue,
+  getLlmModelFileNameValue,
+  getProgressStageOrderValue,
   getLocationAreaPrefectureCodesValue,
+  getSpeakerColorClassValue,
+  gpuDeviceLabelValue,
+  gpuSetupHintValue,
+  hasFallbackInTranscriptionResultValue,
+  isGemma4DefaultLlmModelFileNameValue,
+  isGemma4DefaultLlmModelPathValue,
+  isDiarizationModelMissingValue,
+  isJapaneseLanguageValue,
+  isPlaybackDisabledValue,
+  isVramOomErrorValue,
+  levenshteinDistanceValue,
+  llmBackendModeHintValue,
+  llmBackendModeOptionsValue,
+  llmBackendSelectionValue,
+  llmNCtxHintValue,
+  llmParallelHintValue,
+  matchPlaybackShortcutCodeValue,
+  mergeFloat32ChunksValue,
   normalizeComputeTypeValue,
+  normalizeDevEmulationModeValue,
   normalizeErrorMessageValue,
   normalizeLlmMaxBatchValue,
   normalizeLlmNCtxValue,
   normalizeLlmParallelValue,
   normalizeLocationAreaValue,
   normalizeLocationDetectionScopeValue,
+  normalizeSpeakerKeyValue,
+  normalizeTimeInputValue,
   normalizeLocationPrefectureCodesValue,
+  mergeSegmentTextValue,
   normalizeProofreadChunkMaxCharsValue,
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeTranscriptionLanguageValue,
+  normalizeVoiceInputErrorMessageValue,
+  needsFullSetupValue,
+  parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
   resolveEstimateComputeTypeValue,
+  resolveTimeInputRangeValue,
+  resamplePcmTo16kValue,
+  resolveAudioPreprocessPresetValue,
+  resolveLlmDeviceVramMibValue,
+  resolveLlmInstallableGpuEntryValue,
+  resolveLlmTargetBackendKeyValue,
+  resolveStepForStageValue,
+  shouldShowVoiceInputShortCandidateHintValue,
+  showProofreadSystemPromptEditorValue,
+  selectedFileNameValue,
+  selectedLocationPrefectureTotalCountValue,
+  segmentRetranscribeTooltipValue,
+  segmentRetranscribeUnavailableReasonValue,
+  selectedGpuAsrWarningValue,
+  speakerOptionLabelValue,
+  stepTimeInputValuesValue,
+  setupNeedsHfTokenValue,
+  locationDetectionScopeHintValue,
+  themeModeLabelValue,
+  themeToggleIconValue,
+  transcriptionTabDisabledValue,
+  transcriptionTabLabelValue,
+  validateHfTokenFormatValue,
+  voiceInputButtonTooltipValue,
+  processingStatusTextValue,
+  type AudioPreprocessPreset,
   type ConcreteComputeType,
   type DocumentExportSourceRow,
   type LocationAreaCode,
   type LocationDetectionScope,
-  type RuntimeEstimateSample
+  type NoiseReductionMode,
+  type RuntimeEstimateSample,
+  type EditorVoiceInputMemoryTierValue
 } from './app-utils';
 import {
   buildDiarizationEditedTextMapValue,
@@ -81,21 +166,6 @@ import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { environment } from '../environments/environment';
-
-function levenshtein(a: string, b: string): number {
-  const m = a.length, n = b.length;
-  const dp: number[] = Array.from({ length: n + 1 }, (_, i) => i);
-  for (let i = 1; i <= m; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const tmp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
-      prev = tmp;
-    }
-  }
-  return dp[n];
-}
 
 interface TranscriptionSegmentWord {
   word: string;
@@ -247,9 +317,6 @@ type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
 type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
-type EditorVoiceInputMemoryTier = 'unknown' | 'low' | 'caution' | 'normal';
-type AudioPreprocessPreset = 'none' | 'low_noise' | 'strong_noise' | 'volume_boost' | 'general_improvement' | 'manual';
-type NoiseReductionMode = 'standard' | 'weak';
 interface ConfirmDialogState {
   actionKind: ConfirmDialogActionKind;
   title: string;
@@ -526,7 +593,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // 無ければ現在の言語設定にフォールバックする。
   readonly editPunctuationIsJapanese = computed<boolean>(() => {
     const lang = (this.result()?.settings?.language ?? this.transcriptionLanguage() ?? 'ja').toLowerCase();
-    return lang === 'ja';
+    return isJapaneseLanguageValue(lang);
   });
   readonly initialPrompt = signal<string>('');
   readonly baseInitialPrompt = signal<string>('');
@@ -577,7 +644,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   );
   /** no_cuda 開発エミュレーション中かどうか。 */
   readonly isNoCudaEmulation = computed(() =>
-    this.normalizeDevEmulationMode(this.appSettings.devEmulation?.mode) === 'no_cuda'
+    normalizeDevEmulationModeValue(this.appSettings.devEmulation?.mode) === 'no_cuda'
   );
   readonly computeEnvInfo = signal<ComputeEnvResult | null>(null);
   readonly availableGpuDevices = signal<GpuDeviceInfo[]>([]);
@@ -619,44 +686,30 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // GPU 検出結果に基づいて適切なバックエンドを自動選択する。
   // 「不要」（lemonadeBackendNotNeeded=true）が押されたときは null を返してプロンプトを抑制。
   readonly llmInstallableGpuEntry = computed<LlmBackendEntry | null>(() => {
-    if (!this.llmEngineUiVisible()) return null;
-    if (this.lemonadeBackendNotNeeded()) return null;
-    if (this.llmGpuBackendInstalled()) return null;
-    if (this.llmGpuMode() === 'cpu') {
-      return { installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu' };
-    }
-    if (this.cudaAvailable()) {
-      return { installKey: 'llamacpp:vulkan', label: 'LlamaCPP - Vulkan (NVIDIA GPU)', state: 'installable', category: 'gpu' };
-    }
-    if (this.rocmAvailable()) {
-      return { installKey: 'llamacpp:rocm', label: 'LlamaCPP - ROCm (AMD GPU)', state: 'installable', category: 'gpu' };
-    }
-    // GPU モードで GPU が検出されない場合は CPU フォールバックを提示しない（CPU 専用実行禁止）
-    return null;
+    return resolveLlmInstallableGpuEntryValue(
+      this.llmEngineUiVisible(),
+      this.lemonadeBackendNotNeeded(),
+      this.llmGpuBackendInstalled(),
+      this.llmGpuMode(),
+      this.cudaAvailable() === true,
+      this.rocmAvailable() === true
+    );
   });
   // インストール済みかどうかに関わらず、GPU モードから期待されるバックエンドキーを返す
   readonly llmTargetBackendKey = computed(() => {
-    if (this.llmGpuMode() === 'cpu') return 'llamacpp:cpu';
-    if (this.cudaAvailable()) return 'llamacpp:vulkan';
-    if (this.rocmAvailable()) return 'llamacpp:rocm';
-    return '';
+    return resolveLlmTargetBackendKeyValue(
+      this.llmGpuMode(),
+      this.cudaAvailable() === true,
+      this.rocmAvailable() === true
+    );
   });
 
   readonly llmBackendModeHint = computed(() => {
-    if (this.llmBackendMode() === 'lmstudio') {
-      return '「localhost:1234」に接続します';
-    }
-    if (this.llmBackendMode() === 'ollama') {
-      return '「localhost:11434」に接続します';
-    }
-    // 内蔵モデル（local_gguf）。12B（高精度）を選んでいる場合は階層を案内する。
-    if (this.proofreadModelTier() === '12b') {
-      if (this.gemma12bInstalled() === false) {
-        return '高精度モデル（Gemma4 12B）は約7GBの追加ダウンロードが必要です';
-      }
-      return '高精度モデル（Gemma4 12B）選択中。次回のAI校正から反映されます';
-    }
-    return '内蔵されたモデル（Gemma4 E4B）を使用します';
+    return llmBackendModeHintValue(
+      this.llmBackendMode(),
+      this.proofreadModelTier(),
+      this.gemma12bInstalled()
+    );
   });
   readonly availableLlmModels = signal<LlmModelEntry[]>([]);
   /** コンテキスト長(n_ctx)。0=自動（VRAMで判定 / CUDAサーバーの--ctx-size）。手動値で上書き可。 */
@@ -665,56 +718,54 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** 選択中のLLM用GPUデバイスのVRAM(MiB)。不明なら null。自動判定の現在値ヒントに使う。 */
   readonly llmDeviceVramMib = computed<number | null>(() => {
     const info = this.computeEnvInfo();
-    if (!info || info.devices.length === 0) return null;
-    let idx = this.selectedLlmHipDeviceIndex();
-    if (idx < 0) idx = info.recommendedIndex ?? -1;
-    const dev = info.devices.find(d => d.index === idx) ?? info.devices[0];
-    return dev ? dev.totalVramMb : null;
+    return resolveLlmDeviceVramMibValue(
+      info?.devices ?? [],
+      this.selectedLlmHipDeviceIndex(),
+      info?.recommendedIndex
+    );
   });
   /** 並列処理数フィールドのヒント。自動(0)選択時のみ、VRAMから解決した実値（Rust choose_llm_parallelism 相当）を表示。手動値は空（非表示）。 */
   readonly llmParallelHint = computed<string>(() => {
-    if (this.selectedLlmParallel() >= 1) return '';
-    const vram = this.llmDeviceVramMib();
-    // np 自動はCUDA経路のみ適用。AMD(rocm)やVRAM不明時は解決値を出さない。
-    if (this.computeEnvInfo()?.backendType === 'rocm' || vram == null) return '';
-    const np = this.resolveAutoLlmParallel(vram);
-    return `現在: ${np}（VRAM 約${Math.round(vram / 1024)}GB）`;
+    return llmParallelHintValue(
+      this.selectedLlmParallel(),
+      this.computeEnvInfo()?.backendType,
+      this.llmDeviceVramMib()
+    );
   });
   /** コンテキスト長フィールドのヒント。自動(0)選択時のみ、VRAM/バックエンドから解決した実値を表示。手動値は空（非表示）。 */
   readonly llmNCtxHint = computed<string>(() => {
-    if (this.llmNCtx() >= 4096) return '';
-    // ローカルAIアプリ(lmstudio/ollama)経路はアプリ側でn_ctxを解決しないため表示しない。
-    if (this.llmBackendMode() !== 'local_gguf') return '';
-    // AMD/Lemonade経路は config.json の ctx_size=16384 固定。
-    if (this.computeEnvInfo()?.backendType === 'rocm') return '現在: 16,384';
-    const vram = this.llmDeviceVramMib();
-    if (vram == null) return '';
-    const np = this.resolveAutoLlmParallel(vram);
-    const ctx = Math.min(Math.max(np * 8192, 16384), 32768);
-    return `現在: ${ctx.toLocaleString('en-US')}（VRAM 約${Math.round(vram / 1024)}GB）`;
+    return llmNCtxHintValue(
+      this.llmNCtx(),
+      this.llmBackendMode(),
+      this.computeEnvInfo()?.backendType,
+      this.llmDeviceVramMib()
+    );
   });
   readonly llmPromptType = signal<LlmPromptType>('gemma4');
   readonly proofreadSystemPrompt = signal<string>('');
   readonly fixedProofreadSystemPrompt = signal<string>('');
   readonly defaultProofreadSystemPrompt = signal<string>('');
   readonly proofreadSystemPromptReadonly = computed(() =>
-    this.llmBackendMode() === 'local_gguf' && this.isGemma4DefaultLlmModelPath(this.llmModelPath())
+    this.llmBackendMode() === 'local_gguf' && isGemma4DefaultLlmModelPathValue(this.llmModelPath())
   );
   readonly showProofreadSystemPromptEditor = computed(() => {
-    if (this.proofreadSystemPromptReadonly()) return false;
-    if (this.llmBackendMode() !== 'local_gguf') return true;
-    return !!this.llmModelPath();
+    return showProofreadSystemPromptEditorValue(
+      this.proofreadSystemPromptReadonly(),
+      this.llmBackendMode(),
+      this.llmModelPath()
+    );
   });
   readonly overallProofreadSystemPrompt = signal<string>('');
   readonly fixedOverallProofreadSystemPrompt = signal<string>('');
   readonly defaultOverallProofreadSystemPrompt = signal<string>('');
   private readonly overallPromptSaveVersion = signal(0);
   readonly canSaveOverallProofreadSystemPrompt = computed(() => {
-    if (this.proofreadSystemPromptReadonly()) return false;
-    if (this.llmBackendMode() !== 'local_gguf') {
-      return !!this.activeOpenAiModelInput().trim();
-    }
-    return !!this.llmModelPath() && !this.isGemma4DefaultLlmModelPath(this.llmModelPath());
+    return canSaveOverallProofreadSystemPromptValue(
+      this.proofreadSystemPromptReadonly(),
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
   });
   readonly overallProofreadPromptIsCustomized = computed(() => {
     this.overallPromptSaveVersion();
@@ -725,8 +776,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const key = `${this.llmBackendMode()}:${model}`;
       return typeof this.appSettings.llm?.overallSystemPromptsByBackend?.[key] === 'string';
     }
-    const key = this.getLlmModelFileName(this.llmModelPath());
-    if (!key || this.isGemma4DefaultLlmModelFileName(key)) return false;
+    const key = getLlmModelFileNameValue(this.llmModelPath());
+    if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return false;
     return typeof this.appSettings.llm?.overallSystemPromptsByModelFileName?.[key] === 'string';
   });
   readonly llmSegmentStatus = signal<Record<number, 'processing' | 'done'>>({});
@@ -735,35 +786,20 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly diarizationStage = signal<string>('');
   readonly progressSnackbarVisible = signal<boolean>(false);
   readonly processingStatusText = computed(() => {
-    if (!this.progressSnackbarVisible()) return '';
-    const parts: string[] = [];
-    if (this.running()) {
-      const pct = Math.round(this.displayProgress());
-      if (this.diarizationPhaseActive()) {
-        parts.push('文字起こし：完了');
-        parts.push(`話者分離：${this.diarizationStage() || '起動中'}`);
-      } else {
-        parts.push(`文字起こし：${pct}%`);
-        const diarStatus = this.parallelDiarizationStatus();
-        if (diarStatus) parts.push(`話者分離：${diarStatus}`);
-      }
-    }
-    if (this.llmProofreadRunning()) {
-      const llmStatus = this.llmProofreadStatus();
-      const match = llmStatus.match(/^校正中:\s*(\d+)\s*\/\s*(\d+)\s*行/);
-      if (match) {
-        parts.push(`AI校正：${match[1]}/${match[2]}行`);
-      } else if (llmStatus) {
-        parts.push(`AI校正：${llmStatus}`);
-      } else {
-        parts.push('AI校正：起動中...');
-      }
-    }
-    if (this.proofreadRunning() && this.cpuOnlyBuild) {
-      const progress = this.proofreadProgressText() || this.proofreadStatus();
-      parts.push(progress ? `単純句読点付与：${progress}` : '単純句読点付与：処理中...');
-    }
-    return parts.length ? parts.join('　') : '処理中...';
+    return processingStatusTextValue({
+      visible: this.progressSnackbarVisible(),
+      transcriptionRunning: this.running(),
+      displayProgress: this.displayProgress(),
+      diarizationPhaseActive: this.diarizationPhaseActive(),
+      diarizationStage: this.diarizationStage(),
+      parallelDiarizationStatus: this.parallelDiarizationStatus(),
+      llmProofreadRunning: this.llmProofreadRunning(),
+      llmProofreadStatus: this.llmProofreadStatus(),
+      ruleProofreadRunning: this.proofreadRunning(),
+      cpuOnlyBuild: this.cpuOnlyBuild,
+      ruleProofreadProgressText: this.proofreadProgressText(),
+      ruleProofreadStatus: this.proofreadStatus()
+    });
   });
   readonly mergeStatus = signal<string>('');
   readonly mergeRunning = signal<boolean>(false);
@@ -792,23 +828,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.locationPrefectureOptions.filter((option) => areaCodes.has(option.value));
   });
   readonly selectedLocationPrefectureTotalCount = computed(() => {
-    const selectedCodes = new Set<string>();
-    for (const prefectures of Object.values(this.selectedLocationPrefecturesByArea())) {
-      for (const code of prefectures ?? []) {
-        selectedCodes.add(code);
-      }
-    }
-    for (const code of this.selectedLocationPrefectures()) {
-      selectedCodes.add(code);
-    }
-    return selectedCodes.size;
+    return selectedLocationPrefectureTotalCountValue(
+      this.selectedLocationPrefecturesByArea(),
+      this.selectedLocationPrefectures()
+    );
   });
-  readonly locationDetectionScopeHint = computed(() => {
-    const count = this.selectedLocationPrefectureTotalCount();
-    return count > 0
-      ? `全国共通に加えて選択地域 全体 ${count} 件を詳しく確認します。`
-      : '全国共通のみ確認します。';
-  });
+  readonly locationDetectionScopeHint = computed(() =>
+    locationDetectionScopeHintValue(this.selectedLocationPrefectureTotalCount())
+  );
   readonly proofreadEditingLocked = signal<boolean>(false);
   readonly addUtteranceNumber = signal<boolean>(true);
 
@@ -820,10 +847,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly overallProofreadDialogOpen = signal<boolean>(false);
   readonly overallProofreadError = signal<string>('');
   readonly overallProofreadVisibleItems = computed(() => {
-    const result = this.overallProofreadResult();
-    if (!result) return [];
-    const dismissed = this.overallProofreadDismissedIds();
-    return result.items.filter((i) => i.changed && !dismissed.has(i.id));
+    return filterOverallProofreadVisibleItemsValue(
+      this.overallProofreadResult()?.items,
+      this.overallProofreadDismissedIds()
+    );
   });
   readonly overallProofreadHasPendingItems = computed(
     () => this.overallProofreadVisibleItems().length > 0
@@ -911,14 +938,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly editorLowMemoryVoiceInputOptInStorageKey = 'offline_transcriber_editor_low_memory_voice_input_opt_in_v1';
   private readonly editorVoiceInputMinimumMemoryBytes = 16 * 1024 ** 3;
   private readonly editorVoiceInputRecommendedMemoryBytes = 24 * 1024 ** 3;
-  readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTier>(() => {
-    if (!this.cpuVoiceInputBuild || !this.editorInstalledMemoryChecked()) return 'unknown';
-    const bytes = this.editorInstalledMemoryBytes();
-    if (bytes === null) return 'unknown';
-    if (bytes < this.editorVoiceInputMinimumMemoryBytes) return 'low';
-    if (bytes < this.editorVoiceInputRecommendedMemoryBytes) return 'caution';
-    return 'normal';
-  });
+  readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTierValue>(() =>
+    editorVoiceInputMemoryTierValue(
+      this.cpuVoiceInputBuild,
+      this.editorInstalledMemoryChecked(),
+      this.editorInstalledMemoryBytes(),
+      this.editorVoiceInputMinimumMemoryBytes,
+      this.editorVoiceInputRecommendedMemoryBytes
+    )
+  );
   readonly editorVoiceInputMemoryAllowed = computed(
     () => !this.cpuVoiceInputBuild
       || this.editorVoiceInputMemoryTier() !== 'low'
@@ -927,20 +955,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly editorVoiceInputButtonsVisible = computed(
     () => this.isTauriRuntime() && this.editorVoiceInputMemoryAllowed()
   );
-  readonly editorVoiceInputMemoryWarning = computed<string | null>(() => {
-    const tier = this.editorVoiceInputMemoryTier();
-    if (tier === 'low') {
-      return 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。';
-    }
-    if (tier === 'caution') {
-      return '音声入力を使用する際、他のアプリがメモリを多く使用していると、処理が失敗する可能性があります。';
-    }
-    return null;
-  });
+  readonly editorVoiceInputMemoryWarning = computed<string | null>(() =>
+    editorVoiceInputMemoryWarningValue(this.editorVoiceInputMemoryTier())
+  );
   readonly editorVoiceInputDownloadButtonColor = computed<'primary' | 'warn'>(
-    () => this.cpuVoiceInputBuild && (this.editorVoiceInputMemoryTier() === 'low' || this.editorVoiceInputMemoryTier() === 'caution')
-      ? 'warn'
-      : 'primary'
+    () => editorVoiceInputDownloadButtonColorValue(
+      this.cpuVoiceInputBuild,
+      this.editorVoiceInputMemoryTier()
+    )
   );
   readonly segmentRetranscribeButtonVisible = computed(
     // 全ビルドで表示（Editor版は音声入力パックの ffmpeg 後付けDLで対応）。
@@ -962,60 +984,53 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // Full 版（CUDA/AMD）でも導入済みなら利用可能。editor 版限定ではない。
     () => this.editorVoiceInputPackStatus()?.installed === true && this.editorVoiceInputMemoryAllowed()
   );
-  readonly editorVoiceInputUnavailableTooltip = computed(() => {
-    if (!this.editorVoiceInputPackChecked()) {
-      return '音声入力パックの状態を確認中です...';
-    }
-    return '音声入力を使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
-  });
+  readonly editorVoiceInputUnavailableTooltip = computed(() =>
+    editorVoiceInputUnavailableTooltipValue(this.editorVoiceInputPackChecked())
+  );
   readonly editorVoiceInputDevControlsVisible = computed(
     () => this.isDevModeBuild && this.isTauriRuntime()
   );
   readonly editorVoiceInputInstallPercent = computed(() => {
-    const values = Object.values(this.editorVoiceInputPackProgressMap());
-    const totals = values.filter((p) => Number.isFinite(p.totalBytes) && Number(p.totalBytes) > 0);
-    if (totals.length === 0) return null;
-    const downloaded = totals.reduce((sum, p) => sum + Math.max(0, Number(p.downloadedBytes ?? 0)), 0);
-    const total = totals.reduce((sum, p) => sum + Math.max(0, Number(p.totalBytes ?? 0)), 0);
-    return total > 0 ? Math.max(0, Math.min(100, (downloaded / total) * 100)) : null;
+    return aggregateDownloadProgressPercentValue(Object.values(this.editorVoiceInputPackProgressMap()));
   });
   readonly needsFullSetup = computed(() => {
-    if (this.editorOnlyBuild || !this.isTauriRuntime()) return false;
-    if (!this.allSetupChecked()) return false;
-    const s = this.allSetupStatus();
-    if (!s) return true;
-    const needsPythonEnv = !s.pythonEnv;
-    const needsWhisper = this.transcriptionTabVisible() && !s.whisperTurbo;
-    const needsDia = this.transcriptionTabVisible() && !s.diarization;
-    // 自動句読点付与は選択中の全体校正バックエンドに関係なく内蔵E4Bを使う。
-    const needsGemma = this.aiProofreadBuild && !s.gemmaGguf;
-    const needsGemmaMtp = this.aiProofreadBuild && this.buildVariant() === 'cuda' && !s.gemmaMtpGguf;
-    const needsLlmBackend = this.aiProofreadBuild && !s.llmBackend;
-    return needsPythonEnv || needsWhisper || needsDia || needsGemma || needsGemmaMtp || needsLlmBackend;
+    return needsFullSetupValue({
+      editorOnlyBuild: this.editorOnlyBuild,
+      tauriRuntime: this.isTauriRuntime(),
+      setupChecked: this.allSetupChecked(),
+      status: this.allSetupStatus(),
+      transcriptionTabVisible: this.transcriptionTabVisible(),
+      aiProofreadBuild: this.aiProofreadBuild,
+      buildVariant: this.buildVariant()
+    });
   });
   readonly transcriptionTabDisabled = computed(() => {
-    if (!this.transcriptionTabVisible() || this.editorOnlyBuild) return false;
-    if (!this.allSetupChecked()) return false;
-    const devMode = this.normalizeDevEmulationMode(this.appSettings.devEmulation?.mode);
-    if (devMode === 'no_cuda' && !this.cpuOnlyBuild) return true;
-    if (this.needsFullSetup()) return false;
-    if (!this.allSetupStatus()?.pythonEnv) return false;
-    return !this.transcriptionRuntimeAvailable();
+    return transcriptionTabDisabledValue({
+      transcriptionTabVisible: this.transcriptionTabVisible(),
+      editorOnlyBuild: this.editorOnlyBuild,
+      setupChecked: this.allSetupChecked(),
+      devEmulationMode: normalizeDevEmulationModeValue(this.appSettings.devEmulation?.mode),
+      cpuOnlyBuild: this.cpuOnlyBuild,
+      needsFullSetup: this.needsFullSetup(),
+      pythonEnvReady: this.allSetupStatus()?.pythonEnv === true,
+      transcriptionRuntimeAvailable: this.transcriptionRuntimeAvailable()
+    });
   });
 
   readonly setupNeedsHfToken = computed(() => {
     const s = this.allSetupStatus();
-    return s !== null && this.transcriptionTabVisible() && !s.diarization && !this.diarizationInstallToken().trim();
+    return setupNeedsHfTokenValue(
+      s !== null,
+      this.transcriptionTabVisible(),
+      s?.diarization === true,
+      this.diarizationInstallToken()
+    );
   });
 
   readonly segmentRowFilter = signal<'all' | 'caution' | 'caution_context'>('all');
   readonly parallelMode = signal<'standard' | 'fast'>('standard');
   readonly clusteringAdjust = signal<'standard' | 'over_split' | 'under_split'>('standard');
-  readonly parallelModeHint = computed(() =>
-    this.parallelMode() === 'fast'
-      ? 'GPUスペックに余裕がある場合のみ'
-      : '標準・安定'
-  );
+  readonly parallelModeHint = computed(() => parallelModeHintValue(this.parallelMode()));
   readonly resultWarningStats = computed(() => {
     const metadataMap = this.proofreadMetadataBySegmentId();
     const segments = this.segmentRows;
@@ -1027,44 +1042,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return { unknownSpeakerCount, yellowCount, redCount };
   });
   readonly audioPreprocessPreset = computed<AudioPreprocessPreset>(() => {
-    const highpass = this.highpassFilter();
-    const noiseReduction = this.noiseReduction();
-    const normalize = this.normalizeAudio();
-    const noiseReductionMode = this.noiseReductionMode();
-
-    if (!highpass && !noiseReduction && !normalize) {
-      return 'none';
-    }
-    if (highpass && !noiseReduction && !normalize) {
-      return 'low_noise';
-    }
-    if (highpass && noiseReduction && !normalize && noiseReductionMode === 'weak') {
-      return 'strong_noise';
-    }
-    if (highpass && !noiseReduction && normalize) {
-      return 'volume_boost';
-    }
-    if (highpass && noiseReduction && normalize && noiseReductionMode === 'weak') {
-      return 'general_improvement';
-    }
-    return 'manual';
+    return resolveAudioPreprocessPresetValue({
+      highpassFilter: this.highpassFilter(),
+      noiseReduction: this.noiseReduction(),
+      normalizeAudio: this.normalizeAudio(),
+      noiseReductionMode: this.noiseReductionMode()
+    });
   });
-  readonly audioPreprocessPresetHint = computed<string>(() => {
-    switch (this.audioPreprocessPreset()) {
-      case 'none':
-        return '録音が良質な場合';
-      case 'low_noise':
-        return 'ハイパスフィルター。振動・空調ノイズを除去。';
-      case 'strong_noise':
-        return 'ハイパス＋ノイズ除去。背景ノイズを抑制。';
-      case 'volume_boost':
-        return 'ハイパス＋正規化。音量の統一と底上げ。';
-      case 'general_improvement':
-        return 'ハイパス＋ノイズ除去＋正規化（全処理）';
-      default:
-        return '';
-    }
-  });
+  readonly audioPreprocessPresetHint = computed<string>(() =>
+    getAudioPreprocessPresetHintValue(this.audioPreprocessPreset())
+  );
   readonly cautionPinnedSegmentIds = signal<Record<number, boolean>>({});
   readonly cautionExtracting = signal<boolean>(false);
   readonly cautionExtractingProgress = signal<{ current: number; total: number } | null>(null);
@@ -1079,18 +1066,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly largeV3DownloadMessage = signal<string>('');
   readonly largeV3DownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['whisper_large_v3']);
   readonly largeV3DownloadPercent = computed(() => {
-    const p = this.largeV3DownloadProgress();
-    if (!p?.downloadedBytes || !p?.totalBytes) return 0;
-    return Math.min(100, (p.downloadedBytes / p.totalBytes) * 100);
+    return downloadProgressPercentValue(this.largeV3DownloadProgress());
   });
   readonly largeV3DownloadBytesLabel = computed(() => {
-    const p = this.largeV3DownloadProgress();
-    if (!p?.downloadedBytes) return '';
-    const dlMb = Math.round(p.downloadedBytes / 1_048_576);
-    if (p.totalBytes) {
-      return `${dlMb} / ${Math.round(p.totalBytes / 1_048_576)} MB`;
-    }
-    return `${dlMb} MB`;
+    return downloadProgressBytesLabelValue(this.largeV3DownloadProgress());
   });
   // 内蔵校正AIモデルの階層選択（CUDA版のみ）。'e4b'=標準（既定）、'12b'=高精度（後からDL）。
   readonly proofreadModelTier = signal<'e4b' | '12b'>('e4b');
@@ -1099,18 +1078,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly gemma12bDownloadMessage = signal<string>('');
   readonly gemma12bDownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['gemma_12b']);
   readonly gemma12bDownloadPercent = computed(() => {
-    const p = this.gemma12bDownloadProgress();
-    if (!p?.downloadedBytes || !p?.totalBytes) return 0;
-    return Math.min(100, (p.downloadedBytes / p.totalBytes) * 100);
+    return downloadProgressPercentValue(this.gemma12bDownloadProgress());
   });
   readonly gemma12bDownloadBytesLabel = computed(() => {
-    const p = this.gemma12bDownloadProgress();
-    if (!p?.downloadedBytes) return '';
-    const dlMb = Math.round(p.downloadedBytes / 1_048_576);
-    if (p.totalBytes) {
-      return `${dlMb} / ${Math.round(p.totalBytes / 1_048_576)} MB`;
-    }
-    return `${dlMb} MB`;
+    return downloadProgressBytesLabelValue(this.gemma12bDownloadProgress());
   });
   /**
    * 12B（高精度）関連 UI（説明アイコン・ダウンロード進捗）の表示条件:
@@ -1165,28 +1136,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // ローカルAIアプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
   // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
   readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendSelection; label: string }>>(() => {
-    const options: Array<{ value: LlmBackendSelection; label: string }> = [
-      { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' },
-    ];
-    // 高精度（12B）は CUDA（同梱 llama-server 直起動）/ AMD（Vulkan llama-server 直起動）の
-    // 両方で提供する。Editor 版はこのセクション自体が非表示。
-    if (this.aiProofreadBuild) {
-      options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
-    }
-    if (this.localLlmAppsEnabled()) {
-      options.push({ value: 'lmstudio', label: 'LM Studio' });
-      options.push({ value: 'ollama', label: 'Ollama' });
-    }
-    return options;
+    return llmBackendModeOptionsValue(this.aiProofreadBuild, this.localLlmAppsEnabled());
   });
   /**
    * 「AI校正バックエンド」セレクタの現在値（UI 表示用）。
    * 内蔵モデルかつ CUDA 版で 12B 階層なら 'local_gguf_12b' を返し、それ以外は backendMode そのもの。
    */
   readonly llmBackendSelection = computed<LlmBackendSelection>(() =>
-    this.llmBackendMode() === 'local_gguf' && this.proofreadModelTier() === '12b'
-      ? 'local_gguf_12b'
-      : this.llmBackendMode()
+    llmBackendSelectionValue(this.llmBackendMode(), this.proofreadModelTier())
   );
   readonly locationAreaOptions: ReadonlyArray<{ value: LocationAreaCode; label: string }> = [
     { value: 'hokkaidoTohoku', label: '北海道・東北' },
@@ -1337,18 +1294,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly themeIsDark = computed(
     () => this.themeMode() === 'dark' || (this.themeMode() === 'system' && this.systemPrefersDark())
   );
-  readonly themeToggleIcon = computed(() => {
-    switch (this.themeMode()) {
-      case 'light':
-        return 'light_mode';
-      case 'dark':
-        return 'dark_mode';
-      default:
-        return 'brightness_auto';
-    }
-  });
+  readonly themeToggleIcon = computed(() => themeToggleIconValue(this.themeMode()));
   readonly themeToggleTooltip = computed(
-    () => `表示テーマ: ${this.themeModeLabel(this.themeMode())}（クリックで切り替え）`
+    () => `表示テーマ: ${themeModeLabelValue(this.themeMode())}（クリックで切り替え）`
   );
   private systemDarkQuery: MediaQueryList | null = null;
   private readonly _onSystemThemeChange = (event: MediaQueryListEvent): void => {
@@ -1360,36 +1308,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   readonly segmentRowNumberMap = computed<Record<number, number>>(() => {
-    const segments = this.result()?.segments ?? [];
-    const hidden = this.hiddenSegmentIds();
-    const map: Record<number, number> = {};
-    let rowNum = 0;
-    for (const segment of segments) {
-      if (!hidden[segment.id]) {
-        map[segment.id] = ++rowNum;
-      }
-    }
-    return map;
+    return buildSegmentRowNumberMapValue(this.result()?.segments ?? [], this.hiddenSegmentIds());
   });
 
   // 同一話者が連続するランの先頭セグメントIDに合計セグメント数を格納する。
   // 非表示セグメントも含めた生データで判定し、5未満のランは記録しない。
   readonly consecutiveSpeakerRunMap = computed<Record<number, number>>(() => {
     const segments = this.result()?.segments ?? [];
-    const map: Record<number, number> = {};
-    if (segments.length === 0) return map;
-    let runStart = 0;
-    let runSpeaker = this.getAssignedSpeakerKey(segments[0]);
-    for (let i = 1; i <= segments.length; i++) {
-      const spk = i < segments.length ? this.getAssignedSpeakerKey(segments[i]) : null;
-      if (spk !== runSpeaker) {
-        const len = i - runStart;
-        if (len >= 5) map[segments[runStart].id] = len;
-        runStart = i;
-        runSpeaker = spk ?? '';
-      }
-    }
-    return map;
+    return buildConsecutiveSpeakerRunMapValue(
+      segments,
+      (segment) => this.getAssignedSpeakerKey(segment)
+    );
   });
 
   // segmentRows / displayedSegmentRows / uniqueSpeakers を computed signal に昇格させる。
@@ -1415,14 +1344,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // uniqueSpeakers を computed に昇格させることで O(N²) を解消する。
   // plain getter のままだと *ngFor 内の mat-option から N 回呼ばれ、各呼び出しが O(N) になる。
   private readonly _uniqueSpeakersComputed = computed<ReadonlyArray<string>>(() => {
-    const names = new Set<string>();
-    for (const seg of this._segmentRowsComputed()) {
-      if (seg.speaker) names.add(seg.speaker);
-    }
-    for (const selected of Object.values(this.selectedSpeakerBySegmentId())) {
-      if (selected && selected.trim().length > 0) names.add(selected.trim());
-    }
-    return Array.from(names).sort();
+    return buildUniqueSpeakersValue(this._segmentRowsComputed(), this.selectedSpeakerBySegmentId());
   });
 
   get displayedSegmentRows(): ReadonlyArray<TranscriptionSegment> {
@@ -1430,35 +1352,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   get selectedAudioFileName(): string {
-    const full = this.selectedAudioPath();
-    if (!full) {
-      return '';
-    }
-    const normalized = full.replace(/\\/g, '/');
-    const idx = normalized.lastIndexOf('/');
-    return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+    return selectedFileNameValue(this.selectedAudioPath());
   }
 
   get gpuSetupHint(): string {
-    const result = this.result();
-    if (result?.fallbackUsed) {
-      return [
-        'GPU 実行が不安定だったため、GPU内フォールバックが発生しました。',
-        'Windows の「設定 > システム > ディスプレイ > グラフィック」で',
-        'offline-transcriber.exe / python.exe / py.exe を',
-        '「高パフォーマンス (RTX)」に設定すると安定する場合があります。'
-      ].join('\n');
-    }
-    const err = this.error();
-    if (err.includes('GPU 文字起こしに失敗しました')) {
-      return [
-        'GPU 実行に失敗しています。',
-        'Windows のグラフィック設定および NVIDIA コントロールパネルで',
-        'offline-transcriber.exe / python.exe / py.exe を',
-        'RTX 側へ固定してください。'
-      ].join('\n');
-    }
-    return '';
+    return gpuSetupHintValue(this.result()?.fallbackUsed === true, this.error());
   }
 
   private buildFinalInitialPrompt(): string {
@@ -1639,10 +1537,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   formatEstimatedMinutes(minutes: number | null): string {
-    if (minutes === null || Number.isNaN(minutes)) {
-      return '-';
-    }
-    return `${minutes}`;
+    return formatEstimatedMinutesValue(minutes);
   }
 
   formatAudioDuration(seconds: number | null): string {
@@ -1650,26 +1545,19 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getAudioDurationMessage(): string {
-    if (this.estimatingTime()) {
-      return '（計算中...）';
-    }
-    return this.formatAudioDuration(this.estimatedAudioSeconds());
+    return getAudioDurationMessageValue(this.estimatingTime(), this.estimatedAudioSeconds());
   }
 
   getEstimatedTimeMessage(): string {
-    if (this.estimatingTime()) {
-      return '（計算中...）';
-    }
-    const audioSeconds = this.estimatedAudioSeconds();
-    if (!audioSeconds || audioSeconds <= 0) {
-      return '音声ファイルを選択すると表示されます。';
-    }
-    if (!this.estimateReady()) {
-      return `まだ時間の推定には十分なデータが集まっていません。（${this.estimateSampleCount()}/${this.estimateMinRequired}件）`;
-    }
-    return `最低 ${this.formatEstimatedMinutes(this.estimatedMinMinutes())} 分、概算 ${this.formatEstimatedMinutes(
-      this.estimatedAvgMinutes()
-    )} 分`;
+    return getEstimatedTimeMessageValue({
+      estimating: this.estimatingTime(),
+      audioSeconds: this.estimatedAudioSeconds(),
+      estimateReady: this.estimateReady(),
+      sampleCount: this.estimateSampleCount(),
+      minimumSamples: this.estimateMinRequired,
+      minMinutes: this.estimatedMinMinutes(),
+      avgMinutes: this.estimatedAvgMinutes()
+    });
   }
 
   getEstimatedTimeLabel(): string {
@@ -1949,17 +1837,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return normalizeThemeModeValue(value);
   }
 
-  private themeModeLabel(mode: ThemeMode): string {
-    switch (mode) {
-      case 'light':
-        return 'ライト';
-      case 'dark':
-        return 'ダーク';
-      default:
-        return 'システムに合わせる';
-    }
-  }
-
   /** 保存済みテーマを復元し、OS のダークモード設定の監視を開始する。 */
   private initTheme(): void {
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
@@ -2000,7 +1877,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     };
     this.persistAppSettings();
     const suffix = next === 'system' ? `（現在: ${this.themeIsDark() ? 'ダーク' : 'ライト'}）` : '';
-    this.snackBar.open(`表示テーマ: ${this.themeModeLabel(next)}${suffix}`, undefined, { duration: 2400 });
+    this.snackBar.open(`表示テーマ: ${themeModeLabelValue(next)}${suffix}`, undefined, { duration: 2400 });
   }
 
   private persistTranscriptionSettings(): void {
@@ -2284,7 +2161,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // 注意: event.isComposing での早期returnはしない。これは文字入力用ではなく
     // 再生操作用のショートカットであり、IME変換中に反応しないと
     // 「ショートカットが効かない」という不具合報告の主因になりうるため。
-    const code = this.matchPlaybackShortcutCode(event);
+    const code = matchPlaybackShortcutCodeValue(event.code, event.key);
     if (!code) {
       return;
     }
@@ -2364,33 +2241,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     await this.toggleVoiceInputForSegment(targetSegment.id, textarea);
-  }
-
-  /**
-   * Ctrl+Shift 押下中や IME 変換中は event.key が大文字化・'Process'・'Unidentified'
-   * になることがあり、それだけに頼ると反応しないことがある。レイアウト非依存で
-   * 安定している event.code を優先し、取れない場合のみ event.key へフォールバックする。
-   */
-  private matchPlaybackShortcutCode(event: KeyboardEvent): 'Space' | 'KeyA' | 'KeyD' | 'KeyE' | null {
-    const knownCodes = ['Space', 'KeyA', 'KeyD', 'KeyE'] as const;
-    const code = event.code as (typeof knownCodes)[number];
-    if (knownCodes.includes(code)) {
-      return code;
-    }
-    const key = (event.key ?? '').toLowerCase();
-    switch (key) {
-      case ' ':
-      case 'spacebar':
-        return 'Space';
-      case 'a':
-        return 'KeyA';
-      case 'd':
-        return 'KeyD';
-      case 'e':
-        return 'KeyE';
-      default:
-        return null;
-    }
   }
 
   /** Ctrl+Shift+Space: 連続再生の再生 / 一時停止をトグルする。 */
@@ -2673,7 +2523,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     for (const segment of this.segmentRows) {
       const before = this.getEditableText(segment);
-      const count = this.countSubstringOccurrences(before, findText);
+      const count = countSubstringOccurrencesValue(before, findText);
       if (count <= 0) {
         continue;
       }
@@ -2689,23 +2539,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     this.findReplaceStatus.set('一致が見つかりませんでした。');
-  }
-
-  private countSubstringOccurrences(text: string, needle: string): number {
-    if (!needle) {
-      return 0;
-    }
-    let count = 0;
-    let start = 0;
-    while (true) {
-      const idx = text.indexOf(needle, start);
-      if (idx < 0) {
-        break;
-      }
-      count += 1;
-      start = idx + needle.length;
-    }
-    return count;
   }
 
   async onBrowserFileSelected(event: Event): Promise<void> {
@@ -2928,40 +2761,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   onAudioPreprocessPresetChange(value: AudioPreprocessPreset): void {
-    switch (value) {
-      case 'none':
-        this.highpassFilter.set(false);
-        this.noiseReduction.set(false);
-        this.normalizeAudio.set(false);
-        this.noiseReductionMode.set('weak');
-        break;
-      case 'low_noise':
-        this.highpassFilter.set(true);
-        this.noiseReduction.set(false);
-        this.normalizeAudio.set(false);
-        this.noiseReductionMode.set('weak');
-        break;
-      case 'strong_noise':
-        this.highpassFilter.set(true);
-        this.noiseReduction.set(true);
-        this.normalizeAudio.set(false);
-        this.noiseReductionMode.set('weak');
-        break;
-      case 'volume_boost':
-        this.highpassFilter.set(true);
-        this.noiseReduction.set(false);
-        this.normalizeAudio.set(true);
-        this.noiseReductionMode.set('weak');
-        break;
-      case 'general_improvement':
-        this.highpassFilter.set(true);
-        this.noiseReduction.set(true);
-        this.normalizeAudio.set(true);
-        this.noiseReductionMode.set('weak');
-        break;
-      case 'manual':
-        break;
+    const settings = getAudioPreprocessSettingsForPresetValue(value);
+    if (!settings) {
+      return;
     }
+    this.highpassFilter.set(settings.highpassFilter);
+    this.noiseReduction.set(settings.noiseReduction);
+    this.normalizeAudio.set(settings.normalizeAudio);
+    this.noiseReductionMode.set(settings.noiseReductionMode);
   }
 
   onTranscriptionDeviceChange(valueRaw: string): void {
@@ -3034,7 +2841,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.runningProgress.set(0);
     this.displayProgress.set(0);
     this.runningStepCurrent.set(0);
-    this.runningStepTotal.set(this.getProgressStageOrder().length);
+    this.runningStepTotal.set(getProgressStageOrderValue(this.diarization()).length);
     this.runningComputeType.set('');
     this.proofreadRunning.set(false);
     this.proofreadEditingLocked.set(false);
@@ -3112,7 +2919,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         throw new Error(response.errorMessage ?? '文字起こしに失敗しました。');
       }
 
-      if (this.hasFallbackInResult(response.result) || this.hadRetryInCurrentRun()) {
+      if (hasFallbackInTranscriptionResultValue(response.result) || this.hadRetryInCurrentRun()) {
         this.lastRunNotice.set('再試行またはフォールバックが発生しました。結果は取得できていますが、初回実行は失敗しています。');
       }
 
@@ -3743,13 +3550,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const origText = typeof item.originalText === 'string' ? item.originalText : prev;
       // ID混在検出: LLMが想定した元文と実際のセルテキストが大きく乖離している場合は別セグメントの結果と判定する。
       const origPrevThreshold = Math.max(5, Math.floor(Math.max(origText.length, prev.length) * 0.25));
-      if (origText.length > 0 && prev.length > 0 && levenshtein(origText, prev) > origPrevThreshold) {
+      if (origText.length > 0 && prev.length > 0 && levenshteinDistanceValue(origText, prev) > origPrevThreshold) {
         // console.warn(`[proofread] ID混在の疑い: sid=${sid} origText="${origText}" prev="${prev}"`);
         hintMap[sid] = 'AI校正：（変更無し）';
         continue;
       }
       const maxAllowedDist = Math.max(5, Math.floor(origText.length * 0.3));
-      if (origText.length > 0 && levenshtein(origText, revised) > maxAllowedDist) {
+      if (origText.length > 0 && levenshteinDistanceValue(origText, revised) > maxAllowedDist) {
         hintMap[sid] = 'AI校正：（変更無し）';
         continue;
       }
@@ -3778,7 +3585,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         const allowWordEdit =
           this.llmPromptType() === 'original' &&
           prev.length > 0 &&
-          levenshtein(prev, revised) <= Math.max(2, Math.ceil(prev.length * 0.34));
+          levenshteinDistanceValue(prev, revised) <= Math.max(2, Math.ceil(prev.length * 0.34));
         if (!allowWordEdit) {
           if (existingMeta?.sensitiveEntity?.hasSensitiveEntity === true || (existingMeta?.lintIssues?.length ?? 0) > 0) {
             hintMap[sid] = this.buildProofreadHint(
@@ -4582,7 +4389,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   isPlaybackDisabled(): boolean {
-    return this.isJsonResult() && !this.importAudioReady();
+    return isPlaybackDisabledValue(this.isJsonResult(), this.importAudioReady());
   }
 
   async copyErrorToClipboard(): Promise<void> {
@@ -4612,13 +4419,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getTranscriptionTabLabel(): string {
-    if (!this.isTranscriptionTabDisabled() && this.isDiarizationModelMissing()) {
-      return '文字起こし（要設定）';
-    }
-    if (this.isTranscriptionTabDisabled()) {
-      return this.cpuOnlyBuild ? '文字起こし（要設定）' : '文字起こし（要GPU設定）';
-    }
-    return '文字起こし';
+    return transcriptionTabLabelValue(
+      this.isTranscriptionTabDisabled(),
+      this.isDiarizationModelMissing(),
+      this.cpuOnlyBuild
+    );
   }
 
   isTranscriptionTabDisabled(): boolean {
@@ -4626,7 +4431,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   isDiarizationModelMissing(): boolean {
-    return this.diarizationModelChecked() && (!this.diarizationModelExists() || !this.diarizationModelHasConfig());
+    return isDiarizationModelMissingValue(
+      this.diarizationModelChecked(),
+      this.diarizationModelExists(),
+      this.diarizationModelHasConfig()
+    );
   }
 
   private getReaderTabIndex(): number {
@@ -4860,10 +4669,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   computeEnvBackendLabel(): string {
-    const backend = this.computeEnvInfo()?.backendType;
-    if (backend === 'cuda') return 'CUDA (NVIDIA)';
-    if (backend === 'rocm') return 'ROCm (AMD)';
-    return 'GPU 未使用';
+    return computeEnvBackendLabelValue(this.computeEnvInfo()?.backendType);
   }
 
   onHipDeviceChange(index: number): void {
@@ -4881,44 +4687,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistLlmSettings();
   }
 
-  /** Rust choose_llm_parallelism の np 自動判定を再現。VRAM(MiB)階層: 11000+→4 / 7000+→2 / 他→1。 */
-  private resolveAutoLlmParallel(vramMib: number): number {
-    if (vramMib >= 11000) return 4;
-    if (vramMib >= 7000) return 2;
-    return 1;
-  }
-
-  private static readonly _KNOWN_OK_GFX = new Set([
-    'gfx1030', 'gfx1100', 'gfx1101', 'gfx1102',
-    'gfx1150', 'gfx1151', 'gfx1200', 'gfx1201',
-  ]);
-
-  private gpuAsrTier(device: GpuDeviceInfo): 'ok' | 'caution' {
-    if (this.computeEnvInfo()?.backendType !== 'rocm') return 'ok';
-    const arch = (device.gcnArchName ?? '').toLowerCase();
-    return AppComponent._KNOWN_OK_GFX.has(arch) ? 'ok' : 'caution';
-  }
-
   readonly selectedGpuAsrWarning = computed<string>(() => {
     const info = this.computeEnvInfo();
-    if (!info || info.backendType !== 'rocm') return '';
     let idx = this.selectedHipDeviceIndex();
-    if (idx < 0) idx = this.recommendedGpuDeviceIndex();
-    const device = info.devices.find(d => d.index === idx);
-    if (!device || this.gpuAsrTier(device) === 'ok') return '';
-    const arch = (device.gcnArchName ?? '').toLowerCase();
-    if (arch === 'gfx1103') {
-      return 'ctranslate2-rocm の対応外GPUです。互換設定を自動適用しますが、動作しない場合があります。';
+    if (idx < 0) {
+      idx = this.recommendedGpuDeviceIndex();
     }
-    return '動作未確認のGPUです。文字起こしが動作しない場合があります。';
+    const device = info?.devices.find(d => d.index === idx);
+    return selectedGpuAsrWarningValue(info?.backendType, !!device, device?.gcnArchName);
   });
 
   gpuDeviceLabel(device: GpuDeviceInfo): string {
-    const gb = (device.totalVramMb / 1024).toFixed(0);
-    const rec = device.index === this.recommendedGpuDeviceIndex() ? ' ★推奨' : '';
-    const igpu = device.isLikelyIgpu ? ' ※統合GPU' : '';
-    const warn = this.gpuAsrTier(device) === 'caution' ? ' ⚠ 動作未確認' : '';
-    return `${device.name}（${gb}GB${igpu}${warn}${rec}）`;
+    return gpuDeviceLabelValue(
+      device,
+      this.recommendedGpuDeviceIndex(),
+      this.computeEnvInfo()?.backendType
+    );
   }
 
   /**
@@ -5158,7 +4942,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const value = this.appSettings.llm?.overallSystemPromptsByBackend?.[key];
       return typeof value === 'string' ? value : fallback;
     }
-    const key = this.getLlmModelFileName(this.llmModelPath());
+    const key = getLlmModelFileNameValue(this.llmModelPath());
     if (!key) return fallback;
     const value = this.appSettings.llm?.overallSystemPromptsByModelFileName?.[key];
     return typeof value === 'string' ? value : fallback;
@@ -5175,8 +4959,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       overallSystemPromptsByBackend[key] = value;
       nextLlm.overallSystemPromptsByBackend = overallSystemPromptsByBackend;
     } else {
-      const key = this.getLlmModelFileName(this.llmModelPath());
-      if (!key || this.isGemma4DefaultLlmModelFileName(key)) return;
+      const key = getLlmModelFileNameValue(this.llmModelPath());
+      if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return;
       const overallSystemPromptsByModelFileName = { ...(llm.overallSystemPromptsByModelFileName ?? {}) };
       overallSystemPromptsByModelFileName[key] = value;
       nextLlm.overallSystemPromptsByModelFileName = overallSystemPromptsByModelFileName;
@@ -5232,8 +5016,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.overallPromptSaveVersion.update(v => v + 1);
       }
     } else {
-      const key = this.getLlmModelFileName(this.llmModelPath());
-      if (!key || this.isGemma4DefaultLlmModelFileName(key)) return;
+      const key = getLlmModelFileNameValue(this.llmModelPath());
+      if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return;
       const overallSystemPromptsByModelFileName = { ...(llm.overallSystemPromptsByModelFileName ?? {}) };
       delete overallSystemPromptsByModelFileName[key];
       nextLlm.overallSystemPromptsByModelFileName = overallSystemPromptsByModelFileName;
@@ -5304,15 +5088,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** VRAM不足ダイアログ承認時に設定する並列処理数（段階的: 24→20→16→12→8→4→2→1）。 */
   private pendingVramOomTargetNp = 1;
 
-  /** エラーメッセージが VRAM 不足（OOM）を示すか判定する。Rust付与の [VRAM_OOM] マーカー優先。 */
-  private isVramOomError(msg: string | null | undefined): boolean {
-    if (!msg) return false;
-    const lower = msg.toLowerCase();
-    if (lower.includes('[vram_oom]')) return true;
-    return ['out of memory', 'failed to allocate', 'cudamalloc', 'cudaerrormemoryallocation', 'ggml_backend_cuda_buffer']
-      .some((m) => lower.includes(m));
-  }
-
   /**
    * エラーが VRAM 不足を示し、かつ並列処理数をまだ下げられる場合に、
    * 「並列処理数を下げて再実行」の確認ダイアログを出す。出したら true を返す
@@ -5323,7 +5098,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async maybePromptLowerParallelOnOom(errorMsg: string, retry: () => Promise<void>): Promise<boolean> {
     if (!this.isTauriRuntime()) return false;
     if (this.llmBackendMode() !== 'local_gguf') return false;
-    if (!this.isVramOomError(errorMsg)) return false;
+    if (!isVramOomErrorValue(errorMsg)) return false;
     const manual = this.selectedLlmParallel();
     let cur = manual;
     if (cur <= 0) {
@@ -5506,7 +5281,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const value = this.appSettings.llm?.systemPromptsByBackend?.[key];
       return typeof value === 'string' ? value : fallback;
     }
-    const key = this.getLlmModelFileName(this.llmModelPath());
+    const key = getLlmModelFileNameValue(this.llmModelPath());
     if (!key) {
       return fallback;
     }
@@ -5597,30 +5372,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistAppSettings();
   }
 
-  private isGemma4DefaultLlmModelPath(modelPath: string): boolean {
-    return this.isGemma4DefaultLlmModelFileName(this.getLlmModelFileName(modelPath));
-  }
-
-  private isGemma4DefaultLlmModelFileName(fileName: string): boolean {
-    const normalized = fileName.trim().toLowerCase();
-    return (
-      normalized === 'gemma-4-e4b-it-qat-ud-q4_k_xl.gguf' ||
-      normalized === 'gemma-4-e4b-it-qat-ud-q4_k_xl' ||
-      // 旧 PTQ 量子化（移行前の設定値との互換のため残す）
-      normalized === 'gemma-4-e4b-it-q4_k_m.gguf' ||
-      normalized === 'gemma-4-e4b-it-q4_k_m'
-    );
-  }
-
-  private getLlmModelFileName(modelPath: string): string {
-    const normalized = (modelPath ?? '').replace(/\\/g, '/').trim();
-    if (!normalized) {
-      return '';
-    }
-    const parts = normalized.split('/');
-    return parts[parts.length - 1] ?? '';
-  }
-
   private async probeAndPersistDevEmulationState(): Promise<void> {
     if (!this.isTauriRuntime()) {
       return;
@@ -5630,7 +5381,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.appSettings = {
         ...this.appSettings,
         devEmulation: {
-          mode: this.normalizeDevEmulationMode(status.mode),
+          mode: normalizeDevEmulationModeValue(status.mode),
           noCuda: status.noCuda === true,
           missingCommunity1: status.missingCommunity1 === true,
           capturedAt: Date.now()
@@ -5649,7 +5400,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.devEmulationLabel.set('');
       return;
     }
-    const mode = this.normalizeDevEmulationMode(emu.mode);
+    const mode = normalizeDevEmulationModeValue(emu.mode);
     if (mode === 'no_cuda') {
       this.devEmulationLabel.set('開発用エミュレーション: CUDAなしをエミュレート中');
       return;
@@ -5670,17 +5421,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     this.devEmulationLabel.set(`開発用エミュレーション: ${flags.join(' / ')}`);
-  }
-
-  private normalizeDevEmulationMode(value: unknown): 'none' | 'no_cuda' | 'missing_community1' {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    if (normalized === 'no_cuda') {
-      return 'no_cuda';
-    }
-    if (normalized === 'missing_community1') {
-      return 'missing_community1';
-    }
-    return 'none';
   }
 
   async devDeleteModels(): Promise<void> {
@@ -5943,37 +5683,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 問題なければ null、問題があればユーザー向けの説明文字列を返す。
    */
   validateHfTokenFormat(rawToken: string): string | null {
-    const token = (rawToken ?? '').trim();
-    if (!token) return null; // 未入力は別経路（スキップ）で扱う
-
-    if (/\s/.test(token)) {
-      return (
-        'トークンに空白や改行が含まれています。\n' +
-        '● トークンの前後や途中に余分な空白・改行が入っていないか確認してください。\n' +
-        '● コピー＆ペーストで貼り付け直すと混入を防げます。'
-      );
-    }
-    if (!token.startsWith('hf_')) {
-      return (
-        'Hugging Face のアクセストークンは「hf_」で始まります。入力された値はその形式になっていません。\n' +
-        '● トークンをすべて選択してコピーし、貼り付け直してください（先頭が欠けていることがあります）。\n' +
-        '● ユーザー名や別の値を貼り付けていないか確認してください。'
-      );
-    }
-    if (token.length < 20) {
-      return (
-        'トークンが短すぎます。途中で切れている可能性があります。\n' +
-        '● トークン全体をコピーできているか確認し、貼り付け直してください。'
-      );
-    }
-    if (!/^hf_[A-Za-z0-9]+$/.test(token)) {
-      return (
-        'トークンに使用できない文字が含まれています（記号や全角文字が混入している可能性があります）。\n' +
-        '● 日本語入力（IME）がオンのまま入力していないか確認してください。\n' +
-        '● 「トークン作成ページを開く」から発行した値をコピー＆ペーストで貼り付けてください。'
-      );
-    }
-    return null;
+    return validateHfTokenFormatValue(rawToken);
   }
 
   async runFullSetup(): Promise<void> {
@@ -6141,9 +5851,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private getImportCompletedMessage(): string {
-    return this.canShowTranscriptionTab()
-      ? '読み取りが完了しました。文字起こしタブでも編集できます。'
-      : '読み取りが完了しました。';
+    return getImportCompletedMessageValue(this.canShowTranscriptionTab());
   }
 
   async openExternalUrl(url: string): Promise<void> {
@@ -6385,7 +6093,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               );
               this.overallProofreadProgressStarted = true;
               this.overallProofreadStatus.set(
-                this.formatOverallProofreadProgress(this.overallProofreadProgressCurrent, total),
+                formatOverallProofreadProgressValue(this.overallProofreadProgressCurrent, total),
               );
             }
             return;
@@ -6430,7 +6138,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.diarizationStage.set('完了');
         }
 
-        const step = this.resolveStepForStage(stage);
+        const step = resolveStepForStageValue(stage, this.diarization());
         if (step > 0) {
           this.runningStepCurrent.set(Math.max(this.runningStepCurrent(), step));
         }
@@ -6487,56 +6195,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     );
   }
 
-  private formatOverallProofreadProgress(current: number, total: number): string {
-    const safeTotal = Math.max(0, Math.floor(total));
-    const safeCurrent = Math.min(Math.max(0, Math.floor(current)), safeTotal);
-    return `校正中: ${safeCurrent} / ${safeTotal} 行`;
-  }
-
-  private getProgressStageOrder(): ReadonlyArray<string> {
-    if (this.diarization()) {
-      // 並列処理のため文字起こしサブ工程は表示しない。話者分離の流れのみ表示。
-      return ['sidecar_running', 'diarization_loading', 'diarization_running', 'diarization_done', 'done'];
-    }
-    return ['sidecar_running', 'model_loading', 'transcribing', 'postprocess', 'done'];
-  }
-
-  private resolveStepForStage(stage: string): number {
-    if (!stage) {
-      return 0;
-    }
-    const order = this.getProgressStageOrder();
-    const commonAliases: Record<string, string> = {
-      preparing: 'sidecar_running',
-      compute_plan: 'sidecar_running',
-      compute_switch: 'sidecar_running',
-      sidecar_start: 'sidecar_running',
-      sidecar_retry_start: 'sidecar_running',
-      sidecar_retry_running: 'sidecar_running',
-    };
-    const diarizationAliases: Record<string, string> = {
-      diarization_start: 'sidecar_running',
-      diarization_waiting: 'diarization_loading',
-      model_loading: 'sidecar_running',
-      transcribing: 'sidecar_running',
-      postprocess: 'sidecar_running',
-      diarization_fallback: 'diarization_running',
-    };
-    const aliases = this.diarization()
-      ? { ...commonAliases, ...diarizationAliases }
-      : commonAliases;
-    const canonical = aliases[stage] ?? stage;
-    const idx = order.indexOf(canonical);
-    return idx >= 0 ? idx + 1 : 0;
-  }
-
-  private hasFallbackInResult(result: TranscriptionResult): boolean {
-    if (result.fallbackUsed) {
-      return true;
-    }
-    return !!result.diarization?.note && result.diarization.note.includes('フォールバック');
-  }
-
   get uniqueSpeakers(): ReadonlyArray<string> {
     return this._uniqueSpeakersComputed();
   }
@@ -6546,8 +6204,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   speakerOptionLabel(key: string): string {
-    const alias = this.displaySpeaker(key);
-    return alias === key ? key : `${alias} (${key})`;
+    return speakerOptionLabelValue(key, this.speakerAliasMap());
   }
 
   trackBySegmentId(_index: number, segment: TranscriptionSegment): number {
@@ -6555,9 +6212,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getSpeakerColorClass(speakerKey: string): string {
-    const m = speakerKey.match(/^SPEAKER_(\d+)$/);
-    if (!m) return '';
-    return `speaker-color-${Math.min(parseInt(m[1], 10), 4) + 1}`;
+    return getSpeakerColorClassValue(speakerKey);
   }
 
   setSpeakerAlias(source: string, value: string): void {
@@ -6571,11 +6226,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   displaySpeaker(source: string | null | undefined): string {
-    if (!source) {
-      return '-';
-    }
-    const alias = this.speakerAliasMap()[source];
-    return alias && alias.length > 0 ? alias : source;
+    return displaySpeakerValue(source, this.speakerAliasMap());
   }
 
   getAssignedSpeakerKey(segment: TranscriptionSegment): string {
@@ -6593,7 +6244,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeSpeakerKey(value: string | null | undefined): string {
-    return (value ?? '').trim();
+    return normalizeSpeakerKeyValue(value);
   }
 
   formatMinuteSecond(seconds: number): string {
@@ -7093,8 +6744,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getEditableTextFromMap(segment: TranscriptionSegment, map: Partial<Record<number, string>>): string {
-    const found = map[segment.id];
-    return typeof found === 'string' ? found : (segment.text ?? '');
+    return getEditableTextFromMapValue(segment, map);
   }
 
   private applyEditedTextsToResultSegments(textsBySegmentId: Record<number, string>): void {
@@ -7175,8 +6825,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   ): void {
     const history = this.segmentTextHistory.get(segmentId) ?? { undo: [], redo: [] };
     const timestamp = Date.now();
-    const normalizedKind = this.coalescingInputKind(inputKind);
-    const beforeCaret = this.changedRangeEnd(before, after);
+    const normalizedKind = coalescingInputKindValue(inputKind);
+    const beforeCaret = changedRangeEndValue(before, after);
     const previous = history.undo.at(-1);
     const canMerge = !!previous
       && normalizedKind.length > 0
@@ -7206,36 +6856,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     history.redo = [];
     this.segmentTextHistory.set(segmentId, history);
-  }
-
-  private coalescingInputKind(inputKind: string): string {
-    if (inputKind === 'insertText' || inputKind === 'insertCompositionText') {
-      return 'typing';
-    }
-    if (inputKind === 'deleteContentBackward') {
-      return 'delete-backward';
-    }
-    if (inputKind === 'deleteContentForward') {
-      return 'delete-forward';
-    }
-    return '';
-  }
-
-  private changedRangeEnd(before: string, after: string): number {
-    const maxPrefix = Math.min(before.length, after.length);
-    let prefix = 0;
-    while (prefix < maxPrefix && before[prefix] === after[prefix]) {
-      prefix += 1;
-    }
-    let suffix = 0;
-    while (
-      suffix < before.length - prefix &&
-      suffix < after.length - prefix &&
-      before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-    ) {
-      suffix += 1;
-    }
-    return before.length - suffix;
   }
 
   private undoSegmentTextEdit(segmentId: number, textarea: HTMLTextAreaElement): void {
@@ -7323,7 +6943,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const mergedId = mergedSegments.length;
       const mergedText = group
         .map((seg) => this.getEditableText(seg))
-        .reduce((acc, text) => this.mergeSegmentText(acc, text), '');
+        .reduce((acc, text) => mergeSegmentTextValue(acc, text), '');
       const mergedWords = group.flatMap((seg) => seg.words ?? []);
       const mergedSpeaker = speakerKey || (group[0].speaker ?? '');
 
@@ -7449,21 +7069,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     });
   }
 
-  private mergeSegmentText(leftRaw: string, rightRaw: string): string {
-    const left = (leftRaw ?? '').trim();
-    const right = (rightRaw ?? '').trim();
-    if (!left) {
-      return right;
-    }
-    if (!right) {
-      return left;
-    }
-    const leftLast = left[left.length - 1];
-    const rightFirst = right[0];
-    const needsSpace = /[A-Za-z0-9]/.test(leftLast) && /[A-Za-z0-9]/.test(rightFirst);
-    return needsSpace ? `${left} ${right}` : `${left}${right}`;
-  }
-
   insertSegmentRelative(sourceSegmentId: number, position: 'above' | 'below'): void {
     const currentResult = this.result();
     if (!currentResult) {
@@ -7479,7 +7084,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const sourceSegment = segments[sourceIndex];
     const sourceText = this.getEditableText(sourceSegment);
     const insertIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
-    const newSegmentId = this.generateNextSegmentId(segments);
+    const newSegmentId = generateNextSegmentIdValue(segments);
 
     const newSegment: TranscriptionSegment = {
       id: newSegmentId,
@@ -7606,14 +7211,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadMetadataBySegmentId.set(proofreadMetadata);
   }
 
-  private generateNextSegmentId(segments: ReadonlyArray<TranscriptionSegment>): number {
-    if (segments.length === 0) {
-      return 0;
-    }
-    const maxId = segments.reduce((maxValue, segment) => Math.max(maxValue, segment.id), segments[0].id);
-    return maxId + 1;
-  }
-
   onLocationAreaChange(value: LocationAreaCode): void {
     const area = normalizeLocationAreaValue(value);
     this.selectedLocationArea.set(area);
@@ -7648,47 +7245,33 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   shouldShowVoiceInputShortCandidateHint(candidates: ReadonlyArray<string> | null | undefined): boolean {
-    const items = (candidates ?? []).map((candidate) => String(candidate).trim()).filter((candidate) => candidate.length > 0);
-    if (items.length === 0) {
-      return false;
-    }
-    return items.every((candidate) => Array.from(candidate).length <= 4);
+    return shouldShowVoiceInputShortCandidateHintValue(candidates);
   }
 
   voiceInputButtonTooltip(segmentId: number): string {
-    if (!this.editorVoiceInputAvailable()) {
-      return this.editorVoiceInputUnavailableTooltip();
-    }
-    return this.isVoiceInputRecording(segmentId) ? '録音を停止' : '音声入力';
+    return voiceInputButtonTooltipValue(
+      this.editorVoiceInputAvailable(),
+      this.editorVoiceInputUnavailableTooltip(),
+      this.isVoiceInputRecording(segmentId)
+    );
   }
 
   segmentRetranscribeUnavailableReason(): string | null {
-    if (!this.editorVoiceInputPackChecked()) {
-      return '音声入力パックの状態を確認中です...';
-    }
-    if (!this.editorVoiceInputAvailable()) {
-      return '区間の聞き直しを使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
-    }
-    if (!this.segmentRetranscribeSupported()) {
-      return this.cpuVoiceInputBuild
-        ? '区間の聞き直しに必要な ffmpeg が未導入です。設定タブの「音声入力パック」からダウンロードしてください。'
-        : 'この構成では区間の聞き直しを利用できません。';
-    }
-    if (this.isPlaybackDisabled() || !this.selectedAudioPath()) {
-      return '音声ファイルを読み込むと、この区間をAIによる再文字起こしができるようになります。';
-    }
-    return null;
+    return segmentRetranscribeUnavailableReasonValue({
+      packChecked: this.editorVoiceInputPackChecked(),
+      voiceInputAvailable: this.editorVoiceInputAvailable(),
+      retranscribeSupported: this.segmentRetranscribeSupported(),
+      cpuVoiceInputBuild: this.cpuVoiceInputBuild,
+      playbackDisabled: this.isPlaybackDisabled(),
+      selectedAudioPath: this.selectedAudioPath()
+    });
   }
 
   segmentRetranscribeTooltip(segmentId: number): string {
-    const reason = this.segmentRetranscribeUnavailableReason();
-    if (reason) {
-      return reason;
-    }
-    if (this.isVoiceInputProcessing(segmentId)) {
-      return '候補を生成中...';
-    }
-    return 'この区間を別のAIで再文字起こしする';
+    return segmentRetranscribeTooltipValue(
+      this.segmentRetranscribeUnavailableReason(),
+      this.isVoiceInputProcessing(segmentId)
+    );
   }
 
   private async isVoiceInputModelLoaded(): Promise<boolean> {
@@ -7855,7 +7438,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }, this.voiceInputMaxRecordingSeconds * 1000);
     } catch (error) {
       this.cleanupVoiceInputRecording(false);
-      this.voiceInputError.set(this.normalizeVoiceInputErrorMessage(error));
+      this.voiceInputError.set(normalizeVoiceInputErrorMessageValue(error));
     }
   }
 
@@ -7866,7 +7449,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const chunks = this.voiceInputChunks.map((chunk) => new Float32Array(chunk));
     const sourceRate = this.voiceInputSampleRate || 48000;
     this.cleanupVoiceInputRecording(false);
-    const merged = this.mergeVoiceInputChunks(chunks);
+    const merged = mergeFloat32ChunksValue(chunks);
     if (merged.length < sourceRate * 0.15) {
       this.voiceInputStatus.set('');
       this.voiceInputError.set('録音が短すぎます。');
@@ -7874,9 +7457,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     const maxSourceSamples = Math.floor(sourceRate * this.voiceInputMaxRecordingSeconds);
     const clipped = merged.length > maxSourceSamples ? merged.slice(0, maxSourceSamples) : merged;
-    const resampled = this.resamplePcmTo16k(clipped, sourceRate);
-    const wav = this.encodePcm16Wav(resampled, 16000);
-    const wavBase64 = this.arrayBufferToBase64(wav);
+    const resampled = resamplePcmTo16kValue(clipped, sourceRate);
+    const wav = encodePcm16WavValue(resampled, 16000);
+    const wavBase64 = arrayBufferToBase64Value(wav);
     this.voiceInputProcessingSegmentId.set(segmentId);
     this.voiceInputFeedbackSegmentId.set(segmentId);
     const modelLoaded = await this.isVoiceInputModelLoaded();
@@ -7906,7 +7489,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.voiceInputCandidates.set(null);
       this.voiceInputStatus.set('');
-      const message = this.normalizeVoiceInputErrorMessage(error);
+      const message = normalizeVoiceInputErrorMessageValue(error);
       this.voiceInputError.set(message);
       this.showAmdGpuProcessingFailure('音声入力', message);
     } finally {
@@ -7916,37 +7499,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private buildVoiceInputContext(segmentId: number): EditorVoiceInputContext | null {
     const rows = this.segmentRows;
-    const index = rows.findIndex((segment) => segment.id === segmentId);
-    const currentSegment = index >= 0
-      ? rows[index]
-      : this.result()?.segments.find((segment) => segment.id === segmentId) ?? null;
-    if (!currentSegment) {
-      return null;
-    }
-
     const editedMap = this.editedSegmentTextMap();
-    const rowNumberMap = this.segmentRowNumberMap();
-    const toContextLine = (
-      segment: TranscriptionSegment | null | undefined,
-      fallbackIndex: number | null
-    ): EditorVoiceInputContextLine | null => {
-      if (!segment) {
-        return null;
-      }
-      const speaker = this.displaySpeaker(this.getAssignedSpeakerKey(segment)).trim();
-      const rowNumber = rowNumberMap[segment.id] ?? (fallbackIndex !== null ? fallbackIndex + 1 : undefined);
-      return {
-        ...(typeof rowNumber === 'number' && Number.isFinite(rowNumber) ? { rowNumber } : {}),
-        speaker: speaker.length > 0 && speaker !== '-' ? speaker : null,
-        text: this.getEditableTextFromMap(segment, editedMap),
-      };
-    };
-
-    return {
-      previous: index > 0 ? toContextLine(rows[index - 1], index - 1) : null,
-      current: toContextLine(currentSegment, index >= 0 ? index : null),
-      next: index >= 0 && index < rows.length - 1 ? toContextLine(rows[index + 1], index + 1) : null,
-    };
+    return buildVoiceInputContextValue(
+      rows,
+      this.result()?.segments ?? [],
+      segmentId,
+      this.segmentRowNumberMap(),
+      (segment) => this.displaySpeaker(this.getAssignedSpeakerKey(segment)),
+      (segment) => this.getEditableTextFromMap(segment, editedMap)
+    );
   }
 
   private cleanupVoiceInputRecording(clearStatus: boolean): void {
@@ -7987,96 +7548,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputError.set('');
       this.voiceInputFeedbackSegmentId.set(null);
     }
-  }
-
-  private mergeVoiceInputChunks(chunks: ReadonlyArray<Float32Array>): Float32Array {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const merged = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return merged;
-  }
-
-  private resamplePcmTo16k(input: Float32Array, inputSampleRate: number): Float32Array {
-    const outputSampleRate = 16000;
-    if (inputSampleRate === outputSampleRate) {
-      return input;
-    }
-    const ratio = inputSampleRate / outputSampleRate;
-    const outputLength = Math.max(1, Math.floor(input.length / ratio));
-    const output = new Float32Array(outputLength);
-    for (let i = 0; i < outputLength; i++) {
-      const sourceIndex = i * ratio;
-      const left = Math.floor(sourceIndex);
-      const right = Math.min(input.length - 1, left + 1);
-      const frac = sourceIndex - left;
-      output[i] = input[left] * (1 - frac) + input[right] * frac;
-    }
-    return output;
-  }
-
-  private encodePcm16Wav(samples: Float32Array, sampleRate: number): ArrayBuffer {
-    const bytesPerSample = 2;
-    const dataSize = samples.length * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-    this.writeAscii(view, 0, 'RIFF');
-    view.setUint32(4, 36 + dataSize, true);
-    this.writeAscii(view, 8, 'WAVE');
-    this.writeAscii(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * bytesPerSample, true);
-    view.setUint16(32, bytesPerSample, true);
-    view.setUint16(34, 16, true);
-    this.writeAscii(view, 36, 'data');
-    view.setUint32(40, dataSize, true);
-    let offset = 44;
-    for (const sample of samples) {
-      const clamped = Math.max(-1, Math.min(1, sample));
-      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-      offset += 2;
-    }
-    return buffer;
-  }
-
-  private writeAscii(view: DataView, offset: number, value: string): void {
-    for (let i = 0; i < value.length; i++) {
-      view.setUint8(offset + i, value.charCodeAt(i));
-    }
-  }
-
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize);
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
-  }
-
-  private normalizeVoiceInputErrorMessage(error: unknown): string {
-    const message = this.normalizeErrorMessage(error);
-    const lower = message.toLowerCase();
-    if (
-      lower.includes('notallowederror') ||
-      lower.includes('not allowed') ||
-      lower.includes('permission') ||
-      lower.includes('denied')
-    ) {
-      return 'マイク入力が許可されませんでした。OSまたはWebViewのマイク権限を許可してから再試行してください。';
-    }
-    if (lower.includes('notfounderror') || lower.includes('device not found')) {
-      return '利用可能なマイクが見つかりません。';
-    }
-    return message;
   }
 
   insertVoiceInputCandidate(
@@ -8174,28 +7645,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   commitTimeEdit(segmentId: number): void {
     if (this.editingTimeSegmentId() !== segmentId) return;
     this.editingTimeSegmentId.set(null);
-    const v = this.editingTimeValues();
-    const startMm = parseInt(v.startMm, 10);
-    const startSs = parseInt(v.startSs, 10);
-    const endMm = parseInt(v.endMm, 10);
-    const endSs = parseInt(v.endSs, 10);
-    if (
-      !Number.isFinite(startMm) || !Number.isFinite(startSs) ||
-      !Number.isFinite(endMm) || !Number.isFinite(endSs) ||
-      startMm < 0 || endMm < 0 ||
-      startSs < 0 || startSs > 59 || endSs < 0 || endSs > 59
-    ) {
+    const range = resolveTimeInputRangeValue(this.editingTimeValues());
+    if (!range) {
       return;
-    }
-    let newStart = startMm * 60 + startSs;
-    let newEnd = endMm * 60 + endSs;
-    if (newStart > newEnd) {
-      [newStart, newEnd] = [newEnd, newStart];
     }
     const current = this.result();
     if (current) {
       const segments = current.segments.map((s) =>
-        s.id === segmentId ? { ...s, start: newStart, end: newEnd } : s
+        s.id === segmentId ? { ...s, start: range.startSeconds, end: range.endSeconds } : s
       );
       this.result.set({ ...current, segments });
     }
@@ -8229,31 +7686,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private stepTimeField(field: 'startMm' | 'startSs' | 'endMm' | 'endSs', delta: 1 | -1): void {
-    const v = this.editingTimeValues();
-    const current = parseInt(v[field], 10);
-    if (!Number.isFinite(current)) return;
-    const isSec = field.endsWith('Ss');
-    const candidate = isSec ? Math.max(0, Math.min(59, current + delta)) : Math.max(0, current + delta);
-
-    // 開始・終了が逆転しないようにクロス制約を適用する
-    const startTotal = parseInt(v.startMm, 10) * 60 + parseInt(v.startSs, 10);
-    const endTotal = parseInt(v.endMm, 10) * 60 + parseInt(v.endSs, 10);
-    const isStart = field.startsWith('start');
-    if (isStart) {
-      const newStart = (field === 'startMm' ? candidate : parseInt(v.startMm, 10)) * 60
-        + (field === 'startSs' ? candidate : parseInt(v.startSs, 10));
-      if (newStart > endTotal) return;
-    } else {
-      const newEnd = (field === 'endMm' ? candidate : parseInt(v.endMm, 10)) * 60
-        + (field === 'endSs' ? candidate : parseInt(v.endSs, 10));
-      if (newEnd < startTotal) return;
+    const next = stepTimeInputValuesValue(this.editingTimeValues(), field, delta);
+    if (next) {
+      this.editingTimeValues.set(next);
     }
-
-    this.editingTimeValues.update((cur) => ({ ...cur, [field]: isSec ? String(candidate).padStart(2, '0') : String(candidate) }));
   }
 
   onTimeInputChange(value: string, field: 'startMm' | 'startSs' | 'endMm' | 'endSs'): void {
-    const numeric = value.replace(/[^0-9]/g, '');
+    const numeric = normalizeTimeInputValue(value);
     this.editingTimeValues.update((v) => ({ ...v, [field]: numeric }));
   }
 
@@ -8286,9 +7726,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   confirmDialogButtonClass(color: ConfirmDialogColor, role: 'confirm' | 'cancel'): string {
-    const roleClass = role === 'confirm' ? 'confirm-dialog-btn-confirm' : 'confirm-dialog-btn-cancel';
-    const colorClass = color ? ` confirm-dialog-btn-${color}` : '';
-    return `confirm-dialog-btn ${roleClass}${colorClass}`;
+    return confirmDialogButtonClassValue(color, role);
   }
 
   scrollToTop(): void {

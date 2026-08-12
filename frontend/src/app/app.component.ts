@@ -22,26 +22,45 @@ import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import {
   buildDefaultExportFileName,
+  buildDocxExportRowsValue,
+  buildInitialSpeakerAliasMapValue,
+  buildInitialSpeakerSelectionMapValue,
+  buildLocationDetectionScopeValue,
+  buildSrtExportRowsValue,
+  buildXlsxExportRowsValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatMinuteSecondValue,
+  getLocationAreaPrefectureCodesValue,
   normalizeComputeTypeValue,
+  normalizeErrorMessageValue,
   normalizeLlmMaxBatchValue,
   normalizeLlmNCtxValue,
   normalizeLlmParallelValue,
+  normalizeLocationAreaValue,
+  normalizeLocationDetectionScopeValue,
+  normalizeLocationPrefectureCodesValue,
   normalizeProofreadChunkMaxCharsValue,
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
-  normalizeTranscriptionLanguageValue
+  normalizeTranscriptionLanguageValue,
+  type DocumentExportSourceRow,
+  type LocationAreaCode,
+  type LocationDetectionScope
 } from './app-utils';
 import {
+  buildDiarizationEditedTextMapValue,
+  buildExportTranscriptionPayloadValue,
   buildProofreadHintValue,
   describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
   isPunctuationOnlyProofreadReasonValue,
   normalizeProofreadMetadataValue,
+  parseImportedTranscriptionJsonValue,
+  reconcileRetranscriptionStateValue,
   type ExportProofreadMetadata,
+  type ExportTranscriptionPayload,
   type ProofreadHighlightLevel,
   type SensitiveEntityHighlightInput
 } from './proofread-metadata.utils';
@@ -119,47 +138,6 @@ interface TranscriptionResult {
   fallbackReason?: string;
 }
 
-interface SaveDocxRow {
-  time: string;
-  speaker: string;
-  text: string;
-}
-
-interface SaveXlsxRow {
-  start: string;
-  end: string;
-  speaker: string;
-  text: string;
-}
-
-interface SaveSrtRow {
-  startSeconds: number;
-  endSeconds: number;
-  speaker: string;
-  text: string;
-}
-
-interface ExportSpeakerDatasetRow {
-  speakerValue: string;
-  displayName: string;
-}
-
-interface ExportTranscriptionDatasetRow {
-  startTime: number;
-  endTime: number;
-  speakerValue: string;
-  content: string;
-  proofread?: ExportProofreadMetadata | null;
-  llmProofread?: boolean;
-}
-
-interface ExportTranscriptionPayload {
-  audioFileName: string;
-  speakerDataset: ExportSpeakerDatasetRow[];
-  transcriptionDataset: ExportTranscriptionDatasetRow[];
-  proofreadCompleted: boolean;
-}
-
 interface ReadFileSizeResponse {
   sizeBytes: number;
 }
@@ -182,23 +160,6 @@ interface ReadTextFileResponse {
 type ComputeTypeOption = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 type ConcreteComputeType = Exclude<ComputeTypeOption, 'auto'>;
 type TranscriptionDeviceOption = 'cuda' | 'cpu';
-type LocationDetectionMode = 'commonOnly' | 'selectedRegions';
-type LocationAreaCode =
-  | 'hokkaidoTohoku'
-  | 'kanto'
-  | 'chubu'
-  | 'kinki'
-  | 'chugoku'
-  | 'shikoku'
-  | 'kyushuOkinawa';
-
-interface LocationDetectionScope {
-  mode: LocationDetectionMode;
-  area?: LocationAreaCode;
-  prefectures: string[];
-  prefecturesByArea?: Partial<Record<LocationAreaCode, string[]>>;
-}
-
 interface RuntimeEstimateSample {
   audioSeconds: number;
   elapsedSeconds: number;
@@ -829,7 +790,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedLocationPrefectures = signal<string[]>([]);
   readonly selectedLocationPrefecturesByArea = signal<Partial<Record<LocationAreaCode, string[]>>>({});
   readonly filteredLocationPrefectureOptions = computed(() => {
-    const areaCodes = new Set(this.getLocationAreaPrefectureCodes(this.selectedLocationArea()));
+    const areaCodes = new Set(getLocationAreaPrefectureCodesValue(this.selectedLocationArea()));
     return this.locationPrefectureOptions.filter((option) => areaCodes.has(option.value));
   });
   readonly selectedLocationPrefectureTotalCount = computed(() => {
@@ -1522,17 +1483,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    if (typeof error === 'string') {
-      return error;
-    }
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return '予期しないエラーが発生しました。';
-    }
+    return normalizeErrorMessageValue(error);
   }
 
   private buildProofreadHint(
@@ -1971,7 +1922,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       if (Number.isFinite(proofread.chunkMaxChars)) {
         this.proofreadChunkMaxChars.set(this.normalizeProofreadChunkMaxChars(Number(proofread.chunkMaxChars)));
       }
-      const locationScope = this.normalizeLocationDetectionScope(proofread.locationDetectionScope);
+      const locationScope = normalizeLocationDetectionScopeValue(proofread.locationDetectionScope);
       this.selectedLocationArea.set(locationScope.area ?? 'kanto');
       this.selectedLocationPrefecturesByArea.set(locationScope.prefecturesByArea ?? {});
       this.selectedLocationPrefectures.set(locationScope.prefectures);
@@ -2149,130 +2100,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return normalizeTranscriptionDeviceValue(valueRaw, this.cpuOnlyBuild);
   }
 
-  private normalizeLocationArea(valueRaw: unknown): LocationAreaCode {
-    const value = String(valueRaw ?? '').trim();
-    if (value === 'hokkaido' || value === 'tohoku') {
-      return 'hokkaidoTohoku';
-    }
-    return this.locationAreaOptions.some((option) => option.value === value)
-      ? value as LocationAreaCode
-      : 'kanto';
-  }
-
-  private getLocationAreaPrefectureCodes(areaRaw: unknown): string[] {
-    switch (this.normalizeLocationArea(areaRaw)) {
-      case 'hokkaidoTohoku':
-        return ['01', '02', '03', '04', '05', '06', '07'];
-      case 'chubu':
-        return ['15', '16', '17', '18', '19', '20', '21', '22', '23'];
-      case 'kinki':
-        return ['24', '25', '26', '27', '28', '29', '30'];
-      case 'chugoku':
-        return ['31', '32', '33', '34', '35'];
-      case 'shikoku':
-        return ['36', '37', '38', '39'];
-      case 'kyushuOkinawa':
-        return ['40', '41', '42', '43', '44', '45', '46', '47'];
-      case 'kanto':
-      default:
-        return ['08', '09', '10', '11', '12', '13', '14'];
-    }
-  }
-
-  private inferLocationAreaFromPrefectures(prefectures: string[]): LocationAreaCode {
-    const first = prefectures[0];
-    if (!first) {
-      return 'kanto';
-    }
-    return this.locationAreaOptions.find((area) =>
-      this.getLocationAreaPrefectureCodes(area.value).includes(first)
-    )?.value ?? 'kanto';
-  }
-
-  private normalizeLocationPrefectureCodes(value: unknown): string[] {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-    const validCodes = new Set(this.locationPrefectureOptions.map((option) => option.value));
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of value) {
-      const code = String(item ?? '').trim();
-      if (validCodes.has(code) && !seen.has(code)) {
-        out.push(code);
-        seen.add(code);
-      }
-    }
-    return out;
-  }
-
-  private normalizeLocationPrefecturesByArea(raw: unknown): Partial<Record<LocationAreaCode, string[]>> {
-    if (!raw || typeof raw !== 'object') {
-      return {};
-    }
-    const obj = raw as Record<string, unknown>;
-    const out: Partial<Record<LocationAreaCode, string[]>> = {};
-    for (const areaOption of this.locationAreaOptions) {
-      const area = areaOption.value;
-      const areaCodes = new Set(this.getLocationAreaPrefectureCodes(area));
-      const values = area === 'hokkaidoTohoku'
-        ? [obj[area], obj['hokkaido'], obj['tohoku']]
-        : [obj[area]];
-      const prefectures = this.normalizeLocationPrefectureCodes(
-        values.flatMap((value) => this.normalizeLocationPrefectureCodes(value))
-      ).filter((code) => areaCodes.has(code));
-      if (prefectures.length > 0) {
-        out[area] = prefectures;
-      }
-    }
-    return out;
-  }
-
-  private normalizeLocationDetectionScope(raw: unknown): LocationDetectionScope {
-    if (!raw || typeof raw !== 'object') {
-      const area = 'kanto';
-      return { mode: 'commonOnly', area, prefectures: [], prefecturesByArea: {} };
-    }
-    const obj = raw as Partial<LocationDetectionScope>;
-    const rawPrefectures = this.normalizeLocationPrefectureCodes(obj.prefectures);
-    const prefecturesByArea = this.normalizeLocationPrefecturesByArea(obj.prefecturesByArea);
-    const area = this.normalizeLocationArea(obj.area ?? this.inferLocationAreaFromPrefectures(rawPrefectures));
-    const areaCodes = new Set(this.getLocationAreaPrefectureCodes(area));
-    const scopedPrefectures = rawPrefectures.filter((code) => areaCodes.has(code));
-    const mergedPrefecturesByArea = { ...prefecturesByArea };
-    if (scopedPrefectures.length > 0) {
-      mergedPrefecturesByArea[area] = scopedPrefectures;
-    }
-    const activePrefectures = scopedPrefectures.length > 0
-      ? scopedPrefectures
-      : (mergedPrefecturesByArea[area] ?? []);
-    return {
-      mode: activePrefectures.length > 0
-        ? 'selectedRegions'
-        : 'commonOnly',
-      area,
-      prefectures: activePrefectures,
-      prefecturesByArea: mergedPrefecturesByArea
-    };
-  }
-
   private buildLocationDetectionScopeRequest(): LocationDetectionScope {
-    const area = this.selectedLocationArea();
-    const areaCodes = new Set(this.getLocationAreaPrefectureCodes(area));
-    const prefectures = this.normalizeLocationPrefectureCodes(this.selectedLocationPrefectures())
-      .filter((code) => areaCodes.has(code));
-    const prefecturesByArea = { ...this.selectedLocationPrefecturesByArea() };
-    if (prefectures.length > 0) {
-      prefecturesByArea[area] = prefectures;
-    } else {
-      delete prefecturesByArea[area];
-    }
-    return {
-      mode: prefectures.length > 0 ? 'selectedRegions' : 'commonOnly',
-      area,
-      prefectures,
-      prefecturesByArea
-    };
+    return buildLocationDetectionScopeValue(
+      this.selectedLocationArea(),
+      this.selectedLocationPrefectures(),
+      this.selectedLocationPrefecturesByArea()
+    );
   }
 
   private persistProofreadSettings(): void {
@@ -3368,38 +3201,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
       this.result.set(response.result);
       this.resultSource.set('transcription');
-      {
-        const prevEdited = this.editedSegmentTextMap();
-        const prevMeta = this.proofreadMetadataBySegmentId();
-        const nextHints = { ...this.proofreadHintBySegmentId() };
-        const nextMeta = { ...prevMeta };
-        const nextEdited: Record<number, string> = {};
-        const finalSegmentIds = new Set(response.result.segments.map((s) => s.id));
-        for (const sid of Object.keys(nextHints).map(Number)) {
-          if (!finalSegmentIds.has(sid)) { delete nextHints[sid]; delete nextMeta[sid]; }
-        }
-        for (const s of response.result.segments) {
-          const revisedText = prevEdited[s.id];
-          if (typeof revisedText === 'string') {
-            const originalUsedByLlm = prevMeta[s.id]?.diff?.from;
-            const match = originalUsedByLlm === (s.text ?? '');
-            if (match) {
-              nextEdited[s.id] = revisedText;
-            } else {
-              nextEdited[s.id] = s.text ?? '';
-              delete nextHints[s.id];
-              delete nextMeta[s.id];
-            }
-          } else {
-            nextEdited[s.id] = s.text ?? '';
-          }
-        }
-        this.editedSegmentTextMap.set(nextEdited);
-        this.proofreadHintBySegmentId.set(nextHints);
-        this.proofreadMetadataBySegmentId.set(nextMeta);
-      }
-      this.speakerAliasMap.set(this.buildInitialSpeakerAliasMap(response.result));
-      this.selectedSpeakerBySegmentId.set(this.buildInitialSpeakerSelectionMap(response.result));
+      const reconciledState = reconcileRetranscriptionStateValue(
+        response.result.segments,
+        this.editedSegmentTextMap(),
+        this.proofreadHintBySegmentId(),
+        this.proofreadMetadataBySegmentId()
+      );
+      this.editedSegmentTextMap.set(reconciledState.editedTextBySegmentId);
+      this.proofreadHintBySegmentId.set(reconciledState.proofreadHintBySegmentId);
+      this.proofreadMetadataBySegmentId.set(reconciledState.proofreadMetadataBySegmentId);
+      this.speakerAliasMap.set(buildInitialSpeakerAliasMapValue(response.result.segments));
+      this.selectedSpeakerBySegmentId.set(buildInitialSpeakerSelectionMapValue(response.result.segments));
       this.focusFirstSpeakerAliasInput();
       this.lastObservedComputeType =
         String((response.result.settings as { computeType?: unknown })?.computeType ?? this.computeType());
@@ -3529,15 +3341,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
       this.result.set(response.result);
       this.resultSource.set(this.resultSource() ?? 'transcription');
-      const prevEdited = this.editedSegmentTextMap();
       this.editedSegmentTextMap.set(
-        Object.fromEntries(
-          response.result.segments.map((s) => [s.id, typeof prevEdited[s.id] === 'string' ? prevEdited[s.id] : (s.text ?? '')])
-        )
+        buildDiarizationEditedTextMapValue(response.result.segments, this.editedSegmentTextMap())
       );
-      this.selectedSpeakerBySegmentId.set(this.buildInitialSpeakerSelectionMap(response.result));
+      this.selectedSpeakerBySegmentId.set(buildInitialSpeakerSelectionMapValue(response.result.segments));
       const existingAlias = this.speakerAliasMap();
-      const inferredAlias = this.buildInitialSpeakerAliasMap(response.result);
+      const inferredAlias = buildInitialSpeakerAliasMapValue(response.result.segments);
       this.speakerAliasMap.set({ ...inferredAlias, ...existingAlias });
       const actualDeviceRaw = String(response.result.diarization?.device ?? '').trim().toLowerCase();
       if (actualDeviceRaw === 'cuda' || actualDeviceRaw === 'cpu') {
@@ -4538,12 +4347,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     try {
-      const exportSpeakerLabels = this.buildExportSpeakerLabelBySegmentId(this.segmentRows, this.addUtteranceNumber());
-      const rows: SaveDocxRow[] = this.segmentRows.map((segment) => ({
-        time: this.formatMinuteSecond(segment.end),
-        speaker: exportSpeakerLabels[segment.id] ?? '-',
-        text: this.getEditableText(segment)
-      }));
+      const rows = buildDocxExportRowsValue(this.buildDocumentExportSourceRows(), this.addUtteranceNumber());
 
       await invoke('save_transcription_docx', {
         request: {
@@ -4586,13 +4390,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     try {
       const finalPath = targetPath.toLowerCase().endsWith('.xlsx') ? targetPath : `${targetPath}.xlsx`;
-      const exportSpeakerLabels = this.buildExportSpeakerLabelBySegmentId(this.segmentRows, this.addUtteranceNumber());
-      const rows: SaveXlsxRow[] = this.segmentRows.map((segment) => ({
-        start: this.formatMinuteSecond(segment.start),
-        end: this.formatMinuteSecond(segment.end),
-        speaker: exportSpeakerLabels[segment.id] ?? '-',
-        text: this.getEditableText(segment)
-      }));
+      const rows = buildXlsxExportRowsValue(this.buildDocumentExportSourceRows(), this.addUtteranceNumber());
 
       await invoke('save_transcription_xlsx', {
         request: {
@@ -4642,12 +4440,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       const ext = hasPassword ? '.zip' : '.srt';
       const finalPath = targetPath.toLowerCase().endsWith(ext) ? targetPath : `${targetPath}${ext}`;
-      const rows: SaveSrtRow[] = this.segmentRows.map((segment) => ({
-        startSeconds: segment.start,
-        endSeconds: segment.end,
-        speaker: this.displaySpeaker(this.getAssignedSpeakerKey(segment)).trim(),
-        text: this.getEditableText(segment)
-      }));
+      const rows = buildSrtExportRowsValue(this.buildDocumentExportSourceRows());
       await invoke('save_transcription_srt', {
         request: {
           path: finalPath,
@@ -4700,112 +4493,43 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }, 0);
   }
 
-  private buildInitialSpeakerAliasMap(result: TranscriptionResult): Record<string, string> {
-    const aliases: Record<string, string> = {};
-    const speakers = new Set<string>();
-    for (const segment of result.segments) {
-      if (segment.speaker) {
-        speakers.add(segment.speaker);
-      }
-    }
-    for (const speaker of speakers) {
-      if (speaker === 'SPEAKER_00') aliases[speaker] = 'Th';
-      else if (speaker === 'SPEAKER_01') aliases[speaker] = 'Cl';
-      else if (speaker === 'SPEAKER_02') aliases[speaker] = 'IP';
-      else if (speaker === 'SPEAKER_03') aliases[speaker] = 'IP2';
-      else if (speaker === 'SPEAKER_04') aliases[speaker] = 'IP3';
-      else aliases[speaker] = 'Cl';
-    }
-    return aliases;
-  }
-
-  private buildInitialSpeakerSelectionMap(result: TranscriptionResult): Record<number, string> {
-    const selected: Record<number, string> = {};
-    for (const segment of result.segments) {
-      const estimated = (segment.speaker ?? '').trim();
-      if (estimated.length > 0) {
-        selected[segment.id] = estimated;
-      }
-    }
-    return selected;
-  }
-
   onAddUtteranceNumberChange(checked: boolean): void {
     this.addUtteranceNumber.set(checked);
     this.appSettings = { ...this.appSettings, export: { ...this.appSettings.export, addUtteranceNumber: checked } };
     this.persistAppSettings();
   }
 
-  private buildExportSpeakerLabelBySegmentId(
-    segments: ReadonlyArray<TranscriptionSegment>,
-    withNumber: boolean
-  ): Record<number, string> {
-    const byId: Record<number, string> = {};
-    const counts: Record<string, number> = {};
-    for (const segment of segments) {
-      const base = this.displaySpeaker(this.getAssignedSpeakerKey(segment)).trim();
-      if (base.length === 0 || base === '-') {
-        byId[segment.id] = '-';
-        continue;
-      }
-      counts[base] = (counts[base] ?? 0) + 1;
-      byId[segment.id] = withNumber ? `${base}-${String(counts[base]).padStart(3, '0')}` : base;
-    }
-    return byId;
+  private buildDocumentExportSourceRows(): DocumentExportSourceRow[] {
+    return this.segmentRows.map((segment) => ({
+      id: segment.id,
+      startSeconds: segment.start,
+      endSeconds: segment.end,
+      speakerLabel: this.displaySpeaker(this.getAssignedSpeakerKey(segment)),
+      text: this.getEditableText(segment)
+    }));
   }
 
   private buildExportTranscriptionPayload(): ExportTranscriptionPayload {
     const segments = this.segmentRows;
-    const proofreadMetadataBySegmentId = this.proofreadMetadataBySegmentId();
-    const speakerKeys = new Set<string>();
-    for (const segment of segments) {
-      const speakerValue = this.getAssignedSpeakerKey(segment).trim();
-      if (speakerValue.length > 0) {
-        speakerKeys.add(speakerValue);
-      }
-    }
-
-    const speakerDataset: ExportSpeakerDatasetRow[] = Array.from(speakerKeys)
-      .sort()
-      .map((speakerValue) => ({
-        speakerValue,
-        displayName: this.displaySpeaker(speakerValue)
-      }));
-
-    const llmSegmentStatus = this.llmSegmentStatus();
-    const transcriptionDataset: ExportTranscriptionDatasetRow[] = segments.map((segment) => {
-      const proofread = proofreadMetadataBySegmentId[segment.id];
-      const llmDone = llmSegmentStatus[segment.id] === 'done';
-      return {
+    return buildExportTranscriptionPayloadValue({
+      audioFileName: this.selectedAudioFileName,
+      rows: segments.map((segment) => ({
+        id: segment.id,
         startTime: segment.start,
         endTime: segment.end,
         speakerValue: this.getAssignedSpeakerKey(segment),
-        content: this.getEditableText(segment),
-        proofread: proofread ? {
-          diff: {
-            from: proofread.diff.from,
-            to: proofread.diff.to
-          },
-          confidence: proofread.confidence,
-          reason: proofread.reason,
-          lintIssues: proofread.lintIssues,
-          sensitiveEntity: proofread.sensitiveEntity
-        } : undefined,
-        ...(llmDone ? { llmProofread: true } : {})
-      };
-    });
-
-    return {
-      audioFileName: this.selectedAudioFileName,
-      speakerDataset,
-      transcriptionDataset,
+        content: this.getEditableText(segment)
+      })),
+      speakerDisplayNameByValue: this.speakerAliasMap(),
+      proofreadMetadataBySegmentId: this.proofreadMetadataBySegmentId(),
+      llmSegmentStatusBySegmentId: this.llmSegmentStatus(),
       proofreadCompleted: this.proofreadCompleted()
-    };
+    });
   }
 
   private loadImportJsonContent(content: string): void {
     this.importExpectedAudioFileName.set('');
-    const parsed = this.parseImportedJson(content);
+    const parsed = parseImportedTranscriptionJsonValue(content);
     if (!parsed.ok) {
       this.error.set(parsed.error);
       return;
@@ -4942,129 +4666,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   isPlaybackDisabled(): boolean {
     return this.isJsonResult() && !this.importAudioReady();
-  }
-
-  private parseImportedJson(content: string):
-    | { ok: true; value: ExportTranscriptionPayload }
-    | { ok: false; error: string } {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(content);
-    } catch {
-      return { ok: false, error: 'JSON の形式が不正です。' };
-    }
-
-    if (!raw || typeof raw !== 'object') {
-      return { ok: false, error: 'JSON のルートはオブジェクトである必要があります。' };
-    }
-
-    const obj = raw as Record<string, unknown>;
-    if (typeof obj['audioFileName'] !== 'string') {
-      return { ok: false, error: 'audioFileName は文字列である必要があります。' };
-    }
-    if (!Array.isArray(obj['speakerDataset'])) {
-      return { ok: false, error: 'speakerDataset は配列である必要があります。' };
-    }
-    if (!Array.isArray(obj['transcriptionDataset'])) {
-      return { ok: false, error: 'transcriptionDataset は配列である必要があります。' };
-    }
-    if (obj['proofreadCompleted'] !== undefined && typeof obj['proofreadCompleted'] !== 'boolean') {
-      return { ok: false, error: 'proofreadCompleted は真偽値である必要があります。' };
-    }
-
-    const speakerDataset: ExportSpeakerDatasetRow[] = [];
-    for (let i = 0; i < obj['speakerDataset'].length; i += 1) {
-      const row = obj['speakerDataset'][i];
-      if (!row || typeof row !== 'object') {
-        return { ok: false, error: `speakerDataset[${i}] の形式が不正です。` };
-      }
-      const rowObj = row as Record<string, unknown>;
-      if (typeof rowObj['speakerValue'] !== 'string' || typeof rowObj['displayName'] !== 'string') {
-        return { ok: false, error: `speakerDataset[${i}] は speakerValue/displayName の文字列が必要です。` };
-      }
-      speakerDataset.push({
-        speakerValue: rowObj['speakerValue'],
-        displayName: rowObj['displayName']
-      });
-    }
-
-    const transcriptionDataset: ExportTranscriptionDatasetRow[] = [];
-    for (let i = 0; i < obj['transcriptionDataset'].length; i += 1) {
-      const row = obj['transcriptionDataset'][i];
-      if (!row || typeof row !== 'object') {
-        return { ok: false, error: `transcriptionDataset[${i}] の形式が不正です。` };
-      }
-      const rowObj = row as Record<string, unknown>;
-      if (
-        typeof rowObj['startTime'] !== 'number' ||
-        typeof rowObj['endTime'] !== 'number' ||
-        typeof rowObj['speakerValue'] !== 'string' ||
-        typeof rowObj['content'] !== 'string'
-      ) {
-        return {
-          ok: false,
-          error: `transcriptionDataset[${i}] は startTime/endTime(数値), speakerValue/content(文字列) が必要です。`
-        };
-      }
-      if (!Number.isFinite(rowObj['startTime']) || !Number.isFinite(rowObj['endTime'])) {
-        return { ok: false, error: `transcriptionDataset[${i}] の時刻が不正です。` };
-      }
-      if (rowObj['startTime'] < 0 || rowObj['endTime'] < 0 || rowObj['endTime'] < rowObj['startTime']) {
-        return { ok: false, error: `transcriptionDataset[${i}] の開始/終了時刻の関係が不正です。` };
-      }
-      let proofread: ExportProofreadMetadata | null | undefined = undefined;
-      const proofreadRaw = rowObj['proofread'];
-      if (proofreadRaw !== undefined && proofreadRaw !== null) {
-        if (!proofreadRaw || typeof proofreadRaw !== 'object') {
-          return { ok: false, error: `transcriptionDataset[${i}].proofread の形式が不正です。` };
-        }
-        const proofreadObj = proofreadRaw as Record<string, unknown>;
-        const diffRaw = proofreadObj['diff'];
-        if (!diffRaw || typeof diffRaw !== 'object') {
-          return { ok: false, error: `transcriptionDataset[${i}].proofread.diff の形式が不正です。` };
-        }
-        const diffObj = diffRaw as Record<string, unknown>;
-        if (
-          typeof diffObj['from'] !== 'string' ||
-          typeof diffObj['to'] !== 'string' ||
-          typeof proofreadObj['confidence'] !== 'number' ||
-          !Number.isFinite(proofreadObj['confidence']) ||
-          typeof proofreadObj['reason'] !== 'string'
-        ) {
-          return {
-            ok: false,
-            error: `transcriptionDataset[${i}].proofread は diff.from/to(文字列), confidence(数値), reason(文字列) が必要です。`
-          };
-        }
-        proofread = this.normalizeProofreadMetadata(
-          diffObj['from'],
-          diffObj['to'],
-          proofreadObj['confidence'],
-          proofreadObj['reason'],
-          proofreadObj['sensitiveEntity'],
-          proofreadObj['lintIssues']
-        );
-      }
-      const llmProofread = rowObj['llmProofread'] === true ? true : undefined;
-      transcriptionDataset.push({
-        startTime: rowObj['startTime'],
-        endTime: rowObj['endTime'],
-        speakerValue: rowObj['speakerValue'],
-        content: rowObj['content'],
-        proofread,
-        llmProofread
-      });
-    }
-
-    return {
-      ok: true,
-      value: {
-        audioFileName: obj['audioFileName'],
-        speakerDataset,
-        transcriptionDataset,
-        proofreadCompleted: obj['proofreadCompleted'] === true
-      }
-    };
   }
 
   async copyErrorToClipboard(): Promise<void> {
@@ -8097,7 +7698,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   onLocationAreaChange(value: LocationAreaCode): void {
-    const area = this.normalizeLocationArea(value);
+    const area = normalizeLocationAreaValue(value);
     this.selectedLocationArea.set(area);
     this.selectedLocationPrefectures.set(this.selectedLocationPrefecturesByArea()[area] ?? []);
     this.persistProofreadSettings();
@@ -8105,9 +7706,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   onSelectedLocationPrefecturesChange(value: string[] | string): void {
     const area = this.selectedLocationArea();
-    const areaCodes = new Set(this.getLocationAreaPrefectureCodes(area));
-    const prefectures = this
-      .normalizeLocationPrefectureCodes(Array.isArray(value) ? value : [value])
+    const areaCodes = new Set(getLocationAreaPrefectureCodesValue(area));
+    const prefectures = normalizeLocationPrefectureCodesValue(Array.isArray(value) ? value : [value])
       .filter((code) => areaCodes.has(code));
     this.selectedLocationPrefectures.set(prefectures);
     this.selectedLocationPrefecturesByArea.update((current) => {

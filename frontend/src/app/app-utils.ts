@@ -2,6 +2,55 @@ export type DefaultExportFileKind = 'docx' | 'xlsx' | 'srt' | 'json' | 'runtime-
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
 export type NormalizedTranscriptionDevice = 'cuda' | 'cpu';
+export type LocationDetectionMode = 'commonOnly' | 'selectedRegions';
+export type LocationAreaCode =
+  | 'hokkaidoTohoku'
+  | 'kanto'
+  | 'chubu'
+  | 'kinki'
+  | 'chugoku'
+  | 'shikoku'
+  | 'kyushuOkinawa';
+
+export interface LocationDetectionScope {
+  mode: LocationDetectionMode;
+  area?: LocationAreaCode;
+  prefectures: string[];
+  prefecturesByArea?: Partial<Record<LocationAreaCode, string[]>>;
+}
+
+export interface DocumentExportSourceRow {
+  id: number;
+  startSeconds: number;
+  endSeconds: number;
+  speakerLabel: string;
+  text: string;
+}
+
+export interface InitialSpeakerSourceRow {
+  id: number;
+  speaker?: string | null;
+}
+
+export interface SaveDocxRow {
+  time: string;
+  speaker: string;
+  text: string;
+}
+
+export interface SaveXlsxRow {
+  start: string;
+  end: string;
+  speaker: string;
+  text: string;
+}
+
+export interface SaveSrtRow {
+  startSeconds: number;
+  endSeconds: number;
+  speaker: string;
+  text: string;
+}
 
 function timestampParts(now: Date): {
   date: string;
@@ -58,6 +107,253 @@ export function formatElapsedMinuteSecondValue(seconds: number): string {
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
   return `${min}分${sec}秒`;
+}
+
+export function normalizeErrorMessageValue(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  try {
+    const serialized = JSON.stringify(error);
+    return typeof serialized === 'string'
+      ? serialized
+      : '予期しないエラーが発生しました。';
+  } catch {
+    return '予期しないエラーが発生しました。';
+  }
+}
+
+export function buildExportSpeakerLabelByRowIdValue(
+  rows: ReadonlyArray<Pick<DocumentExportSourceRow, 'id' | 'speakerLabel'>>,
+  withNumber: boolean
+): Record<number, string> {
+  const byId: Record<number, string> = {};
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const base = row.speakerLabel.trim();
+    if (base.length === 0 || base === '-') {
+      byId[row.id] = '-';
+      continue;
+    }
+    counts[base] = (counts[base] ?? 0) + 1;
+    byId[row.id] = withNumber ? `${base}-${String(counts[base]).padStart(3, '0')}` : base;
+  }
+  return byId;
+}
+
+export function buildDocxExportRowsValue(
+  rows: ReadonlyArray<DocumentExportSourceRow>,
+  withUtteranceNumber: boolean
+): SaveDocxRow[] {
+  const speakerLabels = buildExportSpeakerLabelByRowIdValue(rows, withUtteranceNumber);
+  return rows.map((row) => ({
+    time: formatMinuteSecondValue(row.endSeconds),
+    speaker: speakerLabels[row.id] ?? '-',
+    text: row.text
+  }));
+}
+
+export function buildXlsxExportRowsValue(
+  rows: ReadonlyArray<DocumentExportSourceRow>,
+  withUtteranceNumber: boolean
+): SaveXlsxRow[] {
+  const speakerLabels = buildExportSpeakerLabelByRowIdValue(rows, withUtteranceNumber);
+  return rows.map((row) => ({
+    start: formatMinuteSecondValue(row.startSeconds),
+    end: formatMinuteSecondValue(row.endSeconds),
+    speaker: speakerLabels[row.id] ?? '-',
+    text: row.text
+  }));
+}
+
+export function buildSrtExportRowsValue(
+  rows: ReadonlyArray<DocumentExportSourceRow>
+): SaveSrtRow[] {
+  return rows.map((row) => ({
+    startSeconds: row.startSeconds,
+    endSeconds: row.endSeconds,
+    speaker: row.speakerLabel.trim(),
+    text: row.text
+  }));
+}
+
+export function buildInitialSpeakerAliasMapValue(
+  rows: ReadonlyArray<InitialSpeakerSourceRow>
+): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  const speakers = new Set<string>();
+  for (const row of rows) {
+    if (row.speaker) {
+      speakers.add(row.speaker);
+    }
+  }
+  for (const speaker of speakers) {
+    switch (speaker) {
+      case 'SPEAKER_00':
+        aliases[speaker] = 'Th';
+        break;
+      case 'SPEAKER_01':
+        aliases[speaker] = 'Cl';
+        break;
+      case 'SPEAKER_02':
+        aliases[speaker] = 'IP';
+        break;
+      case 'SPEAKER_03':
+        aliases[speaker] = 'IP2';
+        break;
+      case 'SPEAKER_04':
+        aliases[speaker] = 'IP3';
+        break;
+      default:
+        aliases[speaker] = 'Cl';
+        break;
+    }
+  }
+  return aliases;
+}
+
+export function buildInitialSpeakerSelectionMapValue(
+  rows: ReadonlyArray<InitialSpeakerSourceRow>
+): Record<number, string> {
+  const selected: Record<number, string> = {};
+  for (const row of rows) {
+    const estimated = (row.speaker ?? '').trim();
+    if (estimated.length > 0) {
+      selected[row.id] = estimated;
+    }
+  }
+  return selected;
+}
+
+const locationAreaPrefectureCodes: Readonly<Record<LocationAreaCode, ReadonlyArray<string>>> = {
+  hokkaidoTohoku: ['01', '02', '03', '04', '05', '06', '07'],
+  kanto: ['08', '09', '10', '11', '12', '13', '14'],
+  chubu: ['15', '16', '17', '18', '19', '20', '21', '22', '23'],
+  kinki: ['24', '25', '26', '27', '28', '29', '30'],
+  chugoku: ['31', '32', '33', '34', '35'],
+  shikoku: ['36', '37', '38', '39'],
+  kyushuOkinawa: ['40', '41', '42', '43', '44', '45', '46', '47']
+};
+
+const locationAreaCodes = Object.keys(locationAreaPrefectureCodes) as LocationAreaCode[];
+const validLocationPrefectureCodes = new Set(
+  locationAreaCodes.flatMap((area) => locationAreaPrefectureCodes[area])
+);
+
+export function normalizeLocationAreaValue(valueRaw: unknown): LocationAreaCode {
+  const value = String(valueRaw ?? '').trim();
+  if (value === 'hokkaido' || value === 'tohoku') {
+    return 'hokkaidoTohoku';
+  }
+  return locationAreaCodes.includes(value as LocationAreaCode)
+    ? value as LocationAreaCode
+    : 'kanto';
+}
+
+export function getLocationAreaPrefectureCodesValue(areaRaw: unknown): string[] {
+  return [...locationAreaPrefectureCodes[normalizeLocationAreaValue(areaRaw)]];
+}
+
+export function inferLocationAreaFromPrefecturesValue(
+  prefectures: ReadonlyArray<string>
+): LocationAreaCode {
+  const first = prefectures[0];
+  if (!first) {
+    return 'kanto';
+  }
+  return locationAreaCodes.find((area) => locationAreaPrefectureCodes[area].includes(first)) ?? 'kanto';
+}
+
+export function normalizeLocationPrefectureCodesValue(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const code = String(item ?? '').trim();
+    if (validLocationPrefectureCodes.has(code) && !seen.has(code)) {
+      out.push(code);
+      seen.add(code);
+    }
+  }
+  return out;
+}
+
+export function normalizeLocationPrefecturesByAreaValue(
+  raw: unknown
+): Partial<Record<LocationAreaCode, string[]>> {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+  const obj = raw as Record<string, unknown>;
+  const out: Partial<Record<LocationAreaCode, string[]>> = {};
+  for (const area of locationAreaCodes) {
+    const areaCodes = new Set(locationAreaPrefectureCodes[area]);
+    const values = area === 'hokkaidoTohoku'
+      ? [obj[area], obj['hokkaido'], obj['tohoku']]
+      : [obj[area]];
+    const prefectures = normalizeLocationPrefectureCodesValue(
+      values.flatMap((value) => normalizeLocationPrefectureCodesValue(value))
+    ).filter((code) => areaCodes.has(code));
+    if (prefectures.length > 0) {
+      out[area] = prefectures;
+    }
+  }
+  return out;
+}
+
+export function normalizeLocationDetectionScopeValue(raw: unknown): LocationDetectionScope {
+  if (!raw || typeof raw !== 'object') {
+    const area = 'kanto';
+    return { mode: 'commonOnly', area, prefectures: [], prefecturesByArea: {} };
+  }
+  const obj = raw as Partial<LocationDetectionScope>;
+  const rawPrefectures = normalizeLocationPrefectureCodesValue(obj.prefectures);
+  const prefecturesByArea = normalizeLocationPrefecturesByAreaValue(obj.prefecturesByArea);
+  const area = normalizeLocationAreaValue(
+    obj.area ?? inferLocationAreaFromPrefecturesValue(rawPrefectures)
+  );
+  const areaCodes = new Set(getLocationAreaPrefectureCodesValue(area));
+  const scopedPrefectures = rawPrefectures.filter((code) => areaCodes.has(code));
+  const mergedPrefecturesByArea = { ...prefecturesByArea };
+  if (scopedPrefectures.length > 0) {
+    mergedPrefecturesByArea[area] = scopedPrefectures;
+  }
+  const activePrefectures = scopedPrefectures.length > 0
+    ? scopedPrefectures
+    : (mergedPrefecturesByArea[area] ?? []);
+  return {
+    mode: activePrefectures.length > 0 ? 'selectedRegions' : 'commonOnly',
+    area,
+    prefectures: activePrefectures,
+    prefecturesByArea: mergedPrefecturesByArea
+  };
+}
+
+export function buildLocationDetectionScopeValue(
+  area: LocationAreaCode,
+  selectedPrefectures: unknown,
+  selectedPrefecturesByArea: Readonly<Partial<Record<LocationAreaCode, string[]>>>
+): LocationDetectionScope {
+  const areaCodes = new Set(getLocationAreaPrefectureCodesValue(area));
+  const prefectures = normalizeLocationPrefectureCodesValue(selectedPrefectures)
+    .filter((code) => areaCodes.has(code));
+  const prefecturesByArea = { ...selectedPrefecturesByArea };
+  if (prefectures.length > 0) {
+    prefecturesByArea[area] = prefectures;
+  } else {
+    delete prefecturesByArea[area];
+  }
+  return {
+    mode: prefectures.length > 0 ? 'selectedRegions' : 'commonOnly',
+    area,
+    prefectures,
+    prefecturesByArea
+  };
 }
 
 export function normalizeProofreadChunkSizeValue(value: number): number {

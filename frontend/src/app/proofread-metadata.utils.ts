@@ -34,6 +34,59 @@ export interface ExportProofreadMetadata {
   sensitiveEntity?: SensitiveEntityMetadata;
 }
 
+export interface ExportSpeakerDatasetRow {
+  speakerValue: string;
+  displayName: string;
+}
+
+export interface ExportTranscriptionDatasetRow {
+  startTime: number;
+  endTime: number;
+  speakerValue: string;
+  content: string;
+  proofread?: ExportProofreadMetadata | null;
+  llmProofread?: boolean;
+}
+
+export interface ExportTranscriptionPayload {
+  audioFileName: string;
+  speakerDataset: ExportSpeakerDatasetRow[];
+  transcriptionDataset: ExportTranscriptionDatasetRow[];
+  proofreadCompleted: boolean;
+}
+
+export interface ExportTranscriptionSourceRow {
+  id: number;
+  startTime: number;
+  endTime: number;
+  speakerValue: string;
+  content: string;
+}
+
+export interface BuildExportTranscriptionPayloadInput {
+  audioFileName: string;
+  rows: ReadonlyArray<ExportTranscriptionSourceRow>;
+  speakerDisplayNameByValue: Readonly<Record<string, string>>;
+  proofreadMetadataBySegmentId: Readonly<Record<number, ExportProofreadMetadata>>;
+  llmSegmentStatusBySegmentId: Readonly<Partial<Record<number, 'processing' | 'done'>>>;
+  proofreadCompleted: boolean;
+}
+
+export interface RetranscriptionSegmentInput {
+  id: number;
+  text?: string | null;
+}
+
+export interface ReconciledRetranscriptionState {
+  editedTextBySegmentId: Record<number, string>;
+  proofreadHintBySegmentId: Record<number, string>;
+  proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata>;
+}
+
+export type ParseImportedTranscriptionJsonResult =
+  | { ok: true; value: ExportTranscriptionPayload }
+  | { ok: false; error: string };
+
 export type ProofreadHighlightLevel = 'none' | 'yellow' | 'red';
 export type SensitiveEntityHighlightInput = Partial<SensitiveEntityMetadata> | null | undefined;
 
@@ -162,6 +215,238 @@ export function normalizeProofreadMetadataValue(
     reason,
     lintIssues: normalizeLintIssuesValue(lintIssuesRaw),
     sensitiveEntity: normalizeSensitiveEntityMetadataValue(sensitiveEntityRaw)
+  };
+}
+
+export function buildExportTranscriptionPayloadValue(
+  input: BuildExportTranscriptionPayloadInput
+): ExportTranscriptionPayload {
+  const speakerKeys = new Set<string>();
+  for (const row of input.rows) {
+    const speakerValue = row.speakerValue.trim();
+    if (speakerValue.length > 0) {
+      speakerKeys.add(speakerValue);
+    }
+  }
+
+  const speakerDataset: ExportSpeakerDatasetRow[] = Array.from(speakerKeys)
+    .sort()
+    .map((speakerValue) => {
+      const alias = input.speakerDisplayNameByValue[speakerValue];
+      return {
+        speakerValue,
+        displayName: alias && alias.length > 0 ? alias : speakerValue
+      };
+    });
+
+  const transcriptionDataset: ExportTranscriptionDatasetRow[] = input.rows.map((row) => {
+    const proofread = input.proofreadMetadataBySegmentId[row.id];
+    const llmDone = input.llmSegmentStatusBySegmentId[row.id] === 'done';
+    return {
+      startTime: row.startTime,
+      endTime: row.endTime,
+      speakerValue: row.speakerValue,
+      content: row.content,
+      proofread: proofread ? {
+        diff: {
+          from: proofread.diff.from,
+          to: proofread.diff.to
+        },
+        confidence: proofread.confidence,
+        reason: proofread.reason,
+        lintIssues: proofread.lintIssues,
+        sensitiveEntity: proofread.sensitiveEntity
+      } : undefined,
+      ...(llmDone ? { llmProofread: true } : {})
+    };
+  });
+
+  return {
+    audioFileName: input.audioFileName,
+    speakerDataset,
+    transcriptionDataset,
+    proofreadCompleted: input.proofreadCompleted
+  };
+}
+
+export function reconcileRetranscriptionStateValue(
+  segments: ReadonlyArray<RetranscriptionSegmentInput>,
+  previousEditedTextBySegmentId: Readonly<Record<number, string>>,
+  previousProofreadHintBySegmentId: Readonly<Record<number, string>>,
+  previousProofreadMetadataBySegmentId: Readonly<Record<number, ExportProofreadMetadata>>
+): ReconciledRetranscriptionState {
+  const proofreadHintBySegmentId = { ...previousProofreadHintBySegmentId };
+  const proofreadMetadataBySegmentId = { ...previousProofreadMetadataBySegmentId };
+  const editedTextBySegmentId: Record<number, string> = {};
+  const finalSegmentIds = new Set(segments.map((segment) => segment.id));
+
+  for (const segmentId of Object.keys(proofreadHintBySegmentId).map(Number)) {
+    if (!finalSegmentIds.has(segmentId)) {
+      delete proofreadHintBySegmentId[segmentId];
+      delete proofreadMetadataBySegmentId[segmentId];
+    }
+  }
+
+  for (const segment of segments) {
+    const transcriptionText = segment.text ?? '';
+    const revisedText = previousEditedTextBySegmentId[segment.id];
+    if (typeof revisedText === 'string') {
+      const originalUsedByLlm = previousProofreadMetadataBySegmentId[segment.id]?.diff.from;
+      if (originalUsedByLlm === transcriptionText) {
+        editedTextBySegmentId[segment.id] = revisedText;
+      } else {
+        editedTextBySegmentId[segment.id] = transcriptionText;
+        delete proofreadHintBySegmentId[segment.id];
+        delete proofreadMetadataBySegmentId[segment.id];
+      }
+    } else {
+      editedTextBySegmentId[segment.id] = transcriptionText;
+    }
+  }
+
+  return {
+    editedTextBySegmentId,
+    proofreadHintBySegmentId,
+    proofreadMetadataBySegmentId
+  };
+}
+
+export function buildDiarizationEditedTextMapValue(
+  segments: ReadonlyArray<RetranscriptionSegmentInput>,
+  previousEditedTextBySegmentId: Readonly<Record<number, string>>
+): Record<number, string> {
+  return Object.fromEntries(
+    segments.map((segment) => {
+      const previousText = previousEditedTextBySegmentId[segment.id];
+      return [
+        segment.id,
+        typeof previousText === 'string' ? previousText : (segment.text ?? '')
+      ];
+    })
+  );
+}
+
+export function parseImportedTranscriptionJsonValue(
+  content: string
+): ParseImportedTranscriptionJsonResult {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(content);
+  } catch {
+    return { ok: false, error: 'JSON の形式が不正です。' };
+  }
+
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, error: 'JSON のルートはオブジェクトである必要があります。' };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj['audioFileName'] !== 'string') {
+    return { ok: false, error: 'audioFileName は文字列である必要があります。' };
+  }
+  if (!Array.isArray(obj['speakerDataset'])) {
+    return { ok: false, error: 'speakerDataset は配列である必要があります。' };
+  }
+  if (!Array.isArray(obj['transcriptionDataset'])) {
+    return { ok: false, error: 'transcriptionDataset は配列である必要があります。' };
+  }
+  if (obj['proofreadCompleted'] !== undefined && typeof obj['proofreadCompleted'] !== 'boolean') {
+    return { ok: false, error: 'proofreadCompleted は真偽値である必要があります。' };
+  }
+
+  const speakerDataset: ExportSpeakerDatasetRow[] = [];
+  for (let i = 0; i < obj['speakerDataset'].length; i += 1) {
+    const row = obj['speakerDataset'][i];
+    if (!row || typeof row !== 'object') {
+      return { ok: false, error: `speakerDataset[${i}] の形式が不正です。` };
+    }
+    const rowObj = row as Record<string, unknown>;
+    if (typeof rowObj['speakerValue'] !== 'string' || typeof rowObj['displayName'] !== 'string') {
+      return { ok: false, error: `speakerDataset[${i}] は speakerValue/displayName の文字列が必要です。` };
+    }
+    speakerDataset.push({
+      speakerValue: rowObj['speakerValue'],
+      displayName: rowObj['displayName']
+    });
+  }
+
+  const transcriptionDataset: ExportTranscriptionDatasetRow[] = [];
+  for (let i = 0; i < obj['transcriptionDataset'].length; i += 1) {
+    const row = obj['transcriptionDataset'][i];
+    if (!row || typeof row !== 'object') {
+      return { ok: false, error: `transcriptionDataset[${i}] の形式が不正です。` };
+    }
+    const rowObj = row as Record<string, unknown>;
+    if (
+      typeof rowObj['startTime'] !== 'number' ||
+      typeof rowObj['endTime'] !== 'number' ||
+      typeof rowObj['speakerValue'] !== 'string' ||
+      typeof rowObj['content'] !== 'string'
+    ) {
+      return {
+        ok: false,
+        error: `transcriptionDataset[${i}] は startTime/endTime(数値), speakerValue/content(文字列) が必要です。`
+      };
+    }
+    if (!Number.isFinite(rowObj['startTime']) || !Number.isFinite(rowObj['endTime'])) {
+      return { ok: false, error: `transcriptionDataset[${i}] の時刻が不正です。` };
+    }
+    if (rowObj['startTime'] < 0 || rowObj['endTime'] < 0 || rowObj['endTime'] < rowObj['startTime']) {
+      return { ok: false, error: `transcriptionDataset[${i}] の開始/終了時刻の関係が不正です。` };
+    }
+
+    let proofread: ExportProofreadMetadata | null | undefined = undefined;
+    const proofreadRaw = rowObj['proofread'];
+    if (proofreadRaw !== undefined && proofreadRaw !== null) {
+      if (!proofreadRaw || typeof proofreadRaw !== 'object') {
+        return { ok: false, error: `transcriptionDataset[${i}].proofread の形式が不正です。` };
+      }
+      const proofreadObj = proofreadRaw as Record<string, unknown>;
+      const diffRaw = proofreadObj['diff'];
+      if (!diffRaw || typeof diffRaw !== 'object') {
+        return { ok: false, error: `transcriptionDataset[${i}].proofread.diff の形式が不正です。` };
+      }
+      const diffObj = diffRaw as Record<string, unknown>;
+      if (
+        typeof diffObj['from'] !== 'string' ||
+        typeof diffObj['to'] !== 'string' ||
+        typeof proofreadObj['confidence'] !== 'number' ||
+        !Number.isFinite(proofreadObj['confidence']) ||
+        typeof proofreadObj['reason'] !== 'string'
+      ) {
+        return {
+          ok: false,
+          error: `transcriptionDataset[${i}].proofread は diff.from/to(文字列), confidence(数値), reason(文字列) が必要です。`
+        };
+      }
+      proofread = normalizeProofreadMetadataValue(
+        diffObj['from'],
+        diffObj['to'],
+        proofreadObj['confidence'],
+        proofreadObj['reason'],
+        proofreadObj['sensitiveEntity'],
+        proofreadObj['lintIssues']
+      );
+    }
+    const llmProofread = rowObj['llmProofread'] === true ? true : undefined;
+    transcriptionDataset.push({
+      startTime: rowObj['startTime'],
+      endTime: rowObj['endTime'],
+      speakerValue: rowObj['speakerValue'],
+      content: rowObj['content'],
+      proofread,
+      llmProofread
+    });
+  }
+
+  return {
+    ok: true,
+    value: {
+      audioFileName: obj['audioFileName'],
+      speakerDataset,
+      transcriptionDataset,
+      proofreadCompleted: obj['proofreadCompleted'] === true
+    }
   };
 }
 

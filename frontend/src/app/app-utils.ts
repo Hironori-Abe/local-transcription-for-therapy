@@ -4,6 +4,8 @@ import type {
   GeneralAppSettingsOptions,
   GeneralAppSettingsValue,
   LlmBackendMode,
+  LlmPromptType,
+  LlmStringSettingsField,
   ResolvedLlmAppSettingsValue,
   ResolveLlmAppSettingsOptions
 } from './app-settings';
@@ -2135,6 +2137,75 @@ export function updateLlmSelectionSettingsValue(
       llmPromptType: value.llmPromptType,
       llmParallel: value.llmParallel,
       proofreadModelTier: value.proofreadModelTier
+    }
+  };
+}
+
+export function buildLlmScopedSettingsKeyValue(
+  mode: LlmBackendMode,
+  modelInput: string,
+  modelPath: string
+): { scope: 'backend' | 'model'; key: string } | null {
+  if (mode === 'local_gguf') {
+    const key = getLlmModelFileNameValue(modelPath);
+    return key ? { scope: 'model', key } : null;
+  }
+  const model = modelInput.trim();
+  return model ? { scope: 'backend', key: `${mode}:${model}` } : null;
+}
+
+export function getStoredLlmStringSettingValue(
+  settings: AppSettingsV1,
+  field: LlmStringSettingsField,
+  key: string
+): string | undefined {
+  const value = settings.llm?.[field]?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+export function hasStoredLlmStringSettingValue(
+  settings: AppSettingsV1,
+  field: LlmStringSettingsField,
+  key: string
+): boolean {
+  return getStoredLlmStringSettingValue(settings, field, key) !== undefined;
+}
+
+export function updateStoredLlmStringSettingValue(
+  settings: AppSettingsV1,
+  field: LlmStringSettingsField,
+  key: string,
+  value: string | null
+): AppSettingsV1 {
+  const llm = settings.llm ?? {};
+  const record = { ...(llm[field] ?? {}) };
+  if (value === null) {
+    delete record[key];
+  } else {
+    record[key] = value;
+  }
+  return { ...settings, llm: { ...llm, [field]: record } };
+}
+
+export function getStoredLlmPromptTypeValue(
+  settings: AppSettingsV1,
+  key: string
+): LlmPromptType | undefined {
+  const value = settings.llm?.promptTypeByBackend?.[key];
+  return value === 'gemma4' || value === 'original' ? value : undefined;
+}
+
+export function updateStoredLlmPromptTypeValue(
+  settings: AppSettingsV1,
+  key: string,
+  value: LlmPromptType
+): AppSettingsV1 {
+  const llm = settings.llm ?? {};
+  return {
+    ...settings,
+    llm: {
+      ...llm,
+      promptTypeByBackend: { ...(llm.promptTypeByBackend ?? {}), [key]: value }
     }
   };
 }

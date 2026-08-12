@@ -4,12 +4,18 @@ import test from 'node:test';
 import type { AppSettingsV1 } from './app-settings.ts';
 import {
   buildLlmInferenceParamsKeyValue,
+  buildLlmScopedSettingsKeyValue,
   getStoredLlmInferenceParamsValue,
+  getStoredLlmPromptTypeValue,
+  getStoredLlmStringSettingValue,
+  hasStoredLlmStringSettingValue,
   resolveGeneralAppSettingsValue,
   resolveLlmAppSettingsValue,
   resolvePersistedLlmBackendModeValue,
   updateLlmSelectionSettingsValue,
-  updateStoredLlmInferenceParamsValue
+  updateStoredLlmInferenceParamsValue,
+  updateStoredLlmPromptTypeValue,
+  updateStoredLlmStringSettingValue
 } from './app-utils.ts';
 
 const options = {
@@ -230,4 +236,87 @@ test('LLM selection updates preserve model-specific saved dictionaries', () => {
   assert.equal(updated.llm?.modelPath, '/models/model.gguf');
   assert.deepEqual(updated.export, { addUtteranceNumber: true });
   assert.equal(settings.llm?.modelPath, undefined);
+});
+
+test('LLM scoped setting keys separate local files from external backend models', () => {
+  assert.deepEqual(
+    buildLlmScopedSettingsKeyValue('local_gguf', 'ignored', 'C:\\models\\custom.gguf'),
+    { scope: 'model', key: 'custom.gguf' }
+  );
+  assert.deepEqual(
+    buildLlmScopedSettingsKeyValue('lmstudio', ' local/model ', '/ignored.gguf'),
+    { scope: 'backend', key: 'lmstudio:local/model' }
+  );
+  assert.equal(buildLlmScopedSettingsKeyValue('ollama', ' ', '/ignored.gguf'), null);
+  assert.equal(buildLlmScopedSettingsKeyValue('local_gguf', 'ignored', ''), null);
+});
+
+test('LLM string setting helpers read, update, and reset only the selected dictionary entry', () => {
+  const settings: AppSettingsV1 = {
+    llm: {
+      systemPromptsByBackend: { 'ollama:a': 'segment-a' },
+      overallSystemPromptsByBackend: {
+        'ollama:a': 'overall-a',
+        'ollama:b': 'overall-b'
+      }
+    }
+  };
+  assert.equal(
+    getStoredLlmStringSettingValue(settings, 'overallSystemPromptsByBackend', 'ollama:a'),
+    'overall-a'
+  );
+  assert.equal(
+    hasStoredLlmStringSettingValue(settings, 'overallSystemPromptsByBackend', 'missing'),
+    false
+  );
+
+  const updated = updateStoredLlmStringSettingValue(
+    settings,
+    'overallSystemPromptsByBackend',
+    'ollama:a',
+    'changed'
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(updated, 'overallSystemPromptsByBackend', 'ollama:a'),
+    'changed'
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(updated, 'overallSystemPromptsByBackend', 'ollama:b'),
+    'overall-b'
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(updated, 'systemPromptsByBackend', 'ollama:a'),
+    'segment-a'
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(settings, 'overallSystemPromptsByBackend', 'ollama:a'),
+    'overall-a'
+  );
+
+  const reset = updateStoredLlmStringSettingValue(
+    updated,
+    'overallSystemPromptsByBackend',
+    'ollama:a',
+    null
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(reset, 'overallSystemPromptsByBackend', 'ollama:a'),
+    undefined
+  );
+  assert.equal(
+    getStoredLlmStringSettingValue(reset, 'overallSystemPromptsByBackend', 'ollama:b'),
+    'overall-b'
+  );
+});
+
+test('LLM prompt type helpers validate stored values and update immutably', () => {
+  const settings = {
+    llm: { promptTypeByBackend: { 'ollama:a': 'original', invalid: 'other' } }
+  } as unknown as AppSettingsV1;
+  assert.equal(getStoredLlmPromptTypeValue(settings, 'ollama:a'), 'original');
+  assert.equal(getStoredLlmPromptTypeValue(settings, 'invalid'), undefined);
+
+  const updated = updateStoredLlmPromptTypeValue(settings, 'ollama:a', 'gemma4');
+  assert.equal(getStoredLlmPromptTypeValue(updated, 'ollama:a'), 'gemma4');
+  assert.equal(getStoredLlmPromptTypeValue(settings, 'ollama:a'), 'original');
 });

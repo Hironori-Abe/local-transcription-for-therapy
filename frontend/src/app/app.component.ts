@@ -38,6 +38,7 @@ import {
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
   buildLlmInferenceParamsKeyValue,
+  buildLlmScopedSettingsKeyValue,
   buildLocationDetectionScopeValue,
   buildConsecutiveSpeakerRunMapValue,
   buildSegmentRowNumberMapValue,
@@ -73,14 +74,16 @@ import {
   getEditableTextFromMapValue,
   getEstimatedTimeMessageValue,
   getImportCompletedMessageValue,
-  getLlmModelFileNameValue,
   getStoredLlmInferenceParamsValue,
+  getStoredLlmPromptTypeValue,
+  getStoredLlmStringSettingValue,
   getProgressStageOrderValue,
   getLocationAreaPrefectureCodesValue,
   getSpeakerColorClassValue,
   gpuDeviceLabelValue,
   gpuSetupHintValue,
   hasFallbackInTranscriptionResultValue,
+  hasStoredLlmStringSettingValue,
   isGemma4DefaultLlmModelFileNameValue,
   isGemma4DefaultLlmModelPathValue,
   isDiarizationModelMissingValue,
@@ -145,6 +148,8 @@ import {
   transcriptionTabLabelValue,
   updateLlmSelectionSettingsValue,
   updateStoredLlmInferenceParamsValue,
+  updateStoredLlmPromptTypeValue,
+  updateStoredLlmStringSettingValue,
   validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
   processingStatusTextValue,
@@ -711,15 +716,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly overallProofreadPromptIsCustomized = computed(() => {
     this.overallPromptSaveVersion();
     if (this.proofreadSystemPromptReadonly()) return false;
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return false;
-      const key = `${this.llmBackendMode()}:${model}`;
-      return typeof this.appSettings.llm?.overallSystemPromptsByBackend?.[key] === 'string';
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target || (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key))) {
+      return false;
     }
-    const key = getLlmModelFileNameValue(this.llmModelPath());
-    if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return false;
-    return typeof this.appSettings.llm?.overallSystemPromptsByModelFileName?.[key] === 'string';
+    const field = target.scope === 'backend'
+      ? 'overallSystemPromptsByBackend'
+      : 'overallSystemPromptsByModelFileName';
+    return hasStoredLlmStringSettingValue(this.appSettings, field, target.key);
   });
   readonly llmSegmentStatus = signal<Record<number, 'processing' | 'done'>>({});
   readonly proofreadProgressText = signal<string>('');
@@ -4761,37 +4769,36 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private getStoredOverallProofreadSystemPrompt(): string {
     const fallback = this.getDefaultForCurrentOverallPromptType();
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return fallback;
-      const key = `${this.llmBackendMode()}:${model}`;
-      const value = this.appSettings.llm?.overallSystemPromptsByBackend?.[key];
-      return typeof value === 'string' ? value : fallback;
-    }
-    const key = getLlmModelFileNameValue(this.llmModelPath());
-    if (!key) return fallback;
-    const value = this.appSettings.llm?.overallSystemPromptsByModelFileName?.[key];
-    return typeof value === 'string' ? value : fallback;
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target) return fallback;
+    const field = target.scope === 'backend'
+      ? 'overallSystemPromptsByBackend'
+      : 'overallSystemPromptsByModelFileName';
+    return getStoredLlmStringSettingValue(this.appSettings, field, target.key) ?? fallback;
   }
 
   private persistOverallProofreadSystemPromptForSelectedModel(value: string): void {
-    const llm = this.appSettings.llm ?? {};
-    const nextLlm = { ...llm };
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return;
-      const key = `${this.llmBackendMode()}:${model}`;
-      const overallSystemPromptsByBackend = { ...(llm.overallSystemPromptsByBackend ?? {}) };
-      overallSystemPromptsByBackend[key] = value;
-      nextLlm.overallSystemPromptsByBackend = overallSystemPromptsByBackend;
-    } else {
-      const key = getLlmModelFileNameValue(this.llmModelPath());
-      if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return;
-      const overallSystemPromptsByModelFileName = { ...(llm.overallSystemPromptsByModelFileName ?? {}) };
-      overallSystemPromptsByModelFileName[key] = value;
-      nextLlm.overallSystemPromptsByModelFileName = overallSystemPromptsByModelFileName;
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target || (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key))) {
+      return;
     }
-    this.appSettings = { ...this.appSettings, llm: nextLlm };
+    const field = target.scope === 'backend'
+      ? 'overallSystemPromptsByBackend'
+      : 'overallSystemPromptsByModelFileName';
+    this.appSettings = updateStoredLlmStringSettingValue(
+      this.appSettings,
+      field,
+      target.key,
+      value
+    );
     this.persistAppSettings();
     this.overallPromptSaveVersion.update(v => v + 1);
   }
@@ -4828,29 +4835,31 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   resetOverallProofreadSystemPromptForSelectedModel(): void {
     if (this.proofreadSystemPromptReadonly()) return;
     const fallback = this.getDefaultForCurrentOverallPromptType();
-    const llm = this.appSettings.llm ?? {};
-    const nextLlm = { ...llm };
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (model) {
-        const key = `${this.llmBackendMode()}:${model}`;
-        const overallSystemPromptsByBackend = { ...(llm.overallSystemPromptsByBackend ?? {}) };
-        delete overallSystemPromptsByBackend[key];
-        nextLlm.overallSystemPromptsByBackend = overallSystemPromptsByBackend;
-        this.appSettings = { ...this.appSettings, llm: nextLlm };
-        this.persistAppSettings();
-        this.overallPromptSaveVersion.update(v => v + 1);
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target) {
+      if (this.llmBackendMode() !== 'local_gguf') {
+        this.overallProofreadSystemPrompt.set(fallback);
       }
-    } else {
-      const key = getLlmModelFileNameValue(this.llmModelPath());
-      if (!key || isGemma4DefaultLlmModelFileNameValue(key)) return;
-      const overallSystemPromptsByModelFileName = { ...(llm.overallSystemPromptsByModelFileName ?? {}) };
-      delete overallSystemPromptsByModelFileName[key];
-      nextLlm.overallSystemPromptsByModelFileName = overallSystemPromptsByModelFileName;
-      this.appSettings = { ...this.appSettings, llm: nextLlm };
-      this.persistAppSettings();
-      this.overallPromptSaveVersion.update(v => v + 1);
+      return;
     }
+    if (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key)) {
+      return;
+    }
+    const field = target.scope === 'backend'
+      ? 'overallSystemPromptsByBackend'
+      : 'overallSystemPromptsByModelFileName';
+    this.appSettings = updateStoredLlmStringSettingValue(
+      this.appSettings,
+      field,
+      target.key,
+      null
+    );
+    this.persistAppSettings();
+    this.overallPromptSaveVersion.update(v => v + 1);
     this.overallProofreadSystemPrompt.set(fallback);
   }
 
@@ -5072,42 +5081,46 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private applyStoredLlmPromptTypeForSelectedModel(): void {
     if (this.llmBackendMode() === 'local_gguf') return;
-    const model = this.activeOpenAiModelInput().trim();
-    if (!model) return;
-    const key = `${this.llmBackendMode()}:${model}`;
-    const stored = this.appSettings.llm?.promptTypeByBackend?.[key];
-    if (stored === 'gemma4' || stored === 'original') {
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target) return;
+    const stored = getStoredLlmPromptTypeValue(this.appSettings, target.key);
+    if (stored !== undefined) {
       this.llmPromptType.set(stored);
     }
   }
 
   private persistLlmPromptTypeForModel(): void {
     if (this.llmBackendMode() === 'local_gguf') return;
-    const model = this.activeOpenAiModelInput().trim();
-    if (!model) return;
-    const key = `${this.llmBackendMode()}:${model}`;
-    const llm = this.appSettings.llm ?? {};
-    const promptTypeByBackend = { ...(llm.promptTypeByBackend ?? {}) };
-    promptTypeByBackend[key] = this.llmPromptType();
-    this.appSettings = { ...this.appSettings, llm: { ...llm, promptTypeByBackend } };
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target) return;
+    this.appSettings = updateStoredLlmPromptTypeValue(
+      this.appSettings,
+      target.key,
+      this.llmPromptType()
+    );
     this.persistAppSettings();
   }
 
   private getStoredProofreadSystemPrompt(): string {
     const fallback = this.getDefaultForCurrentPromptType();
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return fallback;
-      const key = `${this.llmBackendMode()}:${model}`;
-      const value = this.appSettings.llm?.systemPromptsByBackend?.[key];
-      return typeof value === 'string' ? value : fallback;
-    }
-    const key = getLlmModelFileNameValue(this.llmModelPath());
-    if (!key) {
-      return fallback;
-    }
-    const value = this.appSettings.llm?.systemPromptsByModelFileName?.[key];
-    return typeof value === 'string' ? value : fallback;
+    const target = buildLlmScopedSettingsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput(),
+      this.llmModelPath()
+    );
+    if (!target) return fallback;
+    const field = target.scope === 'backend'
+      ? 'systemPromptsByBackend'
+      : 'systemPromptsByModelFileName';
+    return getStoredLlmStringSettingValue(this.appSettings, field, target.key) ?? fallback;
   }
 
   private getSelectedProofreadSystemPromptForRun(): string | null {

@@ -8,6 +8,11 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 export type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
 export type LlmGpuMode = 'gpu' | 'cpu';
 export type LlmPromptType = 'gemma4' | 'original';
+export type LlmStringSettingsField =
+  | 'systemPromptsByModelFileName'
+  | 'systemPromptsByBackend'
+  | 'overallSystemPromptsByModelFileName'
+  | 'overallSystemPromptsByBackend';
 
 export interface AppSettingsV1 {
   transcription?: {

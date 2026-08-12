@@ -2076,6 +2076,7 @@ dependencies = [
 name = "offline-transcriber"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "encoding_rs",
  "regex",
  "serde",

@@ -88,7 +88,6 @@ package() {
     detect_env_cli.py \
     download_whisper_model_cli.py \
     download_gemma_gguf_cli.py \
-    download_llama_backend_cli.py \
     download_diarization_model_cli.py \
     encrypt_office_cli.py \
     setup_venv_cli.py \

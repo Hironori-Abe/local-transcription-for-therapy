@@ -4940,28 +4940,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     const finalPath = targetPath.toLowerCase().endsWith('.csv') ? targetPath : `${targetPath}.csv`;
-    const rows = this.estimateSamples
-      .slice()
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((sample) => [
-        this.formatToJapanDateTime(sample.createdAt),
-        this.formatSecondsAsJapaneseMinuteSecond(sample.audioSeconds),
-        this.formatSecondsAsJapaneseMinuteSecond(sample.elapsedSeconds),
-        this.formatBytesAsMb(sample.fileSizeBytes),
-        sample.diarization ? 'あり' : 'なし',
-        sample.device.toUpperCase(),
-        sample.computeType
-      ]);
-
-    const header = ['日時', 'ファイル音声長', 'AI句読点付与までの所要時間', 'ファイルサイズ', '話者分離', '実行デバイス', '計算方式'];
-    const csvLines = [header, ...rows].map((cols) => cols.map((v) => this.escapeCsvValue(v)).join(','));
-    const content = csvLines.join('\n');
-
     try {
-      await invoke('save_text_shift_jis', {
+      await invoke('save_runtime_estimate_csv', {
         request: {
           path: finalPath,
-          content
+          samples: this.estimateSamples
         }
       });
     } catch (error) {
@@ -7913,43 +7896,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch {
       this.selectedAudioFileSizeBytes.set(null);
     }
-  }
-
-  private escapeCsvValue(value: string): string {
-    const trimmed = value.trim();
-    const isNumeric = /^-?\d+(\.\d+)?$/.test(trimmed);
-    const escaped = value.replace(/"/g, '""');
-    if (isNumeric) {
-      return escaped;
-    }
-    return `"${escaped}"`;
-  }
-
-  private formatToJapanDateTime(epochMs: number): string {
-    return new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).format(new Date(epochMs));
-  }
-
-  private formatSecondsAsJapaneseMinuteSecond(totalSeconds: number): string {
-    const sec = Math.max(0, Math.round(totalSeconds));
-    const min = Math.floor(sec / 60);
-    const rem = sec % 60;
-    return `${min}分${rem}秒`;
-  }
-
-  private formatBytesAsMb(bytes: number | null | undefined): string {
-    if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
-      return '';
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 
   getEditableText(segment: TranscriptionSegment): string {

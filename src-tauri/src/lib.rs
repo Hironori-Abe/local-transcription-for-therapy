@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset, Utc};
 use encoding_rs::SHIFT_JIS;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -872,7 +873,7 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     None
 }
 
-/// `download_llama_backend_cli.py --backend vulkan` で取得した Vulkan ビルドの
+/// セットアップから取得した Vulkan ビルドの
 /// llama-server バイナリを探す（`~/.cache/{app-id}/lemonade/bin/llamacpp/vulkan/llama-server`）。
 /// AMD で 12B + MTP を直起動するために使う。rocm-stable ビルドは古くドラフトの
 /// `gemma4-assistant` を認識できないため、MTP には新しい Vulkan ビルドを用いる。
@@ -891,7 +892,7 @@ fn find_llm_vulkan_llama_server(app: &AppHandle) -> Option<String> {
     }
 }
 
-/// `download_llama_backend_cli.py --backend rocm` で取得した ROCm ビルドの llama-server を返す（Vulkan 版の対）。
+/// セットアップから取得した ROCm ビルドの llama-server を返す（Vulkan 版の対）。
 /// AMD の 12B + MTP 高速経路で使う。
 fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
     let cache = get_llm_engine_cache_dir(app)?;
@@ -908,7 +909,7 @@ fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
     }
 }
 
-/// `download_llama_backend_cli.py --backend cpu` 相当の配置先から CPU 版 llama-server を返す。
+/// セットアップから取得した CPU 版 llama-server を返す。
 /// Editor 版の短時間音声入力はこの CPU バックエンドだけを使う。
 fn find_llm_cpu_llama_server(app: &AppHandle) -> Option<String> {
     let cache = get_llm_engine_cache_dir(app)?;
@@ -1584,9 +1585,11 @@ const GEMMA_MMPROJ_GGUF_FILENAME: &str = "mmproj-BF16.gguf";
 const GEMMA_E4B_HF_REPO: &str = "unsloth/gemma-4-E4B-it-qat-GGUF";
 const GEMMA_E4B_MAIN_APPROX_BYTES: u64 = 4_215_693_760;
 const GEMMA_E4B_MMPROJ_APPROX_BYTES: u64 = 992_000_000;
+const LLAMA_CPP_AMD_BUILD: &str = "b9631";
 const LLAMA_CPP_CPU_BUILD: &str = "b10075";
 const LLAMA_CPP_CPU_BUILD_NUMBER: u32 = 10075;
 const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 20_000_000;
+static LLM_BACKEND_INSTALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
 const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
 /// 区間聞き直しの切り出し上限秒数。超過分は先頭からこの秒数だけ処理する
@@ -2548,76 +2551,14 @@ async fn start_llm_server(
     }
 }
 
-/// Lemonade バックエンドバイナリをダウンロード・インストールする（初回セットアップ時・要インターネット接続）。
+/// llama.cpp バックエンドバイナリをダウンロード・インストールする
+/// （初回セットアップ時・要インターネット接続）。
 /// backend: "llamacpp:rocm" / "llamacpp:vulkan" / "llamacpp:cpu" のいずれか。
 #[tauri::command]
 async fn install_llm_backend(app: AppHandle, backend: String) -> Result<String, String> {
-    use std::io::{BufRead, BufReader};
-
-    // backend 名 → (Python downloader の --backend 値, bin 配下のサブディレクトリ名)。
-    // 配置先は従来の lemonade バックエンドと同じく find_llm_{rocm,vulkan}_llama_server が
-    // 解決する rocm-stable / vulkan / cpu。lemonade CLI には依存しない（上流から直接取得）。
-    let (py_backend, subdir) = match backend.as_str() {
-        "llamacpp:rocm" => ("rocm", "rocm-stable"),
-        "llamacpp:vulkan" => ("vulkan", "vulkan"),
-        "llamacpp:cpu" => ("cpu", "cpu"),
-        other => return Err(format!("未サポートのバックエンド名です: {other}")),
-    };
-
-    let cache_dir = get_llm_engine_cache_dir(&app)
-        .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
-    let dest = cache_dir.join("bin").join("llamacpp").join(subdir);
-    let script_path = resolve_download_llama_backend_script_path(&app)?;
-    let python_bin = get_python_bin(&app);
-    let app_clone = app.clone();
-    let backend_clone = backend.clone();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = Command::new(&python_bin);
-        apply_windows_no_window(&mut cmd);
-        configure_python_command(&app_clone, &python_bin, &mut cmd);
-        cmd.env("PYTHONUTF8", "1")
-            .env("PYTHONIOENCODING", "utf-8")
-            .arg(&script_path)
-            .arg("--backend")
-            .arg(py_backend)
-            .arg("--dest")
-            .arg(dest.to_string_lossy().as_ref());
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("バックエンドダウンロードの起動に失敗しました: {e}"))?;
-
-        // stdout を行単位で読み取り、フロントエンドへ進捗を通知する（イベント名は従来どおり）。
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let msg = line.trim().to_string();
-                if msg.is_empty() {
-                    continue;
-                }
-                let _ = app_clone.emit(
-                    "llm-backend-install-progress",
-                    serde_json::json!({"message": msg}),
-                );
-            }
-        }
-
-        let status = child
-            .wait()
-            .map_err(|e| format!("インストール完了待ちに失敗: {e}"))?;
-
-        if status.success() {
-            Ok(format!("{backend_clone} のインストールが完了しました。"))
-        } else {
-            Err(format!(
-                "{backend_clone} のインストールに失敗しました。インターネット接続を確認してください。"
-            ))
-        }
-    })
-    .await
-    .map_err(|e| format!("バックエンドインストールタスクエラー: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || install_llm_backend_blocking(&app, &backend))
+        .await
+        .map_err(|e| format!("バックエンドインストールタスクエラー: {e}"))?
 }
 
 #[tauri::command]
@@ -4866,9 +4807,22 @@ struct SetupProgressPayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct SaveTextShiftJisRequest {
+#[serde(rename_all = "camelCase")]
+struct RuntimeEstimateLogSample {
+    audio_seconds: f64,
+    elapsed_seconds: f64,
+    diarization: bool,
+    device: String,
+    compute_type: String,
+    created_at: f64,
+    #[serde(default)]
+    file_size_bytes: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveRuntimeEstimateCsvRequest {
     path: String,
-    content: String,
+    samples: Vec<RuntimeEstimateLogSample>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5177,11 +5131,120 @@ fn save_transcription_json(
     }
 }
 
+fn runtime_csv_value_is_numeric(value: &str) -> bool {
+    let bytes = value.trim().as_bytes();
+    let mut index = usize::from(bytes.first() == Some(&b'-'));
+    let integer_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    if index == integer_start {
+        return false;
+    }
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        let fraction_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if index == fraction_start {
+            return false;
+        }
+    }
+    index == bytes.len()
+}
+
+fn escape_runtime_csv_value(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    if runtime_csv_value_is_numeric(value) {
+        escaped
+    } else {
+        format!("\"{escaped}\"")
+    }
+}
+
+fn format_runtime_log_japan_datetime(epoch_ms: f64) -> Result<String, String> {
+    if !epoch_ms.is_finite() {
+        return Err("所要時間ログの日時が不正です。".to_string());
+    }
+    // JavaScript の Date と同様に、ミリ秒の小数部はゼロ方向へ丸める。
+    let epoch_ms = epoch_ms.trunc();
+    if epoch_ms < i64::MIN as f64 || epoch_ms > i64::MAX as f64 {
+        return Err("所要時間ログの日時が範囲外です。".to_string());
+    }
+    let utc = DateTime::<Utc>::from_timestamp_millis(epoch_ms as i64)
+        .ok_or_else(|| "所要時間ログの日時が範囲外です。".to_string())?;
+    let japan = FixedOffset::east_opt(9 * 60 * 60)
+        .ok_or_else(|| "日本時間の設定に失敗しました。".to_string())?;
+    Ok(utc
+        .with_timezone(&japan)
+        .format("%Y/%m/%d %H:%M:%S")
+        .to_string())
+}
+
+fn format_runtime_log_duration(total_seconds: f64) -> String {
+    let seconds = if total_seconds.is_finite() {
+        total_seconds.max(0.0).round() as u64
+    } else {
+        0
+    };
+    format!("{}分{}秒", seconds / 60, seconds % 60)
+}
+
+fn format_runtime_log_file_size(bytes: Option<f64>) -> String {
+    match bytes.filter(|value| value.is_finite() && *value >= 0.0) {
+        Some(value) => format!("{:.2} MB", value / (1024.0 * 1024.0)),
+        None => String::new(),
+    }
+}
+
+fn build_runtime_estimate_csv(
+    mut samples: Vec<RuntimeEstimateLogSample>,
+) -> Result<String, String> {
+    samples.sort_by(|a, b| a.created_at.total_cmp(&b.created_at));
+    let mut rows = vec![vec![
+        "日時".to_string(),
+        "ファイル音声長".to_string(),
+        "AI句読点付与までの所要時間".to_string(),
+        "ファイルサイズ".to_string(),
+        "話者分離".to_string(),
+        "実行デバイス".to_string(),
+        "計算方式".to_string(),
+    ]];
+    for sample in samples {
+        rows.push(vec![
+            format_runtime_log_japan_datetime(sample.created_at)?,
+            format_runtime_log_duration(sample.audio_seconds),
+            format_runtime_log_duration(sample.elapsed_seconds),
+            format_runtime_log_file_size(sample.file_size_bytes),
+            if sample.diarization {
+                "あり"
+            } else {
+                "なし"
+            }
+            .to_string(),
+            sample.device.to_uppercase(),
+            sample.compute_type,
+        ]);
+    }
+    Ok(rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|value| escape_runtime_csv_value(value))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
 #[tauri::command]
-fn save_text_shift_jis(request: SaveTextShiftJisRequest) -> Result<(), String> {
-    let (bytes, _, _) = SHIFT_JIS.encode(&request.content);
+fn save_runtime_estimate_csv(request: SaveRuntimeEstimateCsvRequest) -> Result<(), String> {
+    let content = build_runtime_estimate_csv(request.samples)?;
+    let (bytes, _, _) = SHIFT_JIS.encode(&content);
     fs::write(&request.path, bytes.as_ref())
-        .map_err(|e| format!("Shift-JIS テキスト保存に失敗しました: {e}"))
+        .map_err(|e| format!("所要時間ログの保存に失敗しました: {e}"))
 }
 
 fn format_srt_timestamp(seconds: f64) -> String {
@@ -7118,6 +7181,235 @@ fn llama_cpu_backend_url(asset: &str) -> String {
     format!("https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_CPU_BUILD}/{asset}")
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LlmBackendDownloadSpec {
+    subdir: &'static str,
+    label: &'static str,
+    build: &'static str,
+    asset: String,
+}
+
+fn llama_backend_download_spec(
+    backend: &str,
+    target_os: &str,
+) -> Result<LlmBackendDownloadSpec, String> {
+    let (subdir, label, build, platform_asset) = match (backend, target_os) {
+        ("llamacpp:rocm", "linux") => (
+            "rocm-stable",
+            "ROCm バックエンド",
+            LLAMA_CPP_AMD_BUILD,
+            "ubuntu-rocm-7.2-x64.tar.gz",
+        ),
+        ("llamacpp:rocm", "windows") => (
+            "rocm-stable",
+            "ROCm バックエンド",
+            LLAMA_CPP_AMD_BUILD,
+            "win-hip-radeon-x64.zip",
+        ),
+        ("llamacpp:vulkan", "linux") => (
+            "vulkan",
+            "Vulkan バックエンド",
+            LLAMA_CPP_AMD_BUILD,
+            "ubuntu-vulkan-x64.tar.gz",
+        ),
+        ("llamacpp:vulkan", "windows") => (
+            "vulkan",
+            "Vulkan バックエンド",
+            LLAMA_CPP_AMD_BUILD,
+            "win-vulkan-x64.zip",
+        ),
+        ("llamacpp:cpu", "linux") => (
+            "cpu",
+            "CPU バックエンド",
+            LLAMA_CPP_CPU_BUILD,
+            "ubuntu-x64.tar.gz",
+        ),
+        ("llamacpp:cpu", "windows") => (
+            "cpu",
+            "CPU バックエンド",
+            LLAMA_CPP_CPU_BUILD,
+            "win-cpu-x64.zip",
+        ),
+        ("llamacpp:rocm" | "llamacpp:vulkan" | "llamacpp:cpu", other_os) => {
+            return Err(format!(
+                "このOSの llama.cpp バックエンド取得は未対応です: {other_os}"
+            ));
+        }
+        (other, _) => return Err(format!("未サポートのバックエンド名です: {other}")),
+    };
+    Ok(LlmBackendDownloadSpec {
+        subdir,
+        label,
+        build,
+        asset: format!("llama-{build}-bin-{platform_asset}"),
+    })
+}
+
+fn llama_backend_download_url(spec: &LlmBackendDownloadSpec) -> String {
+    format!(
+        "https://github.com/ggml-org/llama.cpp/releases/download/{}/{}",
+        spec.build, spec.asset
+    )
+}
+
+fn emit_llm_backend_install_progress(app: &AppHandle, message: &str) {
+    let _ = app.emit(
+        "llm-backend-install-progress",
+        serde_json::json!({"message": message}),
+    );
+}
+
+fn download_llm_backend_archive(
+    app: &AppHandle,
+    spec: &LlmBackendDownloadSpec,
+    archive: &Path,
+) -> Result<(), String> {
+    let parent = archive
+        .parent()
+        .ok_or_else(|| "バックエンドの一時保存先が不正です。".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("バックエンドの一時保存先を作成できませんでした: {e}"))?;
+    let archive_name = archive
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| "バックエンドのアーカイブ名が不正です。".to_string())?;
+    let partial = archive.with_file_name(format!("{archive_name}.part"));
+    let _ = fs::remove_file(&partial);
+    let _ = fs::remove_file(archive);
+
+    let label = format!("{} (llama.cpp {})", spec.label, spec.build);
+    emit_llm_backend_install_progress(app, &format!("{label} をダウンロード中..."));
+    let mut child = spawn_file_download(&llama_backend_download_url(spec), &partial)?;
+    let mut last_emitted = 0_u64;
+    loop {
+        match child
+            .try_wait()
+            .map_err(|e| format!("バックエンドダウンロードの確認に失敗しました: {e}"))?
+        {
+            Some(status) => {
+                if !status.success() {
+                    let _ = fs::remove_file(&partial);
+                    return Err(format!(
+                        "{label} のダウンロードに失敗しました。インターネット接続を確認してください。"
+                    ));
+                }
+                break;
+            }
+            None => {
+                let downloaded = partial.metadata().map(|m| m.len()).unwrap_or(0);
+                if downloaded >= last_emitted + 5 * 1024 * 1024
+                    || (downloaded > 0 && last_emitted == 0)
+                {
+                    last_emitted = downloaded;
+                    emit_llm_backend_install_progress(
+                        app,
+                        &format!(
+                            "{label} をダウンロード中... {:.1} MiB",
+                            downloaded as f64 / (1024.0 * 1024.0)
+                        ),
+                    );
+                }
+                thread::sleep(Duration::from_millis(800));
+            }
+        }
+    }
+
+    let downloaded = partial
+        .metadata()
+        .map(|m| m.len())
+        .map_err(|_| format!("{label} のダウンロード結果が見つかりません。"))?;
+    if downloaded < 1024 * 1024 {
+        let _ = fs::remove_file(&partial);
+        return Err(format!("{label} のダウンロード結果が小さすぎます。"));
+    }
+    fs::rename(&partial, archive)
+        .map_err(|e| format!("ダウンロード済みアーカイブを配置できませんでした: {e}"))
+}
+
+fn replace_backend_directory(staging: &Path, dest: &Path, backup: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("バックエンド配置先を作成できませんでした: {e}"))?;
+    }
+    let had_existing = dest.exists();
+    if had_existing {
+        fs::rename(dest, backup)
+            .map_err(|e| format!("既存バックエンドを退避できませんでした: {e}"))?;
+    }
+    if let Err(install_error) = fs::rename(staging, dest) {
+        if had_existing {
+            if let Err(restore_error) = fs::rename(backup, dest) {
+                return Err(format!(
+                    "新しいバックエンドを配置できず、既存版の復元にも失敗しました: 配置={install_error}; 復元={restore_error}"
+                ));
+            }
+        }
+        return Err(format!(
+            "新しいバックエンドを配置できませんでした: {install_error}"
+        ));
+    }
+    if had_existing {
+        let _ = fs::remove_dir_all(backup);
+    }
+    Ok(())
+}
+
+fn install_llm_backend_blocking(app: &AppHandle, backend: &str) -> Result<String, String> {
+    let spec = llama_backend_download_spec(backend, std::env::consts::OS)?;
+    let cache_dir = get_llm_engine_cache_dir(app)
+        .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;
+    let backend_root = cache_dir.join("bin").join("llamacpp");
+    fs::create_dir_all(&backend_root)
+        .map_err(|e| format!("バックエンド保存先を作成できませんでした: {e}"))?;
+
+    let install_id = LLM_BACKEND_INSTALL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let suffix = format!("{}-{install_id}", std::process::id());
+    let work_dir = cache_dir
+        .join("downloads")
+        .join(format!("llama-backend-{suffix}.tmp"));
+    let staging = backend_root.join(format!("{}-{suffix}.tmp", spec.subdir));
+    let backup = backend_root.join(format!("{}-{suffix}.backup", spec.subdir));
+    let dest = backend_root.join(spec.subdir);
+    let archive = work_dir.join(&spec.asset);
+
+    let _ = fs::remove_dir_all(&work_dir);
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&backup);
+    let result = (|| {
+        download_llm_backend_archive(app, &spec, &archive)?;
+        emit_llm_backend_install_progress(
+            app,
+            &format!("{} (llama.cpp {}) を展開中...", spec.label, spec.build),
+        );
+        extract_llama_backend_archive(&archive, &staging)?;
+
+        let server = staging.join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
+        if !path_is_nonempty_file(&server, 1) {
+            return Err(format!(
+                "展開後に llama-server が見つかりません: {}",
+                staging.display()
+            ));
+        }
+        ensure_executable(&server);
+        replace_backend_directory(&staging, &dest, &backup)?;
+        emit_llm_backend_install_progress(
+            app,
+            &format!(
+                "{} (llama.cpp {}) のインストールが完了しました。",
+                spec.label, spec.build
+            ),
+        );
+        Ok(format!("{backend} のインストールが完了しました。"))
+    })();
+
+    let _ = fs::remove_dir_all(&work_dir);
+    let _ = fs::remove_dir_all(&staging);
+    if result.is_ok() {
+        let _ = fs::remove_dir_all(&backup);
+    }
+    result
+}
+
 fn parse_llama_server_build_number(output: &str) -> Option<u32> {
     output.lines().find_map(|line| {
         line.trim()
@@ -7440,13 +7732,14 @@ fn expand_zip_with_powershell(archive: &Path, dest: &Path) -> Result<(), String>
         .map_err(|e| format!("PowerShell Expand-Archive の起動に失敗しました: {e}"))?;
     if !status.success() {
         return Err(
-            "PowerShell Expand-Archive による CPU バックエンドの展開に失敗しました。".to_string(),
+            "PowerShell Expand-Archive による llama.cpp バックエンドの展開に失敗しました。"
+                .to_string(),
         );
     }
     Ok(())
 }
 
-fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), String> {
+fn extract_llama_backend_archive(archive: &Path, dest: &Path) -> Result<(), String> {
     if archive
         .file_name()
         .map(|n| n.to_string_lossy().ends_with(".zip"))
@@ -7485,7 +7778,7 @@ fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), 
             }
         }
     } else {
-        let extract_dir = archive.with_file_name("llama_cpu_extract_tmp");
+        let extract_dir = archive.with_file_name("llama_backend_extract_tmp");
         if extract_dir.exists() {
             fs::remove_dir_all(&extract_dir)
                 .map_err(|e| format!("一時展開ディレクトリを削除できませんでした: {e}"))?;
@@ -7506,7 +7799,7 @@ fn extract_llama_cpu_backend_archive(archive: &Path, dest: &Path) -> Result<(), 
             .map_err(|e| format!("tar の起動に失敗しました: {e}"))?;
         if !status.success() {
             let _ = fs::remove_dir_all(&extract_dir);
-            return Err("CPU バックエンドの展開に失敗しました。".to_string());
+            return Err("llama.cpp バックエンドの展開に失敗しました。".to_string());
         }
         let result = flatten_extracted_llama_dir(&extract_dir, dest);
         let _ = fs::remove_dir_all(&extract_dir);
@@ -7575,7 +7868,7 @@ fn install_editor_voice_cpu_backend_blocking(app: &AppHandle) -> Result<(), Stri
         fs::remove_dir_all(&staging_dest)
             .map_err(|e| format!("CPU バックエンドの一時配置先を削除できませんでした: {e}"))?;
     }
-    extract_llama_cpu_backend_archive(&archive, &staging_dest)?;
+    extract_llama_backend_archive(&archive, &staging_dest)?;
     let staged_server = staging_dest.join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
     let staged_build = llama_server_build_number(&staged_server);
     if staged_build != Some(LLAMA_CPP_CPU_BUILD_NUMBER) {
@@ -9858,6 +10151,158 @@ mod tests {
         );
     }
 
+    #[test]
+    fn llama_backend_download_specs_keep_pinned_assets() {
+        let cases = [
+            (
+                "llamacpp:rocm",
+                "linux",
+                "rocm-stable",
+                LLAMA_CPP_AMD_BUILD,
+                "llama-b9631-bin-ubuntu-rocm-7.2-x64.tar.gz",
+            ),
+            (
+                "llamacpp:rocm",
+                "windows",
+                "rocm-stable",
+                LLAMA_CPP_AMD_BUILD,
+                "llama-b9631-bin-win-hip-radeon-x64.zip",
+            ),
+            (
+                "llamacpp:vulkan",
+                "linux",
+                "vulkan",
+                LLAMA_CPP_AMD_BUILD,
+                "llama-b9631-bin-ubuntu-vulkan-x64.tar.gz",
+            ),
+            (
+                "llamacpp:vulkan",
+                "windows",
+                "vulkan",
+                LLAMA_CPP_AMD_BUILD,
+                "llama-b9631-bin-win-vulkan-x64.zip",
+            ),
+            (
+                "llamacpp:cpu",
+                "linux",
+                "cpu",
+                LLAMA_CPP_CPU_BUILD,
+                "llama-b10075-bin-ubuntu-x64.tar.gz",
+            ),
+            (
+                "llamacpp:cpu",
+                "windows",
+                "cpu",
+                LLAMA_CPP_CPU_BUILD,
+                "llama-b10075-bin-win-cpu-x64.zip",
+            ),
+        ];
+        for (backend, target_os, subdir, build, asset) in cases {
+            let spec = llama_backend_download_spec(backend, target_os).unwrap();
+            assert_eq!(spec.subdir, subdir);
+            assert_eq!(spec.build, build);
+            assert_eq!(spec.asset, asset);
+            assert_eq!(
+                llama_backend_download_url(&spec),
+                format!("https://github.com/ggml-org/llama.cpp/releases/download/{build}/{asset}")
+            );
+        }
+        assert!(llama_backend_download_spec("llamacpp:rocm", "macos").is_err());
+        assert!(llama_backend_download_spec("unknown", "linux").is_err());
+    }
+
+    fn backend_test_temp_dir(label: &str) -> PathBuf {
+        let id = LLM_BACKEND_INSTALL_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("lott-{label}-{}-{id}", std::process::id()))
+    }
+
+    #[test]
+    fn llama_backend_zip_extracts_flat_and_ignores_unsafe_paths() {
+        let root = backend_test_temp_dir("backend-zip");
+        let archive = root.join("backend.zip");
+        let dest = root.join("dest");
+        fs::create_dir_all(&root).unwrap();
+        {
+            let file = fs::File::create(&archive).unwrap();
+            let mut zip = ZipWriter::new(file);
+            let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("llama-b9631/llama-server", options).unwrap();
+            zip.write_all(b"server").unwrap();
+            zip.start_file("llama-b9631/lib/backend.so", options)
+                .unwrap();
+            zip.write_all(b"library").unwrap();
+            zip.start_file("../outside.txt", options).unwrap();
+            zip.write_all(b"unsafe").unwrap();
+            zip.finish().unwrap();
+        }
+
+        extract_llama_backend_archive(&archive, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("llama-server")).unwrap(), b"server");
+        assert_eq!(fs::read(dest.join("lib/backend.so")).unwrap(), b"library");
+        assert!(!root.join("outside.txt").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn llama_backend_tar_gz_extracts_and_flattens_root_directory() {
+        let root = backend_test_temp_dir("backend-tar");
+        let payload = root.join("payload").join("llama-b9631");
+        let archive = root.join("backend.tar.gz");
+        let dest = root.join("dest");
+        fs::create_dir_all(payload.join("lib")).unwrap();
+        fs::write(payload.join("llama-server"), b"server").unwrap();
+        fs::write(payload.join("lib/backend.so"), b"library").unwrap();
+
+        let status = Command::new("tar")
+            .args(["-czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(root.join("payload"))
+            .arg("llama-b9631")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        extract_llama_backend_archive(&archive, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("llama-server")).unwrap(), b"server");
+        assert_eq!(fs::read(dest.join("lib/backend.so")).unwrap(), b"library");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backend_directory_replacement_preserves_old_version_until_swap() {
+        let root = backend_test_temp_dir("backend-swap");
+        let staging = root.join("staging");
+        let dest = root.join("backend");
+        let backup = root.join("backup");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(staging.join("llama-server"), b"new").unwrap();
+        fs::write(dest.join("llama-server"), b"old").unwrap();
+
+        replace_backend_directory(&staging, &dest, &backup).unwrap();
+        assert_eq!(fs::read(dest.join("llama-server")).unwrap(), b"new");
+        assert!(!staging.exists());
+        assert!(!backup.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backend_directory_replacement_restores_old_version_on_failure() {
+        let root = backend_test_temp_dir("backend-restore");
+        let missing_staging = root.join("missing-staging");
+        let dest = root.join("backend");
+        let backup = root.join("backup");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("llama-server"), b"old").unwrap();
+
+        assert!(replace_backend_directory(&missing_staging, &dest, &backup).is_err());
+        assert_eq!(fs::read(dest.join("llama-server")).unwrap(), b"old");
+        assert!(!backup.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// AppImage の AppRun が入れる $APPDIR 配下のライブラリ探索パスを、ホストコマンド
     /// （xdg-open / nvidia-smi など）へ渡さないこと。渡すと Arch 系ホストの /bin/sh が
     /// 同梱 libreadline.so.8 を掴んで `undefined symbol: rl_print_keybinding` で死ぬ。
@@ -10025,6 +10470,53 @@ mod tests {
             build_transcription_srt(&rows),
             "1\n00:00:01,250 --> 00:00:03,500\nTh：こんにちは。\n\n2\n00:00:04,000 --> 00:00:06,000\n話者未設定\n\n"
         );
+    }
+
+    #[test]
+    fn runtime_estimate_csv_preserves_frontend_format_and_sorts_by_date() {
+        let samples = vec![
+            RuntimeEstimateLogSample {
+                audio_seconds: 120.49,
+                elapsed_seconds: 61.5,
+                diarization: false,
+                device: "cpu".to_string(),
+                compute_type: "int8".to_string(),
+                created_at: 1_000.0,
+                file_size_bytes: None,
+            },
+            RuntimeEstimateLogSample {
+                audio_seconds: 60.5,
+                elapsed_seconds: 30.4,
+                diarization: true,
+                device: "cuda".to_string(),
+                compute_type: "float16".to_string(),
+                created_at: 0.0,
+                file_size_bytes: Some(1024.0 * 1024.0),
+            },
+        ];
+
+        assert_eq!(
+            build_runtime_estimate_csv(samples).unwrap(),
+            "\"日時\",\"ファイル音声長\",\"AI句読点付与までの所要時間\",\"ファイルサイズ\",\"話者分離\",\"実行デバイス\",\"計算方式\"\n\
+             \"1970/01/01 09:00:00\",\"1分1秒\",\"0分30秒\",\"1.00 MB\",\"あり\",\"CUDA\",\"float16\"\n\
+             \"1970/01/01 09:00:01\",\"2分0秒\",\"1分2秒\",\"\",\"なし\",\"CPU\",\"int8\""
+        );
+    }
+
+    #[test]
+    fn runtime_estimate_csv_escapes_text_and_rejects_invalid_dates() {
+        assert_eq!(escape_runtime_csv_value("123.45"), "123.45");
+        assert_eq!(escape_runtime_csv_value("a,\"b\""), "\"a,\"\"b\"\"\"");
+        assert!(build_runtime_estimate_csv(vec![RuntimeEstimateLogSample {
+            audio_seconds: 1.0,
+            elapsed_seconds: 1.0,
+            diarization: false,
+            device: "cpu".to_string(),
+            compute_type: "int8".to_string(),
+            created_at: f64::NAN,
+            file_size_bytes: None,
+        }])
+        .is_err());
     }
 
     #[test]
@@ -12855,15 +13347,6 @@ fn resolve_download_diarization_model_script_path(app: &AppHandle) -> Result<Pat
     )
 }
 
-fn resolve_download_llama_backend_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    resolve_named_sidecar_script_path(
-        app,
-        "download_llama_backend_cli.py",
-        "llama-server バックエンドのダウンロードスクリプトが見つかりません",
-        true,
-    )
-}
-
 fn get_gemma_tier_target_dir(app: &AppHandle, tier: GemmaTier) -> PathBuf {
     if cfg!(debug_assertions) {
         return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -13758,7 +14241,7 @@ pub fn run() {
             get_overall_proofread_system_prompt,
             get_default_overall_proofread_system_prompt,
             save_transcription_json,
-            save_text_shift_jis,
+            save_runtime_estimate_csv,
             save_transcription_docx,
             save_transcription_xlsx,
             save_transcription_srt,

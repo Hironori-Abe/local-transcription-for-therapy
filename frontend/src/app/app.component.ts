@@ -21,7 +21,8 @@ import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.co
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration } from './browser-adapters';
-import { AsyncCleanupSlot, RepeatingTimer } from './lifecycle-resources';
+import { replaceAllInRows, replaceFirstInRows } from './find-replace';
+import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
 import {
   type AppSettingsV1,
   type LlmBackendMode,
@@ -51,7 +52,6 @@ import {
   calculateRuntimeEstimateValue,
   changedRangeEndValue,
   coalescingInputKindValue,
-  countSubstringOccurrencesValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
   displaySpeakerValue,
@@ -1190,7 +1190,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private voiceInputProcessorNode: ScriptProcessorNode | null = null;
   private voiceInputChunks: Float32Array[] = [];
   private voiceInputSampleRate = 0;
-  private voiceInputAutoStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly voiceInputAutoStopTimer = new OneShotTimer();
   private voiceInputSelection: { segmentId: number; start: number; end: number } | null = null;
   private readonly voiceInputMaxRecordingSeconds = 15;
   private previewAudio: HTMLAudioElement | null = null;
@@ -1198,7 +1198,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // Ctrl+Shift+Space による一時停止状態。stop（完全停止）とは別に扱う。
   private previewPaused = false;
   private readonly shortcutSeekSeconds = 5;
-  private shortcutFocusRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly shortcutFocusRetryTimer = new OneShotTimer();
+  private readonly findReplaceFocusTimer = new OneShotTimer();
+  private readonly speakerAliasFocusTimer = new OneShotTimer();
+  private readonly segmentCursorFocusTimer = new OneShotTimer();
+  private readonly timeEditFocusTimer = new OneShotTimer();
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
   private previewLoopEnabled = false;
   private previewSequenceSegmentIds: number[] = [];
@@ -1895,10 +1899,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       cancelAnimationFrame(this._overallProofreadScrollRaf);
     }
     window.removeEventListener('scroll', this._refreshSegmentTableInView);
-    if (this.shortcutFocusRetryTimer !== null) {
-      clearTimeout(this.shortcutFocusRetryTimer);
-      this.shortcutFocusRetryTimer = null;
-    }
+    this.shortcutFocusRetryTimer.cancel();
+    this.findReplaceFocusTimer.cancel();
+    this.speakerAliasFocusTimer.cancel();
+    this.segmentCursorFocusTimer.cancel();
+    this.timeEditFocusTimer.cancel();
   }
 
   /**
@@ -2214,10 +2219,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * textarea を取得してからフォーカス・キャレットを末尾へ移動する。
    */
   private focusSegmentTextareaById(segmentId: number, attemptsLeft = 12): void {
-    if (this.shortcutFocusRetryTimer !== null) {
-      clearTimeout(this.shortcutFocusRetryTimer);
-      this.shortcutFocusRetryTimer = null;
-    }
+    this.shortcutFocusRetryTimer.cancel();
     const index = this.displayedSegmentRows.findIndex((s) => s.id === segmentId);
     const viewport = this.activeSegmentViewport;
     if (viewport && index >= 0) {
@@ -2239,8 +2241,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (attemptsLeft <= 0) {
       return;
     }
-    this.shortcutFocusRetryTimer = setTimeout(() => {
-      this.shortcutFocusRetryTimer = null;
+    this.shortcutFocusRetryTimer.schedule(() => {
       this.retryFocusSegmentTextarea(segmentId, attemptsLeft - 1);
     }, 40);
   }
@@ -2299,7 +2300,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     this.findReplaceStatus.set('');
     this.findReplaceOpen.set(true);
-    setTimeout(() => {
+    this.findReplaceFocusTimer.schedule(() => {
       const input = document.getElementById('find-replace-find-input') as HTMLInputElement | null;
       input?.focus();
       input?.select();
@@ -2307,6 +2308,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   closeFindReplaceDialog(): void {
+    this.findReplaceFocusTimer.cancel();
     this.findReplaceOpen.set(false);
     this.findReplaceStatus.set('');
   }
@@ -2317,24 +2319,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.findReplaceStatus.set('検索文字列を入力してください。');
       return;
     }
-    const replaceText = this.findReplaceWith();
-    const current = { ...this.editedSegmentTextMap() };
-
-    for (const segment of this.segmentRows) {
-      const before = this.getEditableText(segment);
-      const idx = before.indexOf(findText);
-      if (idx < 0) {
-        continue;
-      }
-      const after = `${before.slice(0, idx)}${replaceText}${before.slice(idx + findText.length)}`;
-      current[segment.id] = after;
-      this.editedSegmentTextMap.set(current);
-      this.clearProofreadMetadataIfTextDiverged(segment.id, after);
-      this.findReplaceStatus.set('1 件置換しました。');
+    const result = replaceFirstInRows(
+      this.segmentRows.map((segment) => ({ id: segment.id, text: this.getEditableText(segment) })),
+      findText,
+      this.findReplaceWith()
+    );
+    const update = result.updates[0];
+    if (!update) {
+      this.findReplaceStatus.set('一致が見つかりませんでした。');
       return;
     }
-
-    this.findReplaceStatus.set('一致が見つかりませんでした。');
+    const current = { ...this.editedSegmentTextMap() };
+    current[update.id] = update.text;
+    this.editedSegmentTextMap.set(current);
+    this.clearProofreadMetadataIfTextDiverged(update.id, update.text);
+    this.findReplaceStatus.set('1 件置換しました。');
   }
 
   replaceAllInContents(): void {
@@ -2343,28 +2342,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.findReplaceStatus.set('検索文字列を入力してください。');
       return;
     }
-    const replaceText = this.findReplaceWith();
-    const current = { ...this.editedSegmentTextMap() };
-    let total = 0;
-
-    for (const segment of this.segmentRows) {
-      const before = this.getEditableText(segment);
-      const count = countSubstringOccurrencesValue(before, findText);
-      if (count <= 0) {
-        continue;
-      }
-      const after = before.split(findText).join(replaceText);
-      current[segment.id] = after;
-      this.clearProofreadMetadataIfTextDiverged(segment.id, after);
-      total += count;
-    }
-
-    if (total > 0) {
-      this.editedSegmentTextMap.set(current);
-      this.findReplaceStatus.set(`${total} 件置換しました。`);
+    const result = replaceAllInRows(
+      this.segmentRows.map((segment) => ({ id: segment.id, text: this.getEditableText(segment) })),
+      findText,
+      this.findReplaceWith()
+    );
+    if (result.replacements === 0) {
+      this.findReplaceStatus.set('一致が見つかりませんでした。');
       return;
     }
-    this.findReplaceStatus.set('一致が見つかりませんでした。');
+    const current = { ...this.editedSegmentTextMap() };
+    for (const update of result.updates) {
+      current[update.id] = update.text;
+      this.clearProofreadMetadataIfTextDiverged(update.id, update.text);
+    }
+    this.editedSegmentTextMap.set(current);
+    this.findReplaceStatus.set(`${result.replacements} 件置換しました。`);
   }
 
   async onBrowserFileSelected(event: Event): Promise<void> {
@@ -4037,7 +4030,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (typeof document === 'undefined') {
       return;
     }
-    setTimeout(() => {
+    this.speakerAliasFocusTimer.schedule(() => {
       const input = document.querySelector<HTMLInputElement>('.speaker-alias-input');
       input?.focus();
     }, 0);
@@ -7224,7 +7217,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputProcessorNode = processor;
       this.voiceInputRecordingSegmentId.set(segmentId);
       this.voiceInputStatus.set(`録音中... ${this.voiceInputMaxRecordingSeconds}秒で自動停止します`);
-      this.voiceInputAutoStopTimer = setTimeout(() => {
+      this.voiceInputAutoStopTimer.schedule(() => {
         if (this.voiceInputRecordingSegmentId() === segmentId) {
           void this.finishVoiceInputRecording(segmentId);
         }
@@ -7304,10 +7297,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private cleanupVoiceInputRecording(clearStatus: boolean): void {
-    if (this.voiceInputAutoStopTimer !== null) {
-      clearTimeout(this.voiceInputAutoStopTimer);
-      this.voiceInputAutoStopTimer = null;
-    }
+    this.voiceInputAutoStopTimer.cancel();
     if (this.voiceInputProcessorNode) {
       this.voiceInputProcessorNode.onaudioprocess = null;
       try {
@@ -7390,7 +7380,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.editedSegmentTextMap.set(next);
     this.clearProofreadMetadataIfTextDiverged(segmentId, updatedText);
     const nextPos = Math.max(0, Math.min(updatedText.length, safeStart + text.length));
-    setTimeout(() => {
+    this.segmentCursorFocusTimer.schedule(() => {
       if (!textInputEl) return;
       textInputEl.focus({ preventScroll: true });
       textInputEl.setSelectionRange(nextPos, nextPos);
@@ -7428,7 +7418,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       endSs: String(endSec % 60).padStart(2, '0'),
     });
     this.editingTimeSegmentId.set(segment.id);
-    setTimeout(() => {
+    this.timeEditFocusTimer.schedule(() => {
       const el = document.querySelector<HTMLInputElement>(`[data-time-edit-id="${segment.id}"] .time-input`);
       el?.focus();
       el?.select();
@@ -7437,6 +7427,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   commitTimeEdit(segmentId: number): void {
     if (this.editingTimeSegmentId() !== segmentId) return;
+    this.timeEditFocusTimer.cancel();
     this.editingTimeSegmentId.set(null);
     const range = resolveTimeInputRangeValue(this.editingTimeValues());
     if (!range) {
@@ -7452,6 +7443,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   cancelTimeEdit(): void {
+    this.timeEditFocusTimer.cancel();
     this.editingTimeSegmentId.set(null);
   }
 

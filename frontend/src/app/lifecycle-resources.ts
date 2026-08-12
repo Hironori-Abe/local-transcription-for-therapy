@@ -90,3 +90,38 @@ export class RepeatingTimer {
     this.handle = null;
   }
 }
+
+export type TimeoutHandle = ReturnType<typeof setTimeout>;
+export type SetTimeoutCallback = (callback: () => void, milliseconds: number) => TimeoutHandle;
+export type ClearTimeoutCallback = (handle: TimeoutHandle) => void;
+
+/** 再予約時に以前の処理を取り消し、発火後は所有中のhandleを自動で解放する。 */
+export class OneShotTimer {
+  private handle: TimeoutHandle | null = null;
+  private readonly scheduleCallback: SetTimeoutCallback;
+  private readonly cancelCallback: ClearTimeoutCallback;
+
+  constructor(
+    scheduleCallback: SetTimeoutCallback = setTimeout,
+    cancelCallback: ClearTimeoutCallback = clearTimeout
+  ) {
+    this.scheduleCallback = scheduleCallback;
+    this.cancelCallback = cancelCallback;
+  }
+
+  schedule(callback: () => void, milliseconds: number): void {
+    this.cancel();
+    this.handle = this.scheduleCallback(() => {
+      this.handle = null;
+      callback();
+    }, milliseconds);
+  }
+
+  cancel(): void {
+    if (this.handle === null) {
+      return;
+    }
+    this.cancelCallback(this.handle);
+    this.handle = null;
+  }
+}

@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import {
   AsyncCleanupSlot,
+  OneShotTimer,
   RepeatingTimer,
-  type IntervalHandle
+  type IntervalHandle,
+  type TimeoutHandle
 } from './lifecycle-resources.ts';
 
 test('async cleanup slot coalesces concurrent initialization and clears once', async () => {
@@ -86,4 +88,57 @@ test('repeating timer replaces an existing interval and stops idempotently', () 
   timer.stop();
   timer.stop();
   assert.deepEqual(canceled, [1, 2]);
+});
+
+test('one-shot timer replaces pending work and releases its handle after firing', () => {
+  let nextHandle = 1;
+  const scheduled = new Map<number, () => void>();
+  const canceled: number[] = [];
+  const calls: string[] = [];
+  const timer = new OneShotTimer(
+    (callback) => {
+      const handle = nextHandle++;
+      scheduled.set(handle, callback);
+      return handle as unknown as TimeoutHandle;
+    },
+    (handle) => {
+      const numericHandle = handle as unknown as number;
+      canceled.push(numericHandle);
+      scheduled.delete(numericHandle);
+    }
+  );
+
+  timer.schedule(() => calls.push('old'), 40);
+  timer.schedule(() => calls.push('new'), 40);
+  assert.deepEqual(canceled, [1]);
+  assert.equal(scheduled.has(1), false);
+
+  scheduled.get(2)?.();
+  timer.cancel();
+  assert.deepEqual(calls, ['new']);
+  assert.deepEqual(canceled, [1]);
+});
+
+test('one-shot timer cancellation is idempotent and removes scheduled work', () => {
+  const scheduled = new Map<number, () => void>();
+  const canceled: number[] = [];
+  const timer = new OneShotTimer(
+    (callback) => {
+      scheduled.set(7, callback);
+      return 7 as unknown as TimeoutHandle;
+    },
+    (handle) => {
+      const numericHandle = handle as unknown as number;
+      canceled.push(numericHandle);
+      scheduled.delete(numericHandle);
+    }
+  );
+  let called = false;
+
+  timer.schedule(() => { called = true; }, 15_000);
+  timer.cancel();
+  timer.cancel();
+  assert.deepEqual(canceled, [7]);
+  assert.equal(scheduled.has(7), false);
+  assert.equal(called, false);
 });

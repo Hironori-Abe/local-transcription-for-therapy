@@ -1,7 +1,11 @@
 import type {
   AppSettingsV1,
+  CurrentLlmSelectionSettingsValue,
   GeneralAppSettingsOptions,
-  GeneralAppSettingsValue
+  GeneralAppSettingsValue,
+  LlmBackendMode,
+  ResolvedLlmAppSettingsValue,
+  ResolveLlmAppSettingsOptions
 } from './app-settings';
 
 export type DefaultExportFileKind = 'docx' | 'xlsx' | 'srt' | 'json' | 'runtime-csv';
@@ -1967,6 +1971,78 @@ export function resolveGeneralAppSettingsValue(
   return resolved;
 }
 
+const staleLemonadeModelNames = new Set([
+  'Gemma-4-E4B-it-GGUF',
+  'gemma-4-12B-qat-text',
+  'gemma-4-12B-it-qat-GGUF-UD-Q4_K_XL'
+]);
+
+export function resolvePersistedLlmBackendModeValue(
+  saved: unknown,
+  localLlmAppsEnabled: boolean
+): LlmBackendMode | undefined {
+  if (saved !== 'local_gguf' && saved !== 'lmstudio' && saved !== 'ollama') {
+    return undefined;
+  }
+  const usesLocalLlmApp = saved === 'lmstudio' || saved === 'ollama';
+  return usesLocalLlmApp && !localLlmAppsEnabled ? 'local_gguf' : saved;
+}
+
+/** 保存済みLLM設定を、旧値移行と現在の配布ポリシーを反映したUI値へ変換する。 */
+export function resolveLlmAppSettingsValue(
+  settings: AppSettingsV1,
+  options: ResolveLlmAppSettingsOptions
+): ResolvedLlmAppSettingsValue {
+  const llm = settings.llm;
+  const resolved: ResolvedLlmAppSettingsValue = {
+    llmGpuMode: llm?.llmGpuMode === 'cpu' ? 'cpu' : 'gpu',
+    proofreadModelTier: llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
+      ? '12b'
+      : 'e4b'
+  };
+  if (!llm) {
+    return resolved;
+  }
+  if (typeof llm.modelPath === 'string' && llm.modelPath) {
+    resolved.modelPath = llm.modelPath;
+  }
+  resolved.backendMode = resolvePersistedLlmBackendModeValue(
+    llm.backendMode,
+    options.localLlmAppsEnabled
+  );
+  if (typeof llm.lemonadeUrl === 'string' && llm.lemonadeUrl) {
+    resolved.lemonadeUrl = llm.lemonadeUrl === 'http://localhost:13305'
+      ? 'http://localhost:13306'
+      : llm.lemonadeUrl;
+  }
+  if (
+    typeof llm.lemonadeModel === 'string'
+    && llm.lemonadeModel
+    && !staleLemonadeModelNames.has(llm.lemonadeModel)
+  ) {
+    resolved.lemonadeModel = llm.lemonadeModel;
+  }
+  if (typeof llm.lmstudioModel === 'string' && llm.lmstudioModel) {
+    resolved.lmstudioModel = llm.lmstudioModel;
+  }
+  if (typeof llm.ollamaModel === 'string' && llm.ollamaModel) {
+    resolved.ollamaModel = llm.ollamaModel;
+  }
+  if (typeof llm.lemonadeBackendNotNeeded === 'boolean') {
+    resolved.lemonadeBackendNotNeeded = llm.lemonadeBackendNotNeeded;
+  }
+  if (Number.isInteger(llm.llmHipDeviceIndex) && Number(llm.llmHipDeviceIndex) >= -1) {
+    resolved.llmHipDeviceIndex = Number(llm.llmHipDeviceIndex);
+  }
+  if (llm.llmPromptType === 'gemma4' || llm.llmPromptType === 'original') {
+    resolved.llmPromptType = llm.llmPromptType;
+  }
+  if (Number.isInteger(llm.llmParallel) && Number(llm.llmParallel) >= 0) {
+    resolved.llmParallel = normalizeLlmParallelValue(Number(llm.llmParallel));
+  }
+  return resolved;
+}
+
 export function normalizeLlmNCtxValue(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 0;
@@ -1986,4 +2062,79 @@ export function normalizeLlmParallelValue(value: number): number {
     return 0;
   }
   return Math.max(1, Math.min(24, Math.round(value)));
+}
+
+export function buildLlmInferenceParamsKeyValue(
+  mode: LlmBackendMode,
+  modelInput: string
+): string {
+  if (mode === 'local_gguf') {
+    return 'local_gguf';
+  }
+  const model = modelInput.trim();
+  return model ? `${mode}:${model}` : mode;
+}
+
+export function getStoredLlmInferenceParamsValue(
+  settings: AppSettingsV1,
+  key: string
+): { nCtx: number; maxBatch: number } {
+  const stored = settings.llm?.inferenceParamsByKey?.[key];
+  return {
+    nCtx: Number.isFinite(stored?.nCtx) ? normalizeLlmNCtxValue(Number(stored?.nCtx)) : 0,
+    maxBatch: Number.isFinite(stored?.maxBatch)
+      ? normalizeLlmMaxBatchValue(Number(stored?.maxBatch))
+      : 40
+  };
+}
+
+export function updateStoredLlmInferenceParamsValue(
+  settings: AppSettingsV1,
+  key: string,
+  params: { nCtx: number; maxBatch: number } | null,
+  resetParallel = false
+): AppSettingsV1 {
+  const llm = settings.llm ?? {};
+  const inferenceParamsByKey = { ...(llm.inferenceParamsByKey ?? {}) };
+  if (params) {
+    inferenceParamsByKey[key] = {
+      nCtx: normalizeLlmNCtxValue(params.nCtx),
+      maxBatch: normalizeLlmMaxBatchValue(params.maxBatch)
+    };
+  } else {
+    delete inferenceParamsByKey[key];
+  }
+  return {
+    ...settings,
+    llm: {
+      ...llm,
+      inferenceParamsByKey,
+      ...(resetParallel ? { llmParallel: 0 } : {})
+    }
+  };
+}
+
+/** 現在のLLM選択を保存し、モデル別プロンプト等の既存辞書は保持する。 */
+export function updateLlmSelectionSettingsValue(
+  settings: AppSettingsV1,
+  value: CurrentLlmSelectionSettingsValue
+): AppSettingsV1 {
+  return {
+    ...settings,
+    llm: {
+      ...(settings.llm ?? {}),
+      modelPath: value.modelPath,
+      backendMode: value.backendMode,
+      llmGpuMode: value.llmGpuMode,
+      lemonadeUrl: value.lemonadeUrl,
+      lemonadeModel: value.lemonadeModel,
+      lmstudioModel: value.lmstudioModel,
+      ollamaModel: value.ollamaModel,
+      lemonadeBackendNotNeeded: value.lemonadeBackendNotNeeded,
+      llmHipDeviceIndex: value.llmHipDeviceIndex,
+      llmPromptType: value.llmPromptType,
+      llmParallel: value.llmParallel,
+      proofreadModelTier: value.proofreadModelTier
+    }
+  };
 }

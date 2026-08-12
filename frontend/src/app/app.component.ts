@@ -37,6 +37,7 @@ import {
   buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
+  buildLlmInferenceParamsKeyValue,
   buildLocationDetectionScopeValue,
   buildConsecutiveSpeakerRunMapValue,
   buildSegmentRowNumberMapValue,
@@ -73,6 +74,7 @@ import {
   getEstimatedTimeMessageValue,
   getImportCompletedMessageValue,
   getLlmModelFileNameValue,
+  getStoredLlmInferenceParamsValue,
   getProgressStageOrderValue,
   getLocationAreaPrefectureCodesValue,
   getSpeakerColorClassValue,
@@ -117,6 +119,8 @@ import {
   resolveRuntimeLogAudioSecondsValue,
   resolveEstimateComputeTypeValue,
   resolveGeneralAppSettingsValue,
+  resolveLlmAppSettingsValue,
+  resolvePersistedLlmBackendModeValue,
   resolveTimeInputRangeValue,
   resamplePcmTo16kValue,
   resolveAudioPreprocessPresetValue,
@@ -139,6 +143,8 @@ import {
   themeToggleIconValue,
   transcriptionTabDisabledValue,
   transcriptionTabLabelValue,
+  updateLlmSelectionSettingsValue,
+  updateStoredLlmInferenceParamsValue,
   validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
   processingStatusTextValue,
@@ -1624,61 +1630,27 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.addUtteranceNumber.set(general.addUtteranceNumber);
     }
 
-    const llm = this.appSettings.llm;
-    if (llm && typeof llm.modelPath === 'string' && llm.modelPath) {
-      this.llmModelPath.set(llm.modelPath);
-    }
-    this.applyBackendModeFromSettings();
-    // llmGpuMode: 旧値（cuda_only/cuda_parallel/amd_gpu）はすべて 'gpu' に移行
-    if (llm?.llmGpuMode === 'cpu') {
-      this.llmGpuMode.set('cpu');
-    } else {
-      this.llmGpuMode.set('gpu');
-    }
-    if (llm && typeof llm.lemonadeUrl === 'string' && llm.lemonadeUrl) {
-      // 13305 はシステムスナップ用ポート。アプリ固有の 13306 へ移行する。
-      const migratedUrl = llm.lemonadeUrl === 'http://localhost:13305'
-        ? 'http://localhost:13306'
-        : llm.lemonadeUrl;
-      this.lemonadeUrl.set(migratedUrl);
-    }
-    // 旧既定（非QAT版）と 12B 実験時代の保存値は破棄し、既定の E4B QAT へ移行する。
-    const staleLemonadeModels = [
-      'Gemma-4-E4B-it-GGUF',
-      'gemma-4-12B-qat-text',
-      'gemma-4-12B-it-qat-GGUF-UD-Q4_K_XL',
-    ];
-    if (
-      llm && typeof llm.lemonadeModel === 'string' && llm.lemonadeModel
-      && !staleLemonadeModels.includes(llm.lemonadeModel)
-    ) {
-      this.lemonadeModel.set(llm.lemonadeModel);
-    }
-    if (llm && typeof llm.lmstudioModel === 'string' && llm.lmstudioModel) {
-      this.lmstudioModelInput.set(llm.lmstudioModel);
-    }
-    if (llm && typeof llm.ollamaModel === 'string' && llm.ollamaModel) {
-      this.ollamaModelInput.set(llm.ollamaModel);
-    }
-    if (typeof llm?.lemonadeBackendNotNeeded === 'boolean') {
+    const llm = resolveLlmAppSettingsValue(this.appSettings, {
+      localLlmAppsEnabled: this.localLlmAppsEnabled(),
+      aiProofreadBuild: this.aiProofreadBuild
+    });
+    if (llm.modelPath !== undefined) this.llmModelPath.set(llm.modelPath);
+    if (llm.backendMode !== undefined) this.llmBackendMode.set(llm.backendMode);
+    this.llmGpuMode.set(llm.llmGpuMode);
+    if (llm.lemonadeUrl !== undefined) this.lemonadeUrl.set(llm.lemonadeUrl);
+    if (llm.lemonadeModel !== undefined) this.lemonadeModel.set(llm.lemonadeModel);
+    if (llm.lmstudioModel !== undefined) this.lmstudioModelInput.set(llm.lmstudioModel);
+    if (llm.ollamaModel !== undefined) this.ollamaModelInput.set(llm.ollamaModel);
+    if (llm.lemonadeBackendNotNeeded !== undefined) {
       this.lemonadeBackendNotNeeded.set(llm.lemonadeBackendNotNeeded);
     }
-    if (llm && Number.isInteger(llm.llmHipDeviceIndex) && (llm.llmHipDeviceIndex as number) >= -1) {
-      this.selectedLlmHipDeviceIndex.set(llm.llmHipDeviceIndex as number);
+    if (llm.llmHipDeviceIndex !== undefined) {
+      this.selectedLlmHipDeviceIndex.set(llm.llmHipDeviceIndex);
     }
-    if (llm?.llmPromptType === 'gemma4' || llm?.llmPromptType === 'original') {
-      this.llmPromptType.set(llm.llmPromptType);
-    }
-    if (llm && Number.isInteger(llm.llmParallel) && (llm.llmParallel as number) >= 0) {
-      this.selectedLlmParallel.set(this.normalizeLlmParallel(llm.llmParallel as number));
-    }
-    // 校正AIモデル階層は localStorage を初期 UI 値にする（最終的な真実はバックエンドのマーカー。
-    // initProofreadModelTier() が起動時に同期する）。AMD/Editor 版は 12B 非対応のため 'e4b' に丸める。
-    if ((llm?.proofreadModelTier === '12b') && this.aiProofreadBuild) {
-      this.proofreadModelTier.set('12b');
-    } else {
-      this.proofreadModelTier.set('e4b');
-    }
+    if (llm.llmPromptType !== undefined) this.llmPromptType.set(llm.llmPromptType);
+    if (llm.llmParallel !== undefined) this.selectedLlmParallel.set(llm.llmParallel);
+    // localStorage は初期UI値であり、最終的にはバックエンドの階層マーカーと同期する。
+    this.proofreadModelTier.set(llm.proofreadModelTier);
     if (this.llmBackendMode() === 'local_gguf') {
       this.llmPromptType.set('gemma4');
     }
@@ -4648,13 +4620,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 設定適用時（applyAppSettings）とフラグ確定後（checkGpuAvailability）の両方から呼ぶ。
    */
   private applyBackendModeFromSettings(): void {
-    const saved = this.appSettings.llm?.backendMode;
-    if (!saved || !(['local_gguf', 'lmstudio', 'ollama'] as string[]).includes(saved)) {
-      return;
+    const mode = resolvePersistedLlmBackendModeValue(
+      this.appSettings.llm?.backendMode,
+      this.localLlmAppsEnabled()
+    );
+    if (mode !== undefined) {
+      this.llmBackendMode.set(mode);
     }
-    const savedMode = saved as LlmBackendMode;
-    const usesLocalLlmApp = savedMode === 'lmstudio' || savedMode === 'ollama';
-    this.llmBackendMode.set(usesLocalLlmApp && !this.localLlmAppsEnabled() ? 'local_gguf' : savedMode);
   }
 
   /**
@@ -4883,25 +4855,20 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private persistLlmSettings(): void {
-    const llm = this.appSettings.llm ?? {};
-    this.appSettings = {
-      ...this.appSettings,
-      llm: {
-        ...llm,
-        modelPath: this.llmModelPath(),
-        backendMode: this.llmBackendMode(),
-        llmGpuMode: this.llmGpuMode(),
-        lemonadeUrl: this.lemonadeUrl(),
-        lemonadeModel: this.lemonadeModel(),
-        lmstudioModel: this.lmstudioModelInput(),
-        ollamaModel: this.ollamaModelInput(),
-        lemonadeBackendNotNeeded: this.lemonadeBackendNotNeeded(),
-        llmHipDeviceIndex: this.selectedLlmHipDeviceIndex(),
-        llmPromptType: this.llmPromptType(),
-        llmParallel: this.selectedLlmParallel(),
-        proofreadModelTier: this.proofreadModelTier(),
-      },
-    };
+    this.appSettings = updateLlmSelectionSettingsValue(this.appSettings, {
+      modelPath: this.llmModelPath(),
+      backendMode: this.llmBackendMode(),
+      llmGpuMode: this.llmGpuMode(),
+      lemonadeUrl: this.lemonadeUrl(),
+      lemonadeModel: this.lemonadeModel(),
+      lmstudioModel: this.lmstudioModelInput(),
+      ollamaModel: this.ollamaModelInput(),
+      lemonadeBackendNotNeeded: this.lemonadeBackendNotNeeded(),
+      llmHipDeviceIndex: this.selectedLlmHipDeviceIndex(),
+      llmPromptType: this.llmPromptType(),
+      llmParallel: this.selectedLlmParallel(),
+      proofreadModelTier: this.proofreadModelTier()
+    });
     this.persistAppSettings();
   }
 
@@ -5157,10 +5124,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private buildLlmInferenceParamsKey(): string {
-    const mode = this.llmBackendMode();
-    if (mode === 'local_gguf') return 'local_gguf';
-    const model = this.activeOpenAiModelInput().trim();
-    return model ? `${mode}:${model}` : mode;
+    return buildLlmInferenceParamsKeyValue(
+      this.llmBackendMode(),
+      this.activeOpenAiModelInput()
+    );
   }
 
   private normalizeLlmNCtx(value: number): number {
@@ -5176,12 +5143,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private getStoredLlmInferenceParams(): { nCtx: number; maxBatch: number } {
-    const key = this.buildLlmInferenceParamsKey();
-    const stored = this.appSettings.llm?.inferenceParamsByKey?.[key];
-    return {
-      nCtx: Number.isFinite(stored?.nCtx) ? this.normalizeLlmNCtx(Number(stored!.nCtx)) : 0,
-      maxBatch: Number.isFinite(stored?.maxBatch) ? this.normalizeLlmMaxBatch(Number(stored!.maxBatch)) : 40,
-    };
+    return getStoredLlmInferenceParamsValue(
+      this.appSettings,
+      this.buildLlmInferenceParamsKey()
+    );
   }
 
   private applyLlmInferenceParamsForSelectedModel(): void {
@@ -5192,13 +5157,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private persistLlmInferenceParams(): void {
     const key = this.buildLlmInferenceParamsKey();
-    const llm = this.appSettings.llm ?? {};
-    const inferenceParamsByKey = { ...(llm.inferenceParamsByKey ?? {}) };
-    inferenceParamsByKey[key] = {
-      nCtx: this.normalizeLlmNCtx(this.llmNCtx()),
-      maxBatch: this.normalizeLlmMaxBatch(this.llmMaxBatch()),
-    };
-    this.appSettings = { ...this.appSettings, llm: { ...llm, inferenceParamsByKey } };
+    this.appSettings = updateStoredLlmInferenceParamsValue(this.appSettings, key, {
+      nCtx: this.llmNCtx(),
+      maxBatch: this.llmMaxBatch()
+    });
     this.persistAppSettings();
   }
 
@@ -5219,10 +5181,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.llmMaxBatch.set(40);
     this.selectedLlmParallel.set(0); // 並列処理数を「自動（VRAMで判定）」に戻す
     const key = this.buildLlmInferenceParamsKey();
-    const llm = this.appSettings.llm ?? {};
-    const inferenceParamsByKey = { ...(llm.inferenceParamsByKey ?? {}) };
-    delete inferenceParamsByKey[key];
-    this.appSettings = { ...this.appSettings, llm: { ...llm, inferenceParamsByKey, llmParallel: 0 } };
+    this.appSettings = updateStoredLlmInferenceParamsValue(this.appSettings, key, null, true);
     this.persistAppSettings();
   }
 

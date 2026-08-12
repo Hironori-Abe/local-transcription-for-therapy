@@ -91,3 +91,38 @@ export interface GeneralAppSettingsOptions {
   transcriptionLanguageOptions: ReadonlyArray<{ value: string }>;
   playbackRateOptions: ReadonlyArray<number>;
 }
+
+export interface ResolvedLlmAppSettingsValue {
+  modelPath?: string;
+  backendMode?: LlmBackendMode;
+  llmGpuMode: LlmGpuMode;
+  lemonadeUrl?: string;
+  lemonadeModel?: string;
+  lmstudioModel?: string;
+  ollamaModel?: string;
+  lemonadeBackendNotNeeded?: boolean;
+  llmHipDeviceIndex?: number;
+  llmPromptType?: LlmPromptType;
+  llmParallel?: number;
+  proofreadModelTier: 'e4b' | '12b';
+}
+
+export interface ResolveLlmAppSettingsOptions {
+  localLlmAppsEnabled: boolean;
+  aiProofreadBuild: boolean;
+}
+
+export interface CurrentLlmSelectionSettingsValue {
+  modelPath: string;
+  backendMode: LlmBackendMode;
+  llmGpuMode: LlmGpuMode;
+  lemonadeUrl: string;
+  lemonadeModel: string;
+  lmstudioModel: string;
+  ollamaModel: string;
+  lemonadeBackendNotNeeded: boolean;
+  llmHipDeviceIndex: number;
+  llmPromptType: LlmPromptType;
+  llmParallel: number;
+  proofreadModelTier: 'e4b' | '12b';
+}

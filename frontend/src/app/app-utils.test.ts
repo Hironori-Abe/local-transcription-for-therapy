@@ -3,8 +3,6 @@ import test from 'node:test';
 
 import {
   appendRuntimeEstimateSampleValue,
-  aggregateDownloadProgressPercentValue,
-  arrayBufferToBase64Value,
   buildDocxExportRowsValue,
   buildExportSpeakerLabelByRowIdValue,
   buildFinalInitialPromptValue,
@@ -16,20 +14,16 @@ import {
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
   buildUniqueSpeakersValue,
-  buildVoiceInputContextValue,
   canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
   countSubstringOccurrencesValue,
   displaySpeakerValue,
-  downloadProgressBytesLabelValue,
-  downloadProgressPercentValue,
   editorVoiceInputDownloadButtonColorValue,
   editorVoiceInputMemoryTierValue,
   editorVoiceInputMemoryWarningValue,
   editorVoiceInputUnavailableTooltipValue,
-  encodePcm16WavValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatEstimatedMinutesValue,
@@ -63,7 +57,6 @@ import {
   llmNCtxHintValue,
   llmParallelHintValue,
   matchPlaybackShortcutCodeValue,
-  mergeFloat32ChunksValue,
   inferLocationAreaFromPrefecturesValue,
   normalizeComputeTypeValue,
   normalizeDevEmulationModeValue,
@@ -82,15 +75,12 @@ import {
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeTranscriptionLanguageValue,
-  normalizeVoiceInputErrorMessageValue,
-  needsFullSetupValue,
   parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
   resolveEstimateComputeTypeValue,
   resolveTimeInputRangeValue,
-  resamplePcmTo16kValue,
   resolveAudioPreprocessPresetValue,
   resolveAutoLlmParallelValue,
   resolveLlmDeviceVramMibValue,
@@ -263,28 +253,6 @@ test('language and selected GPU warnings preserve Japanese and ROCm special case
   assert.match(selectedGpuAsrWarningValue('rocm', true, 'unknown'), /動作未確認/);
 });
 
-test('download progress helpers preserve zero handling, rounding, aggregation, and caps', () => {
-  assert.equal(downloadProgressPercentValue(undefined), 0);
-  assert.equal(downloadProgressPercentValue({ downloadedBytes: 50, totalBytes: 200 }), 25);
-  assert.equal(downloadProgressPercentValue({ downloadedBytes: 300, totalBytes: 200 }), 100);
-  assert.equal(downloadProgressBytesLabelValue({}), '');
-  assert.equal(downloadProgressBytesLabelValue({ downloadedBytes: 1_048_576 }), '1 MB');
-  assert.equal(downloadProgressBytesLabelValue({
-    downloadedBytes: 1_572_864,
-    totalBytes: 3_145_728
-  }), '2 / 3 MB');
-  assert.equal(aggregateDownloadProgressPercentValue([]), null);
-  assert.equal(aggregateDownloadProgressPercentValue([
-    { downloadedBytes: 50, totalBytes: 100 },
-    { downloadedBytes: 150, totalBytes: 300 },
-    { downloadedBytes: 999 }
-  ]), 50);
-  assert.equal(aggregateDownloadProgressPercentValue([
-    { downloadedBytes: -20, totalBytes: 100 },
-    { downloadedBytes: 300, totalBytes: 100 }
-  ]), 100);
-});
-
 test('location count and hint helpers deduplicate selections across areas', () => {
   assert.equal(selectedLocationPrefectureTotalCountValue(
     { kanto: ['13', '14'], kinki: ['27', '13'] },
@@ -319,41 +287,6 @@ test('consecutive speaker runs include only qualifying runs at their first segme
     10: 5, 20: 4
   });
   assert.deepEqual(buildConsecutiveSpeakerRunMapValue([], () => ''), {});
-});
-
-test('voice input context preserves visible neighbors, edited text, and hidden-row fallback', () => {
-  const all = [
-    { id: 1, speaker: 'Th', text: '一行目' },
-    { id: 2, speaker: '-', text: '二行目' },
-    { id: 3, speaker: 'Cl', text: '三行目' }
-  ];
-  const edited = { 2: '編集済み' };
-  const getText = (segment: (typeof all)[number]) => edited[segment.id as keyof typeof edited] ?? segment.text;
-  assert.deepEqual(buildVoiceInputContextValue(
-    all,
-    all,
-    2,
-    { 1: 1, 2: 2, 3: 3 },
-    (segment) => segment.speaker,
-    getText
-  ), {
-    previous: { rowNumber: 1, speaker: 'Th', text: '一行目' },
-    current: { rowNumber: 2, speaker: null, text: '編集済み' },
-    next: { rowNumber: 3, speaker: 'Cl', text: '三行目' }
-  });
-  assert.deepEqual(buildVoiceInputContextValue(
-    [all[0], all[2]],
-    all,
-    2,
-    { 1: 1, 3: 2 },
-    (segment) => segment.speaker,
-    getText
-  ), {
-    previous: null,
-    current: { speaker: null, text: '編集済み' },
-    next: null
-  });
-  assert.equal(buildVoiceInputContextValue(all, all, 99, {}, (segment) => segment.speaker, getText), null);
 });
 
 test('small UI label helpers preserve existing classes, icons, and import messages', () => {
@@ -551,50 +484,6 @@ test('time field stepping preserves bounds and prevents start/end crossover', ()
   ), null);
 });
 
-test('voice PCM helpers preserve chunk order and linear 16 kHz resampling', () => {
-  const first = new Float32Array([0, 0.5]);
-  const second = new Float32Array([-0.5, 1]);
-  assert.deepEqual(Array.from(mergeFloat32ChunksValue([first, second])), [0, 0.5, -0.5, 1]);
-  assert.deepEqual(Array.from(mergeFloat32ChunksValue([])), []);
-  assert.equal(resamplePcmTo16kValue(first, 16000), first);
-  assert.deepEqual(
-    Array.from(resamplePcmTo16kValue(new Float32Array([0, 1, 0, -1]), 32000)),
-    [0, 0]
-  );
-  assert.deepEqual(
-    Array.from(resamplePcmTo16kValue(new Float32Array([0, 1, 0]), 24000)),
-    [0, 0.5]
-  );
-});
-
-test('PCM16 WAV encoding preserves headers, clamping, and Base64 bytes', () => {
-  const wav = encodePcm16WavValue(new Float32Array([-2, -1, 0, 1, 2]), 16000);
-  const bytes = new Uint8Array(wav);
-  const view = new DataView(wav);
-  assert.equal(new TextDecoder().decode(bytes.subarray(0, 4)), 'RIFF');
-  assert.equal(view.getUint32(4, true), 46);
-  assert.equal(new TextDecoder().decode(bytes.subarray(8, 12)), 'WAVE');
-  assert.equal(new TextDecoder().decode(bytes.subarray(12, 16)), 'fmt ');
-  assert.equal(view.getUint16(20, true), 1);
-  assert.equal(view.getUint16(22, true), 1);
-  assert.equal(view.getUint32(24, true), 16000);
-  assert.equal(view.getUint32(28, true), 32000);
-  assert.equal(view.getUint16(34, true), 16);
-  assert.equal(new TextDecoder().decode(bytes.subarray(36, 40)), 'data');
-  assert.equal(view.getUint32(40, true), 10);
-  assert.deepEqual([44, 46, 48, 50, 52].map((offset) => view.getInt16(offset, true)), [
-    -32768, -32768, 0, 32767, 32767
-  ]);
-  assert.equal(arrayBufferToBase64Value(new Uint8Array([0, 1, 2, 253, 254, 255]).buffer), 'AAEC/f7/');
-});
-
-test('voice input errors retain actionable microphone messages', () => {
-  const permissionMessage = 'マイク入力が許可されませんでした。OSまたはWebViewのマイク権限を許可してから再試行してください。';
-  assert.equal(normalizeVoiceInputErrorMessageValue(new Error('NotAllowedError: Permission denied')), permissionMessage);
-  assert.equal(normalizeVoiceInputErrorMessageValue('device not found'), '利用可能なマイクが見つかりません。');
-  assert.equal(normalizeVoiceInputErrorMessageValue('録音処理に失敗しました'), '録音処理に失敗しました');
-});
-
 test('Editor and CPU voice-input memory helpers preserve thresholds and warnings', () => {
   const gib = 1024 ** 3;
   assert.equal(editorVoiceInputMemoryTierValue(false, true, 8 * gib, 16 * gib, 24 * gib), 'unknown');
@@ -658,41 +547,7 @@ test('result and transcription tab helpers preserve setup labels', () => {
   assert.equal(transcriptionTabLabelValue(false, false, false), '文字起こし');
 });
 
-test('setup requirement helpers preserve build-specific dependencies and safe tab states', () => {
-  const completeStatus = {
-    pythonEnv: true,
-    whisperTurbo: true,
-    diarization: true,
-    gemmaGguf: true,
-    gemmaMtpGguf: true,
-    llmBackend: true
-  };
-  const setupInput = {
-    editorOnlyBuild: false,
-    tauriRuntime: true,
-    setupChecked: true,
-    status: completeStatus,
-    transcriptionTabVisible: true,
-    aiProofreadBuild: true,
-    buildVariant: 'cuda'
-  };
-  assert.equal(needsFullSetupValue(setupInput), false);
-  assert.equal(needsFullSetupValue({ ...setupInput, editorOnlyBuild: true, status: null }), false);
-  assert.equal(needsFullSetupValue({ ...setupInput, setupChecked: false, status: null }), false);
-  assert.equal(needsFullSetupValue({ ...setupInput, status: null }), true);
-  assert.equal(needsFullSetupValue({
-    ...setupInput, status: { ...completeStatus, whisperTurbo: false }
-  }), true);
-  assert.equal(needsFullSetupValue({
-    ...setupInput, transcriptionTabVisible: false, status: { ...completeStatus, whisperTurbo: false, diarization: false }
-  }), false);
-  assert.equal(needsFullSetupValue({
-    ...setupInput, status: { ...completeStatus, gemmaMtpGguf: false }
-  }), true);
-  assert.equal(needsFullSetupValue({
-    ...setupInput, buildVariant: 'rocm', status: { ...completeStatus, gemmaMtpGguf: false }
-  }), false);
-
+test('tab and setup-adjacent helpers preserve safe UI states', () => {
   const tabInput = {
     transcriptionTabVisible: true,
     editorOnlyBuild: false,

@@ -114,11 +114,6 @@ export interface ResolvedTimeRangeValue {
 
 export type TimeInputFieldValue = 'startMm' | 'startSs' | 'endMm' | 'endSs';
 
-export interface DownloadProgressValue {
-  downloadedBytes?: number;
-  totalBytes?: number;
-}
-
 export interface GpuDeviceLabelValueInput {
   index: number;
   name: string;
@@ -178,25 +173,6 @@ export interface LlmDeviceMemoryValueInput {
   totalVramMb: number;
 }
 
-export interface FullSetupStatusValueInput {
-  pythonEnv: boolean;
-  whisperTurbo: boolean;
-  diarization: boolean;
-  gemmaGguf: boolean;
-  gemmaMtpGguf: boolean;
-  llmBackend: boolean;
-}
-
-export interface NeedsFullSetupValueInput {
-  editorOnlyBuild: boolean;
-  tauriRuntime: boolean;
-  setupChecked: boolean;
-  status: FullSetupStatusValueInput | null;
-  transcriptionTabVisible: boolean;
-  aiProofreadBuild: boolean;
-  buildVariant: string;
-}
-
 export interface TranscriptionTabDisabledValueInput {
   transcriptionTabVisible: boolean;
   editorOnlyBuild: boolean;
@@ -206,18 +182,6 @@ export interface TranscriptionTabDisabledValueInput {
   needsFullSetup: boolean;
   pythonEnvReady: boolean;
   transcriptionRuntimeAvailable: boolean;
-}
-
-export interface VoiceInputContextLineValue {
-  rowNumber?: number;
-  speaker?: string | null;
-  text: string;
-}
-
-export interface VoiceInputContextValue {
-  previous?: VoiceInputContextLineValue | null;
-  current?: VoiceInputContextLineValue | null;
-  next?: VoiceInputContextLineValue | null;
 }
 
 export type ConfirmDialogColorValue = 'primary' | 'accent' | 'warn' | null;
@@ -395,23 +359,6 @@ export function normalizeTimeInputValue(value: string): string {
   return value.replace(/[^0-9]/g, '');
 }
 
-export function normalizeVoiceInputErrorMessageValue(error: unknown): string {
-  const message = normalizeErrorMessageValue(error);
-  const lower = message.toLowerCase();
-  if (
-    lower.includes('notallowederror') ||
-    lower.includes('not allowed') ||
-    lower.includes('permission') ||
-    lower.includes('denied')
-  ) {
-    return 'マイク入力が許可されませんでした。OSまたはWebViewのマイク権限を許可してから再試行してください。';
-  }
-  if (lower.includes('notfounderror') || lower.includes('device not found')) {
-    return '利用可能なマイクが見つかりません。';
-  }
-  return message;
-}
-
 export function selectedFileNameValue(fullPath: string): string {
   if (!fullPath) {
     return '';
@@ -523,44 +470,6 @@ export function themeToggleIconValue(themeMode: NormalizedThemeMode): string {
   }
 }
 
-export function downloadProgressPercentValue(progress: DownloadProgressValue | null | undefined): number {
-  if (!progress?.downloadedBytes || !progress?.totalBytes) {
-    return 0;
-  }
-  return Math.min(100, (progress.downloadedBytes / progress.totalBytes) * 100);
-}
-
-export function downloadProgressBytesLabelValue(progress: DownloadProgressValue | null | undefined): string {
-  if (!progress?.downloadedBytes) {
-    return '';
-  }
-  const downloadedMb = Math.round(progress.downloadedBytes / 1_048_576);
-  if (progress.totalBytes) {
-    return `${downloadedMb} / ${Math.round(progress.totalBytes / 1_048_576)} MB`;
-  }
-  return `${downloadedMb} MB`;
-}
-
-export function aggregateDownloadProgressPercentValue(
-  progressValues: ReadonlyArray<DownloadProgressValue>
-): number | null {
-  const totals = progressValues.filter(
-    (progress) => Number.isFinite(progress.totalBytes) && Number(progress.totalBytes) > 0
-  );
-  if (totals.length === 0) {
-    return null;
-  }
-  const downloaded = totals.reduce(
-    (sum, progress) => sum + Math.max(0, Number(progress.downloadedBytes ?? 0)),
-    0
-  );
-  const total = totals.reduce(
-    (sum, progress) => sum + Math.max(0, Number(progress.totalBytes ?? 0)),
-    0
-  );
-  return total > 0 ? Math.max(0, Math.min(100, (downloaded / total) * 100)) : null;
-}
-
 export function selectedLocationPrefectureTotalCountValue(
   prefecturesByArea: Readonly<Partial<Record<LocationAreaCode, string[]>>>,
   selectedPrefectures: ReadonlyArray<string>
@@ -667,79 +576,6 @@ export function stepTimeInputValuesValue(
     ...values,
     [field]: isSeconds ? String(candidate).padStart(2, '0') : String(candidate)
   };
-}
-
-export function mergeFloat32ChunksValue(chunks: ReadonlyArray<Float32Array>): Float32Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Float32Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return merged;
-}
-
-export function resamplePcmTo16kValue(input: Float32Array, inputSampleRate: number): Float32Array {
-  const outputSampleRate = 16000;
-  if (inputSampleRate === outputSampleRate) {
-    return input;
-  }
-  const ratio = inputSampleRate / outputSampleRate;
-  const outputLength = Math.max(1, Math.floor(input.length / ratio));
-  const output = new Float32Array(outputLength);
-  for (let index = 0; index < outputLength; index++) {
-    const sourceIndex = index * ratio;
-    const left = Math.floor(sourceIndex);
-    const right = Math.min(input.length - 1, left + 1);
-    const fraction = sourceIndex - left;
-    output[index] = input[left] * (1 - fraction) + input[right] * fraction;
-  }
-  return output;
-}
-
-function writeAsciiValue(view: DataView, offset: number, value: string): void {
-  for (let index = 0; index < value.length; index++) {
-    view.setUint8(offset + index, value.charCodeAt(index));
-  }
-}
-
-export function encodePcm16WavValue(samples: Float32Array, sampleRate: number): ArrayBuffer {
-  const bytesPerSample = 2;
-  const dataSize = samples.length * bytesPerSample;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-  writeAsciiValue(view, 0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeAsciiValue(view, 8, 'WAVE');
-  writeAsciiValue(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * bytesPerSample, true);
-  view.setUint16(32, bytesPerSample, true);
-  view.setUint16(34, 16, true);
-  writeAsciiValue(view, 36, 'data');
-  view.setUint32(40, dataSize, true);
-  let offset = 44;
-  for (const sample of samples) {
-    const clamped = Math.max(-1, Math.min(1, sample));
-    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-    offset += 2;
-  }
-  return buffer;
-}
-
-export function arrayBufferToBase64Value(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
 }
 
 export function editorVoiceInputMemoryTierValue(
@@ -1016,22 +852,6 @@ export function selectedGpuAsrWarningValue(
     : '動作未確認のGPUです。文字起こしが動作しない場合があります。';
 }
 
-export function needsFullSetupValue(input: NeedsFullSetupValueInput): boolean {
-  if (input.editorOnlyBuild || !input.tauriRuntime || !input.setupChecked) {
-    return false;
-  }
-  if (!input.status) {
-    return true;
-  }
-  const needsPythonEnv = !input.status.pythonEnv;
-  const needsWhisper = input.transcriptionTabVisible && !input.status.whisperTurbo;
-  const needsDiarization = input.transcriptionTabVisible && !input.status.diarization;
-  const needsGemma = input.aiProofreadBuild && !input.status.gemmaGguf;
-  const needsGemmaMtp = input.aiProofreadBuild && input.buildVariant === 'cuda' && !input.status.gemmaMtpGguf;
-  const needsLlmBackend = input.aiProofreadBuild && !input.status.llmBackend;
-  return needsPythonEnv || needsWhisper || needsDiarization || needsGemma || needsGemmaMtp || needsLlmBackend;
-}
-
 export function transcriptionTabDisabledValue(input: TranscriptionTabDisabledValueInput): boolean {
   if (!input.transcriptionTabVisible || input.editorOnlyBuild || !input.setupChecked) {
     return false;
@@ -1081,47 +901,6 @@ export function buildConsecutiveSpeakerRunMapValue<T extends { id: number }>(
     }
   }
   return map;
-}
-
-export function buildVoiceInputContextValue<T extends { id: number }>(
-  visibleRows: ReadonlyArray<T>,
-  allSegments: ReadonlyArray<T>,
-  segmentId: number,
-  rowNumberMap: Readonly<Record<number, number>>,
-  getSpeakerLabel: (segment: T) => string,
-  getText: (segment: T) => string
-): VoiceInputContextValue | null {
-  const index = visibleRows.findIndex((segment) => segment.id === segmentId);
-  const currentSegment = index >= 0
-    ? visibleRows[index]
-    : allSegments.find((segment) => segment.id === segmentId) ?? null;
-  if (!currentSegment) {
-    return null;
-  }
-
-  const toContextLine = (
-    segment: T | null | undefined,
-    fallbackIndex: number | null
-  ): VoiceInputContextLineValue | null => {
-    if (!segment) {
-      return null;
-    }
-    const speaker = getSpeakerLabel(segment).trim();
-    const rowNumber = rowNumberMap[segment.id] ?? (fallbackIndex !== null ? fallbackIndex + 1 : undefined);
-    return {
-      ...(typeof rowNumber === 'number' && Number.isFinite(rowNumber) ? { rowNumber } : {}),
-      speaker: speaker.length > 0 && speaker !== '-' ? speaker : null,
-      text: getText(segment)
-    };
-  };
-
-  return {
-    previous: index > 0 ? toContextLine(visibleRows[index - 1], index - 1) : null,
-    current: toContextLine(currentSegment, index >= 0 ? index : null),
-    next: index >= 0 && index < visibleRows.length - 1
-      ? toContextLine(visibleRows[index + 1], index + 1)
-      : null
-  };
 }
 
 export function showProofreadSystemPromptEditorValue(

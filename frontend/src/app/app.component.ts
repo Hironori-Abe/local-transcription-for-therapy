@@ -53,9 +53,31 @@ import {
   type ThemeMode
 } from './app-settings';
 import {
+  aggregateDownloadProgressPercent,
+  browserSetupStatus,
+  browserVoiceInputPackStatus,
+  downloadProgressBytesLabel,
+  downloadProgressPercent,
+  llmBackendInstallPlan,
+  llmBackendLabel,
+  needsFullSetup,
+  projectSetupStatus,
+  setupErrorProgress,
+  unavailableSetupProjection,
+  updateSetupProgress,
+  type AllSetupStatus,
+  type EditorVoiceInputPackStatus,
+  type SetupProgressEvent
+} from './setup-state';
+import {
+  buildVoiceInputContext,
+  normalizeVoiceInputCandidates,
+  normalizeVoiceInputErrorMessage,
+  prepareVoiceInput,
+  type VoiceInputContext
+} from './voice-input';
+import {
   appendRuntimeEstimateSampleValue,
-  aggregateDownloadProgressPercentValue,
-  arrayBufferToBase64Value,
   buildDocxExportRowsValue,
   buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
@@ -68,19 +90,15 @@ import {
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
   buildUniqueSpeakersValue,
-  buildVoiceInputContextValue,
   canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
   displaySpeakerValue,
-  downloadProgressBytesLabelValue,
-  downloadProgressPercentValue,
   editorVoiceInputDownloadButtonColorValue,
   editorVoiceInputMemoryTierValue,
   editorVoiceInputMemoryWarningValue,
   editorVoiceInputUnavailableTooltipValue,
-  encodePcm16WavValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatEstimatedMinutesValue,
@@ -116,7 +134,6 @@ import {
   llmNCtxHintValue,
   llmParallelHintValue,
   matchPlaybackShortcutCodeValue,
-  mergeFloat32ChunksValue,
   normalizeComputeTypeValue,
   normalizeDevEmulationModeValue,
   normalizeErrorMessageValue,
@@ -132,8 +149,6 @@ import {
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeTranscriptionLanguageValue,
-  normalizeVoiceInputErrorMessageValue,
-  needsFullSetupValue,
   parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
   pickRuntimeEstimateSamplesValue,
@@ -143,7 +158,6 @@ import {
   resolveLlmAppSettingsValue,
   resolvePersistedLlmBackendModeValue,
   resolveTimeInputRangeValue,
-  resamplePcmTo16kValue,
   resolveAudioPreprocessPresetValue,
   resolveLlmDeviceVramMibValue,
   resolveLlmInstallableGpuEntryValue,
@@ -400,61 +414,14 @@ interface ComputeEnvResult {
   largeV3Installed?: boolean;
 }
 
-interface AllSetupStatus {
-  whisperTurbo: boolean;
-  diarization: boolean;
-  diarizationExpectedPath: string;
-  gemmaGguf: boolean;
-  gemmaGgufExpectedPath: string;
-  gemmaMtpGguf: boolean;
-  gemmaMtpGgufExpectedPath: string;
-  llmBackend: boolean;
-  pythonEnv: boolean;
-  pythonEnvExpectedPath: string;
-}
-
-interface EditorVoiceInputPackStatus {
-  installed: boolean;
-  cpuBackendRequired: boolean;
-  cpuBackend: boolean;
-  cpuBackendExpectedPath: string;
-  gemmaGguf: boolean;
-  gemmaGgufExpectedPath: string;
-  mmprojGguf: boolean;
-  mmprojGgufExpectedPath: string;
-  ffmpegRequired: boolean;
-  ffmpeg: boolean;
-  ffmpegExpectedPath: string;
-}
-
 interface EditorVoiceInputResponse {
   candidates: string[];
-}
-
-interface EditorVoiceInputContextLine {
-  rowNumber?: number;
-  speaker?: string | null;
-  text: string;
-}
-
-interface EditorVoiceInputContext {
-  previous?: EditorVoiceInputContextLine | null;
-  current?: EditorVoiceInputContextLine | null;
-  next?: EditorVoiceInputContextLine | null;
 }
 
 interface DeleteModelsResponse {
   deleted: string[];
   notFound: string[];
   errors: string[];
-}
-
-interface SetupProgressEvent {
-  component: string;
-  status: 'downloading' | 'done' | 'error' | 'skipped';
-  message: string;
-  downloadedBytes?: number;
-  totalBytes?: number;
 }
 
 @Component({
@@ -944,10 +911,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     () => this.isDevModeBuild && this.isTauriRuntime()
   );
   readonly editorVoiceInputInstallPercent = computed(() => {
-    return aggregateDownloadProgressPercentValue(Object.values(this.editorVoiceInputPackProgressMap()));
+    return aggregateDownloadProgressPercent(Object.values(this.editorVoiceInputPackProgressMap()));
   });
   readonly needsFullSetup = computed(() => {
-    return needsFullSetupValue({
+    return needsFullSetup({
       editorOnlyBuild: this.editorOnlyBuild,
       tauriRuntime: this.isTauriRuntime(),
       setupChecked: this.allSetupChecked(),
@@ -1019,10 +986,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly largeV3DownloadMessage = signal<string>('');
   readonly largeV3DownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['whisper_large_v3']);
   readonly largeV3DownloadPercent = computed(() => {
-    return downloadProgressPercentValue(this.largeV3DownloadProgress());
+    return downloadProgressPercent(this.largeV3DownloadProgress());
   });
   readonly largeV3DownloadBytesLabel = computed(() => {
-    return downloadProgressBytesLabelValue(this.largeV3DownloadProgress());
+    return downloadProgressBytesLabel(this.largeV3DownloadProgress());
   });
   // 内蔵校正AIモデルの階層選択（CUDA版のみ）。'e4b'=標準（既定）、'12b'=高精度（後からDL）。
   readonly proofreadModelTier = signal<'e4b' | '12b'>('e4b');
@@ -1031,10 +998,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly gemma12bDownloadMessage = signal<string>('');
   readonly gemma12bDownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['gemma_12b']);
   readonly gemma12bDownloadPercent = computed(() => {
-    return downloadProgressPercentValue(this.gemma12bDownloadProgress());
+    return downloadProgressPercent(this.gemma12bDownloadProgress());
   });
   readonly gemma12bDownloadBytesLabel = computed(() => {
-    return downloadProgressBytesLabelValue(this.gemma12bDownloadProgress());
+    return downloadProgressBytesLabel(this.gemma12bDownloadProgress());
   });
   /**
    * 12B（高精度）関連 UI（説明アイコン・ダウンロード進捗）の表示条件:
@@ -5143,19 +5110,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async checkEditorVoiceInputPackStatus(): Promise<void> {
     if (!this.isTauriRuntime()) {
-      this.editorVoiceInputPackStatus.set({
-        installed: false,
-        cpuBackendRequired: this.cpuVoiceInputBuild,
-        cpuBackend: false,
-        cpuBackendExpectedPath: '',
-        gemmaGguf: false,
-        gemmaGgufExpectedPath: '',
-        mmprojGguf: false,
-        mmprojGgufExpectedPath: '',
-        ffmpegRequired: this.cpuVoiceInputBuild,
-        ffmpeg: false,
-        ffmpegExpectedPath: '',
-      });
+      this.editorVoiceInputPackStatus.set(browserVoiceInputPackStatus(this.cpuVoiceInputBuild));
       this.editorVoiceInputPackChecked.set(true);
       return;
     }
@@ -5198,7 +5153,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.voiceInputPackProgressSubscription.ensure(() =>
       listen<SetupProgressEvent>('voice-input-pack-progress', (event) => {
         const p = event.payload;
-        this.editorVoiceInputPackProgressMap.update((m) => ({ ...m, [p.component]: p }));
+        this.editorVoiceInputPackProgressMap.update((m) => updateSetupProgress(m, p));
       })
     );
   }
@@ -5246,16 +5201,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.ensureEditorVoiceInputPackProgressListener();
       const installed = await invoke<boolean>('install_editor_voice_input_pack');
       if (!installed) {
-        this.editorVoiceInputPackProgressMap.update((m) => ({
-          ...m,
-          _error: { component: '_error', status: 'error', message: '音声入力パックの導入が完了しませんでした。' },
-        }));
+        this.editorVoiceInputPackProgressMap.update((m) => updateSetupProgress(
+          m,
+          setupErrorProgress('_error', '音声入力パックの導入が完了しませんでした。')
+        ));
       }
     } catch (error) {
-      this.editorVoiceInputPackProgressMap.update((m) => ({
-        ...m,
-        _error: { component: '_error', status: 'error', message: this.normalizeErrorMessage(error) },
-      }));
+      this.editorVoiceInputPackProgressMap.update((m) => updateSetupProgress(
+        m,
+        setupErrorProgress('_error', this.normalizeErrorMessage(error))
+      ));
     } finally {
       this.editorVoiceInputPackInstalling.set(false);
       await this.checkEditorVoiceInputPackStatus();
@@ -5310,42 +5265,23 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async checkAllSetupStatus(): Promise<void> {
     if (!this.isTauriRuntime()) {
-      this.allSetupStatus.set({
-        whisperTurbo: true,
-        diarization: true,
-        diarizationExpectedPath: '',
-        gemmaGguf: true,
-        gemmaGgufExpectedPath: '',
-        gemmaMtpGguf: true,
-        gemmaMtpGgufExpectedPath: '',
-        llmBackend: true,
-        pythonEnv: true,
-        pythonEnvExpectedPath: '',
-      });
-      this.llmGpuBackendInstalled.set(true);
+      const status = browserSetupStatus();
+      this.allSetupStatus.set(status);
+      this.applySetupStatusProjection(projectSetupStatus(status));
       this.allSetupChecked.set(true);
       this.diarizationModelChecked.set(true);
-      this.diarizationModelExists.set(true);
-      this.diarizationModelHasConfig.set(true);
-      this.diarizationSetupVisible.set(false);
       return;
     }
     try {
       const status = await invoke<AllSetupStatus>('check_all_setup_status');
       this.ngZone.run(() => {
         this.allSetupStatus.set(status);
-        this.llmGpuBackendInstalled.set(status.llmBackend);
-        this.diarizationModelExists.set(status.diarization);
-        this.diarizationModelHasConfig.set(status.diarization);
-        this.diarizationModelExpectedPath.set(status.diarizationExpectedPath);
-        this.diarizationSetupVisible.set(!status.diarization);
+        this.applySetupStatusProjection(projectSetupStatus(status));
       });
     } catch (error) {
       this.ngZone.run(() => {
         this.allSetupStatus.set(null);
-        this.diarizationModelExists.set(false);
-        this.diarizationModelHasConfig.set(false);
-        this.diarizationSetupVisible.set(true);
+        this.applySetupStatusProjection(unavailableSetupProjection());
       });
     } finally {
       this.ngZone.run(() => {
@@ -5353,6 +5289,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.diarizationModelChecked.set(true);
       });
     }
+  }
+
+  private applySetupStatusProjection(projection: ReturnType<typeof projectSetupStatus>): void {
+    this.llmGpuBackendInstalled.set(projection.llmBackendInstalled);
+    this.diarizationModelExists.set(projection.diarizationExists);
+    this.diarizationModelHasConfig.set(projection.diarizationHasConfig);
+    this.diarizationModelExpectedPath.set(projection.diarizationExpectedPath);
+    this.diarizationSetupVisible.set(projection.diarizationSetupVisible);
   }
 
   async onRecheckAllSetupStatus(): Promise<void> {
@@ -5380,7 +5324,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const tokenError = this.validateHfTokenFormat(tokenForValidation);
       if (tokenError) {
         this.setupProgressMap.set({
-          diarization: { component: 'diarization', status: 'error', message: tokenError },
+          diarization: setupErrorProgress('diarization', tokenError),
         });
         return;
       }
@@ -5403,66 +5347,54 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
         // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
-        const gpuBackends = this.cudaAvailable() ? ['llamacpp:vulkan']
-          : this.rocmAvailable() ? ['llamacpp:rocm', 'llamacpp:vulkan']
-          : ['llamacpp:cpu'];
-        const backendLabel = (b: string) => b === 'llamacpp:vulkan' ? 'Vulkan'
-          : b === 'llamacpp:rocm' ? 'AMD GPU (ROCm)'
-          : 'CPU';
+        const backendPlan = llmBackendInstallPlan(
+          this.cudaAvailable() === true,
+          this.rocmAvailable() === true
+        );
 
-        this.setupProgressMap.update(m => ({
-          ...m,
-          llm_backend: { component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...' },
-        }));
+        this.setSetupProgress({
+          component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...'
+        });
 
         // バックエンド未導入の段階では起動を試さない。特に Linux NVIDIA 開発環境は
         // CUDA llama-server を同梱しておらず、Vulkan 取得前の起動は必ず失敗する。
         // 校正エンジンは実際の校正実行時に遅延起動する。
         const unlisten = await listen<{ message: string }>(
           'llm-backend-install-progress',
-          (ev) => this.setupProgressMap.update(m => ({
-            ...m,
-            llm_backend: { component: 'llm_backend', status: 'downloading', message: ev.payload.message },
-          })),
+          (ev) => this.setSetupProgress({
+            component: 'llm_backend', status: 'downloading', message: ev.payload.message
+          }),
         );
         try {
           // 主バックエンド（必須）。
-          this.setupProgressMap.update(m => ({
-            ...m,
-            llm_backend: { component: 'llm_backend', status: 'downloading', message: `${backendLabel(gpuBackends[0])} バックエンドをダウンロード中...` },
-          }));
-          await invoke('install_llm_backend', { backend: gpuBackends[0] });
+          this.setSetupProgress({
+            component: 'llm_backend',
+            status: 'downloading',
+            message: `${llmBackendLabel(backendPlan.primary)} バックエンドをダウンロード中...`
+          });
+          await invoke('install_llm_backend', { backend: backendPlan.primary });
           // フォールバック（任意。失敗しても主経路で動くので続行する）。
-          for (const fb of gpuBackends.slice(1)) {
+          for (const fallback of backendPlan.fallbacks) {
             try {
-              this.setupProgressMap.update(m => ({
-                ...m,
-                llm_backend: { component: 'llm_backend', status: 'downloading', message: `${backendLabel(fb)} バックエンド（フォールバック）をダウンロード中...` },
-              }));
-              await invoke('install_llm_backend', { backend: fb });
+              this.setSetupProgress({
+                component: 'llm_backend',
+                status: 'downloading',
+                message: `${llmBackendLabel(fallback)} バックエンド（フォールバック）をダウンロード中...`
+              });
+              await invoke('install_llm_backend', { backend: fallback });
             } catch (e) {
-              console.warn(`フォールバックバックエンド ${fb} の取得に失敗しました（主経路は利用可能）:`, this.normalizeErrorMessage(e));
+              console.warn(`フォールバックバックエンド ${fallback} の取得に失敗しました（主経路は利用可能）:`, this.normalizeErrorMessage(e));
             }
           }
-          this.setupProgressMap.update(m => ({
-            ...m,
-            llm_backend: { component: 'llm_backend', status: 'done', message: 'インストール完了' },
-          }));
+          this.setSetupProgress({ component: 'llm_backend', status: 'done', message: 'インストール完了' });
         } catch (e) {
-          this.setupProgressMap.update(m => ({
-            ...m,
-            llm_backend: { component: 'llm_backend', status: 'error', message: this.normalizeErrorMessage(e) },
-          }));
+          this.setSetupProgress(setupErrorProgress('llm_backend', this.normalizeErrorMessage(e)));
         } finally {
           unlisten();
         }
       }
     } catch (error) {
-      const msg = this.normalizeErrorMessage(error);
-      this.setupProgressMap.update(m => ({
-        ...m,
-        _error: { component: '_error', status: 'error', message: msg },
-      }));
+      this.setSetupProgress(setupErrorProgress('_error', this.normalizeErrorMessage(error)));
     } finally {
       // アクセストークンはダウンロード処理にだけ使い、成功・失敗にかかわらず
       // Angular の状態と入力欄に保持し続けない。
@@ -5485,10 +5417,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.isTauriRuntime()) return;
     await this.setupProgressSubscription.ensure(() =>
       listen<SetupProgressEvent>('setup_progress', (event) => {
-        const p = event.payload;
-        this.setupProgressMap.update(m => ({ ...m, [p.component]: p }));
+        this.setSetupProgress(event.payload);
       })
     );
+  }
+
+  private setSetupProgress(progress: SetupProgressEvent): void {
+    this.setupProgressMap.update((current) => updateSetupProgress(current, progress));
   }
 
   async checkTranscriptionRuntimeSupport(): Promise<void> {
@@ -6686,10 +6621,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           ...(context ? { context } : {}),
         },
       });
-      const candidates = (response.candidates ?? [])
-        .map((candidate) => String(candidate).trim())
-        .filter((candidate) => candidate.length > 0)
-        .slice(0, 3);
+      const candidates = normalizeVoiceInputCandidates(response.candidates);
       if (candidates.length === 0) {
         const message = '候補を生成できませんでした。';
         this.voiceInputError.set(message);
@@ -6799,7 +6731,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }, this.voiceInputMaxRecordingSeconds * 1000);
     } catch (error) {
       this.cleanupVoiceInputRecording(false);
-      this.voiceInputError.set(normalizeVoiceInputErrorMessageValue(error));
+      this.voiceInputError.set(normalizeVoiceInputErrorMessage(error));
     }
   }
 
@@ -6810,17 +6742,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const chunks = this.voiceInputChunks.map((chunk) => new Float32Array(chunk));
     const sourceRate = this.voiceInputSampleRate || 48000;
     this.cleanupVoiceInputRecording(false);
-    const merged = mergeFloat32ChunksValue(chunks);
-    if (merged.length < sourceRate * 0.15) {
+    const prepared = prepareVoiceInput(chunks, sourceRate, this.voiceInputMaxRecordingSeconds);
+    if (!prepared.ok) {
       this.voiceInputStatus.set('');
-      this.voiceInputError.set('録音が短すぎます。');
+      this.voiceInputError.set(prepared.message);
       return;
     }
-    const maxSourceSamples = Math.floor(sourceRate * this.voiceInputMaxRecordingSeconds);
-    const clipped = merged.length > maxSourceSamples ? merged.slice(0, maxSourceSamples) : merged;
-    const resampled = resamplePcmTo16kValue(clipped, sourceRate);
-    const wav = encodePcm16WavValue(resampled, 16000);
-    const wavBase64 = arrayBufferToBase64Value(wav);
     this.voiceInputProcessingSegmentId.set(segmentId);
     this.voiceInputFeedbackSegmentId.set(segmentId);
     const modelLoaded = await this.isVoiceInputModelLoaded();
@@ -6831,12 +6758,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       const context = this.buildVoiceInputContext(segmentId);
       const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
-        request: { wavBase64, maxCandidates: 3, ...(context ? { context } : {}) },
+        request: { wavBase64: prepared.wavBase64, maxCandidates: 3, ...(context ? { context } : {}) },
       });
-      const candidates = (response.candidates ?? [])
-        .map((candidate) => String(candidate).trim())
-        .filter((candidate) => candidate.length > 0)
-        .slice(0, 3);
+      const candidates = normalizeVoiceInputCandidates(response.candidates);
       if (candidates.length === 0) {
         const message = '候補を生成できませんでした。';
         this.voiceInputError.set(message);
@@ -6850,7 +6774,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.voiceInputCandidates.set(null);
       this.voiceInputStatus.set('');
-      const message = normalizeVoiceInputErrorMessageValue(error);
+      const message = normalizeVoiceInputErrorMessage(error);
       this.voiceInputError.set(message);
       this.showAmdGpuProcessingFailure('音声入力', message);
     } finally {
@@ -6858,10 +6782,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private buildVoiceInputContext(segmentId: number): EditorVoiceInputContext | null {
+  private buildVoiceInputContext(segmentId: number): VoiceInputContext | null {
     const rows = this.segmentRows;
     const editedMap = this.editedSegmentTextMap();
-    return buildVoiceInputContextValue(
+    return buildVoiceInputContext(
       rows,
       this.result()?.segments ?? [],
       segmentId,

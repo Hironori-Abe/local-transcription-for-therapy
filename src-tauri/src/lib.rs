@@ -2044,32 +2044,32 @@ fn start_amd_12b_blocking(
     Err("AI校正エンジン(高精度12B)を起動できませんでした。設定で校正AIモデルを標準(E4B)に戻してください。".to_string())
 }
 
-// E4B(標準) を AMD で直起動する際の ctx。lemond が config.json に書く ctx_size と同じ 16384
-// （校正の話者別バッチ＝最大40セグメントを単一スロットで処理するため。lemond E4B も単一スロット）。
+// E4B(標準) を AMD で直起動する際の ctx。校正の話者別バッチ（最大40セグメント）を
+// 単一スロットで処理するため 16384 とする。
 const AMD_E4B_CTX_SIZE: u32 = 16384;
 
 /// AMD で E4B(標準) を ROCm 直起動するパラメータを返す。lemonade(lemond) 撤去の布石として、
 /// E4B も 12B と同様 lemond 非経由でローカル GGUF を直接ロードする。ROCm が確実に使える機
 /// （rocm バイナリ存在 ∧ AMD GPU 検出 ∧ system ROCm に対象 arch の rocBLAS Tensile あり）
-/// だけを対象にし、満たさなければ None → 従来の lemond E4B 経路へ（挙動完全不変）。
-/// MTP は使わない（lemond E4B 既定と同じ挙動を保つ）。Linux 以外では GPU 検出系が空を返し None。
+/// だけを対象にする。E4B用MTPドラフトが配置済みなら本体と一緒に渡す。
+/// Linux 以外では GPU 検出系が空を返し None。
 fn amd_e4b_rocm_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Option<RocmLaunch> {
     if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::E4b {
         return None;
     }
     let rocm_bin = find_llm_rocm_llama_server(app)?;
     let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
+    let mtp_path = resolve_gemma_mtp_path_for_tier(app, GemmaTier::E4b);
     let (hip_index, gfx, _vram) = amd_gpu_priority_list().into_iter().next()?;
     if !system_rocm_tensile_has_arch(&gfx) {
         return None;
     }
-    Some((rocm_bin, main_path, None, AMD_E4B_CTX_SIZE, hip_index))
+    Some((rocm_bin, main_path, mtp_path, AMD_E4B_CTX_SIZE, hip_index))
 }
 
 /// E4B(標準) を ROCm llama-server で直起動する（lemond 非経由）。起動して resolved_port が
 /// 開けば true（mode=1: per-job 停止・kill-on-close の対象、単一スロット）。起動失敗・即死・
-/// タイムアウトなら残骸を kill して false を返し、呼び出し側が従来の lemond 経路へ退避する。
-/// 12B と違い失敗をエラーにせず lemond へ委ねるので、ROCm 直起動が不調でも校正は止まらない。
+/// タイムアウトなら残骸を kill して false を返し、呼び出し側が Vulkan 経路へ退避する。
 fn try_start_amd_e4b_rocm_direct(
     launch: RocmLaunch,
     mmproj_path: Option<&str>,
@@ -2113,7 +2113,7 @@ fn try_start_amd_e4b_rocm_direct(
             break;
         }
     }
-    // 失敗: 残骸を kill して呼び出し側の lemond フォールバックへ。
+    // 失敗: 残骸を kill して呼び出し側の Vulkan フォールバックへ。
     if let Ok(mut g) = child_arc.lock() {
         if let Some(mut c) = g.take() {
             let _ = c.kill();
@@ -2125,8 +2125,8 @@ fn try_start_amd_e4b_rocm_direct(
 
 /// AMD で E4B(標準) を Vulkan 直起動するパラメータを返す。ROCm 直起動が使えない機
 /// （Windows AMD は system ROCm ゲートが /opt/rocm 前提で常に不成立、system ROCm 無し Linux AMD 等）
-/// の受け皿。vulkan バイナリが取得済みのときだけ Some。未取得なら None → lemond へ。
-/// MTP は使わない（lemond E4B 既定と同じ挙動）。
+/// の受け皿。vulkan バイナリが取得済みのときだけ Some。E4B用MTPドラフトが配置済みなら
+/// 本体と一緒に渡す。
 fn amd_e4b_vulkan_launch(
     app: &AppHandle,
     proofread_tier: Option<GemmaTier>,
@@ -2136,14 +2136,14 @@ fn amd_e4b_vulkan_launch(
     }
     let vk_bin = find_llm_vulkan_llama_server(app)?;
     let main_path = resolve_gemma_main_path_for_tier(app, GemmaTier::E4b)?;
-    Some((vk_bin, main_path, None, AMD_E4B_CTX_SIZE))
+    let mtp_path = resolve_gemma_mtp_path_for_tier(app, GemmaTier::E4b);
+    Some((vk_bin, main_path, mtp_path, AMD_E4B_CTX_SIZE))
 }
 
 /// E4B(標準) を Vulkan llama-server で直起動する（lemond 非経由）。**単一GPU固定**
 /// （WindowsはVulkan0、LinuxはNVIDIA GPUがあればその番号）で、iGPU+dGPU同時列挙による
 /// RADV初期化ハング（最初の不具合と同根）を回避する。起動して resolved_port が開けば true。
-/// 失敗・OOM・即死・タイムアウトなら残骸を kill して false を返し、呼び出し側の次段
-/// （lemond）へ退避する。12B と違い失敗をエラーにしない。
+/// 失敗・OOM・即死・タイムアウトなら残骸を kill して false を返す。
 fn try_start_amd_e4b_vulkan_direct(
     launch: VulkanLaunch,
     mmproj_path: Option<&str>,
@@ -4155,6 +4155,7 @@ struct ProofreadSegmentInput {
     id: i64,
     text: String,
     speaker: Option<String>,
+    speaker_label: Option<String>,
     start: Option<f64>,
     end: Option<f64>,
 }
@@ -4203,6 +4204,20 @@ struct LlmProofreadRequest {
     n_ctx: Option<i64>,
     max_batch: Option<i64>,
     prompt_type: Option<String>,
+}
+
+fn serialize_proofread_segments(segments: &[ProofreadSegmentInput]) -> Vec<serde_json::Value> {
+    segments
+        .iter()
+        .map(|segment| {
+            serde_json::json!({
+                "id": segment.id,
+                "text": segment.text,
+                "speaker": segment.speaker,
+                "speakerLabel": segment.speaker_label,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -9031,11 +9046,7 @@ fn proofread_transcription_llm_blocking_with_kind(
     let python_bin = get_python_bin(&app);
 
     // セグメントを一時JSONファイルに書き出す
-    let segments_json: Vec<serde_json::Value> = request
-        .segments
-        .iter()
-        .map(|s| serde_json::json!({"id": s.id, "text": s.text, "speaker": s.speaker}))
-        .collect();
+    let segments_json = serialize_proofread_segments(&request.segments);
     let segments_json_str = serde_json::to_string(&segments_json)
         .map_err(|e| format!("JSON シリアライズに失敗: {e}"))?;
 
@@ -10123,6 +10134,27 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proofread_segment_serialization_preserves_speaker_labels() {
+        let serialized = serialize_proofread_segments(&[ProofreadSegmentInput {
+            id: 7,
+            text: "確認します".to_string(),
+            speaker: Some("SPEAKER_00".to_string()),
+            speaker_label: Some("Th".to_string()),
+            start: Some(1.0),
+            end: Some(2.0),
+        }]);
+        assert_eq!(
+            serialized,
+            vec![serde_json::json!({
+                "id": 7,
+                "text": "確認します",
+                "speaker": "SPEAKER_00",
+                "speakerLabel": "Th",
+            })]
+        );
+    }
 
     #[test]
     fn bundled_sidecar_candidates_keep_packaging_fallback_order() {
@@ -12902,11 +12934,7 @@ fn run_overall_proofread_blocking(
 
     let python_bin = get_python_bin(&app);
 
-    let segments_json: Vec<serde_json::Value> = request
-        .segments
-        .iter()
-        .map(|s| serde_json::json!({"id": s.id, "text": s.text, "speaker": s.speaker}))
-        .collect();
+    let segments_json = serialize_proofread_segments(&request.segments);
     let segments_json_str = serde_json::to_string(&segments_json)
         .map_err(|e| format!("JSON シリアライズに失敗: {e}"))?;
 

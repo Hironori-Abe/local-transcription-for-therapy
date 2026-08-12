@@ -21,6 +21,7 @@ import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.co
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration } from './browser-adapters';
+import { AsyncCleanupSlot, RepeatingTimer } from './lifecycle-resources';
 import {
   type AppSettingsV1,
   type LlmBackendMode,
@@ -183,7 +184,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { environment } from '../environments/environment';
 
 interface TranscriptionSegmentWord {
@@ -1160,23 +1161,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: 'general_improvement', label: '全般的な改善' }
   ];
   readonly speakerCountOptions: ReadonlyArray<number> = [1, 2, 3, 4, 5];
-  private runningTickerId: ReturnType<typeof setInterval> | null = null;
+  private readonly runningTicker = new RepeatingTimer();
   // 表示用の進捗を滑らかに進めるためのティッカー（500ms）と、現在実行中の概算所要時間（秒）。
-  private smoothProgressTickerId: ReturnType<typeof setInterval> | null = null;
+  private readonly smoothProgressTicker = new RepeatingTimer();
   private activeRunEstimatedSeconds: number | null = null;
-  private proofreadTickerId: ReturnType<typeof setInterval> | null = null;
-  private diarizationTickerId: ReturnType<typeof setInterval> | null = null;
-  private llmProofreadTickerId: ReturnType<typeof setInterval> | null = null;
+  private readonly proofreadTicker = new RepeatingTimer();
+  private readonly diarizationTicker = new RepeatingTimer();
+  private readonly llmProofreadTicker = new RepeatingTimer();
   private llmProgressOffset = 0;
   private llmTotalProcessedCount = 0;
   private overallProofreadProgressCurrent = 0;
   private overallProofreadProgressStarted = false;
   private _gemmaCheckBypassed = false;
   private progressSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
-  private progressUnlisten: UnlistenFn | null = null;
-  private parallelDiarUnlisten: UnlistenFn | null = null;
-  private voiceInputPackProgressUnlisten: UnlistenFn | null = null;
-  private playbackTranscodeUnlisten: UnlistenFn | null = null;
+  private readonly progressSubscription = new AsyncCleanupSlot();
+  private readonly parallelDiarizationSubscription = new AsyncCleanupSlot();
+  private readonly voiceInputPackProgressSubscription = new AsyncCleanupSlot();
+  private readonly playbackTranscodeSubscription = new AsyncCleanupSlot();
+  private readonly setupProgressSubscription = new AsyncCleanupSlot();
   private playbackTranscodeSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
   private readonly playbackTranscodePercent = signal(0);
   private readonly playbackTranscodeStatusText = computed(
@@ -1875,24 +1877,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.stopSmoothProgress();
     this.stopProofreadTicker();
     this.stopDiarizationTicker();
+    this.stopLlmProofreadTicker();
     this.stopSegmentPlayback();
     this.revokePreviewObjectUrl();
-    if (this.progressUnlisten) {
-      this.progressUnlisten();
-      this.progressUnlisten = null;
-    }
-    if (this.parallelDiarUnlisten) {
-      this.parallelDiarUnlisten();
-      this.parallelDiarUnlisten = null;
-    }
-    if (this.voiceInputPackProgressUnlisten) {
-      this.voiceInputPackProgressUnlisten();
-      this.voiceInputPackProgressUnlisten = null;
-    }
-    if (this.playbackTranscodeUnlisten) {
-      this.playbackTranscodeUnlisten();
-      this.playbackTranscodeUnlisten = null;
-    }
+    this.progressSubscription.clear();
+    this.parallelDiarizationSubscription.clear();
+    this.voiceInputPackProgressSubscription.clear();
+    this.playbackTranscodeSubscription.clear();
+    this.setupProgressSubscription.clear();
     this.dismissPlaybackTranscodeSnackbar();
     this.cleanupVoiceInputRecording(false);
     if (this.llmEngineUiVisible()) {
@@ -5330,11 +5322,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private async ensureEditorVoiceInputPackProgressListener(): Promise<void> {
-    if (!this.isTauriRuntime() || this.voiceInputPackProgressUnlisten) return;
-    this.voiceInputPackProgressUnlisten = await listen<SetupProgressEvent>('voice-input-pack-progress', (event) => {
-      const p = event.payload;
-      this.editorVoiceInputPackProgressMap.update((m) => ({ ...m, [p.component]: p }));
-    });
+    if (!this.isTauriRuntime()) return;
+    await this.voiceInputPackProgressSubscription.ensure(() =>
+      listen<SetupProgressEvent>('voice-input-pack-progress', (event) => {
+        const p = event.payload;
+        this.editorVoiceInputPackProgressMap.update((m) => ({ ...m, [p.component]: p }));
+      })
+    );
   }
 
   async installEditorVoiceInputPack(): Promise<void> {
@@ -5615,14 +5609,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private setupProgressUnlisten: (() => void) | null = null;
-
   private async ensureSetupProgressListener(): Promise<void> {
-    if (!this.isTauriRuntime() || this.setupProgressUnlisten) return;
-    this.setupProgressUnlisten = await listen<SetupProgressEvent>('setup_progress', (event) => {
-      const p = event.payload;
-      this.setupProgressMap.update(m => ({ ...m, [p.component]: p }));
-    });
+    if (!this.isTauriRuntime()) return;
+    await this.setupProgressSubscription.ensure(() =>
+      listen<SetupProgressEvent>('setup_progress', (event) => {
+        const p = event.payload;
+        this.setupProgressMap.update(m => ({ ...m, [p.component]: p }));
+      })
+    );
   }
 
   async checkTranscriptionRuntimeSupport(): Promise<void> {
@@ -5714,17 +5708,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private startRunningTicker(): void {
-    this.stopRunningTicker();
-    this.runningTickerId = setInterval(() => {
+    this.runningTicker.start(() => {
       this.runningSeconds.set(this.runningSeconds() + 1);
     }, 1000);
   }
 
   private stopRunningTicker(): void {
-    if (this.runningTickerId !== null) {
-      clearInterval(this.runningTickerId);
-      this.runningTickerId = null;
-    }
+    this.runningTicker.stop();
   }
 
   // 表示用の進捗を 1000ms ごとに滑らかに前進させる（表示専用。Python/Rust 側の処理には一切触れない）。
@@ -5735,14 +5725,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.stopSmoothProgress();
     this.displayProgress.set(0);
     this.activeRunEstimatedSeconds = this.estimatedAvgSeconds();
-    this.smoothProgressTickerId = setInterval(() => this.updateSmoothProgress(), 1000);
+    this.smoothProgressTicker.start(() => this.updateSmoothProgress(), 1000);
   }
 
   private stopSmoothProgress(): void {
-    if (this.smoothProgressTickerId !== null) {
-      clearInterval(this.smoothProgressTickerId);
-      this.smoothProgressTickerId = null;
-    }
+    this.smoothProgressTicker.stop();
   }
 
   private updateSmoothProgress(): void {
@@ -5772,47 +5759,35 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private startProofreadTicker(): void {
-    this.stopProofreadTicker();
-    this.proofreadTickerId = setInterval(() => {
+    this.proofreadTicker.start(() => {
       this.proofreadRunningSeconds.set(this.proofreadRunningSeconds() + 1);
       this.updateProofreadRunningStatus();
     }, 1000);
   }
 
   private stopProofreadTicker(): void {
-    if (this.proofreadTickerId !== null) {
-      clearInterval(this.proofreadTickerId);
-      this.proofreadTickerId = null;
-    }
+    this.proofreadTicker.stop();
   }
 
   private startDiarizationTicker(): void {
-    this.stopDiarizationTicker();
-    this.diarizationTickerId = setInterval(() => {
+    this.diarizationTicker.start(() => {
       this.diarizationRunningSeconds.set(this.diarizationRunningSeconds() + 1);
       this.updateDiarizationRunningStatus();
     }, 1000);
   }
 
   private stopDiarizationTicker(): void {
-    if (this.diarizationTickerId !== null) {
-      clearInterval(this.diarizationTickerId);
-      this.diarizationTickerId = null;
-    }
+    this.diarizationTicker.stop();
   }
 
   private startLlmProofreadTicker(): void {
-    this.stopLlmProofreadTicker();
-    this.llmProofreadTickerId = setInterval(() => {
+    this.llmProofreadTicker.start(() => {
       this.llmProofreadRunningSeconds.set(this.llmProofreadRunningSeconds() + 1);
     }, 1000);
   }
 
   private stopLlmProofreadTicker(): void {
-    if (this.llmProofreadTickerId !== null) {
-      clearInterval(this.llmProofreadTickerId);
-      this.llmProofreadTickerId = null;
-    }
+    this.llmProofreadTicker.stop();
   }
 
   private updateProofreadRunningStatus(): void {
@@ -5835,10 +5810,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.isTauriRuntime()) {
       return;
     }
-    if (this.progressUnlisten) {
-      return;
-    }
-    this.progressUnlisten = await listen<{ stage?: string; message?: string; progress?: number; current?: number; total?: number }>(
+    await this.progressSubscription.ensure(() => listen<{ stage?: string; message?: string; progress?: number; current?: number; total?: number }>(
       'transcription-progress',
       (event) => {
         if (!this.running() && !this.diarizationRunning() && !this.proofreadRunning() && !this.llmProofreadRunning() && !this.overallProofreadRunning()) {
@@ -5997,9 +5969,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.runningStatus.set(`${message}${retrySuffix}`);
         }
       }
-    );
+    ));
 
-    this.parallelDiarUnlisten = await listen<{ stage?: string; message?: string }>(
+    await this.parallelDiarizationSubscription.ensure(() => listen<{ stage?: string; message?: string }>(
       'parallel-diarization-progress',
       (event) => {
         if (!this.running()) return;
@@ -6011,7 +5983,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.parallelDiarizationStatus.set('話者分離完了');
         }
       }
-    );
+    ));
   }
 
   get uniqueSpeakers(): ReadonlyArray<string> {
@@ -6502,30 +6474,32 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 通常はイベントが来ずスナックバーも出ない。
    */
   private async ensurePlaybackTranscodeProgressListener(): Promise<void> {
-    if (!this.isTauriRuntime() || this.playbackTranscodeUnlisten) {
+    if (!this.isTauriRuntime()) {
       return;
     }
-    this.playbackTranscodeUnlisten = await listen<{ state: string; percent: number }>(
-      'playback-transcode-progress',
-      (event) => {
-        const { state, percent } = event.payload;
-        if (state === 'done' || state === 'error') {
-          this.dismissPlaybackTranscodeSnackbar();
-          return;
+    await this.playbackTranscodeSubscription.ensure(() =>
+      listen<{ state: string; percent: number }>(
+        'playback-transcode-progress',
+        (event) => {
+          const { state, percent } = event.payload;
+          if (state === 'done' || state === 'error') {
+            this.dismissPlaybackTranscodeSnackbar();
+            return;
+          }
+          this.playbackTranscodePercent.set(Number.isFinite(percent) ? percent : 0);
+          if (!this.playbackTranscodeSnackBarRef) {
+            this.playbackTranscodeSnackBarRef = this.snackBar.openFromComponent(
+              ProgressSnackbarComponent,
+              {
+                data: { statusText: this.playbackTranscodeStatusText },
+                duration: 0,
+                horizontalPosition: 'center',
+                verticalPosition: 'bottom',
+              }
+            );
+          }
         }
-        this.playbackTranscodePercent.set(Number.isFinite(percent) ? percent : 0);
-        if (!this.playbackTranscodeSnackBarRef) {
-          this.playbackTranscodeSnackBarRef = this.snackBar.openFromComponent(
-            ProgressSnackbarComponent,
-            {
-              data: { statusText: this.playbackTranscodeStatusText },
-              duration: 0,
-              horizontalPosition: 'center',
-              verticalPosition: 'bottom',
-            }
-          );
-        }
-      }
+      )
     );
   }
 

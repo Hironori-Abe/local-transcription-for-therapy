@@ -25,7 +25,7 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { environment } from '../environments/environment';
 
@@ -165,12 +165,6 @@ interface ReadFileSizeResponse {
   sizeBytes: number;
 }
 
-interface DiarizationModelStatusResponse {
-  exists: boolean;
-  hasConfig: boolean;
-  expectedPath: string;
-}
-
 interface TranscriptionRuntimeStatusResponse {
   available: boolean;
   reason: string;
@@ -224,13 +218,6 @@ interface ProofreadSegmentInput {
   start?: number;
   end?: number;
   words?: TranscriptionSegmentWord[];
-}
-
-interface LlmBackendEntry {
-  label: string;
-  state: 'installed' | 'installable' | 'update_required';
-  category: 'gpu' | 'npu' | 'cpu';
-  installKey: string; // "llamacpp:rocm" など lemonade CLI に渡すキー
 }
 
 type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
@@ -300,7 +287,7 @@ interface OverallProofreadResultData {
 
 type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetProofreadSystemPrompt' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 type EditorVoiceInputMemoryTier = 'unknown' | 'low' | 'caution' | 'normal';
 type AudioPreprocessPreset = 'none' | 'low_noise' | 'strong_noise' | 'volume_boost' | 'general_improvement' | 'manual';
@@ -416,6 +403,13 @@ interface AppSettingsV1 {
 interface LlmModelEntry {
   name: string;
   path: string;
+}
+
+interface LlmBackendEntry {
+  label: string;
+  state: 'installed' | 'installable' | 'update_required';
+  category: 'gpu' | 'npu' | 'cpu';
+  installKey: string;
 }
 
 interface GpuDeviceInfo {
@@ -569,8 +563,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
   readonly isSegmentTableInView = signal<boolean>(false);
   readonly diarizationInstallToken = signal<string>('');
-  readonly diarizationCheckMessage = signal<string>('');
-  readonly diarizationCheckIsError = signal<boolean>(false);
   readonly selectedAudioPath = signal<string>('');
   readonly audioFileLoading = signal<boolean>(false);
   readonly importJsonReady = signal<boolean>(false);
@@ -598,8 +590,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const lang = (this.result()?.settings?.language ?? this.transcriptionLanguage() ?? 'ja').toLowerCase();
     return lang === 'ja';
   });
-  readonly editCommaChar = computed<'、' | ','>(() => (this.editPunctuationIsJapanese() ? '、' : ','));
-  readonly editPeriodChar = computed<'。' | '.'>(() => (this.editPunctuationIsJapanese() ? '。' : '.'));
   readonly initialPrompt = signal<string>('');
   readonly baseInitialPrompt = signal<string>('');
   readonly running = signal<boolean>(false);
@@ -660,9 +650,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedLlmParallel = signal<number>(0);
   readonly lemonadeUrl = signal<string>('http://localhost:13306');
   readonly lemonadeModel = signal<string>('gemma-4-E4B-it-qat');
-  readonly llmServerStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'installing' | 'error'>('unknown');
-  readonly llmInstallMessage = signal<string>('');
-  readonly llmHwInfo = signal<LlmBackendEntry[] | null>(null);
+  readonly llmServerStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'error'>('unknown');
   readonly llmLoadedDevice = signal<'unknown' | 'gpu' | 'cpu' | 'stopped' | 'error'>('unknown');
   readonly llmBackendInstalling = signal(false);
   readonly llmBackendInstallMessage = signal('');
@@ -732,20 +720,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return '内蔵されたモデル（Gemma4 E4B）を使用します';
   });
-  readonly llmLoadedDeviceText = computed(() => {
-    switch (this.llmLoadedDevice()) {
-      case 'gpu':
-        return 'GPU';
-      case 'cpu':
-        return 'CPU';
-      case 'stopped':
-        return '停止中';
-      case 'error':
-        return '取得失敗';
-      default:
-        return '不明';
-    }
-  });
   readonly availableLlmModels = signal<LlmModelEntry[]>([]);
   /** コンテキスト長(n_ctx)。0=自動（VRAMで判定 / CUDAサーバーの--ctx-size）。手動値で上書き可。 */
   readonly llmNCtx = signal<number>(0);
@@ -788,29 +762,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly proofreadSystemPromptReadonly = computed(() =>
     this.llmBackendMode() === 'local_gguf' && this.isGemma4DefaultLlmModelPath(this.llmModelPath())
   );
-  readonly canSaveProofreadSystemPrompt = computed(() => {
-    if (this.proofreadSystemPromptReadonly()) {
-      return false;
-    }
-    if (this.llmBackendMode() !== 'local_gguf') {
-      return !!this.activeOpenAiModelInput().trim();
-    }
-    return !!this.llmModelPath();
-  });
-  private readonly promptSaveVersion = signal(0);
-  readonly proofreadPromptIsCustomized = computed(() => {
-    this.promptSaveVersion();
-    if (this.proofreadSystemPromptReadonly()) return false;
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return false;
-      const key = `${this.llmBackendMode()}:${model}`;
-      return typeof this.appSettings.llm?.systemPromptsByBackend?.[key] === 'string';
-    }
-    const key = this.getLlmModelFileName(this.llmModelPath());
-    if (!key || this.isGemma4DefaultLlmModelFileName(key)) return false;
-    return typeof this.appSettings.llm?.systemPromptsByModelFileName?.[key] === 'string';
-  });
   readonly showProofreadSystemPromptEditor = computed(() => {
     if (this.proofreadSystemPromptReadonly()) return false;
     if (this.llmBackendMode() !== 'local_gguf') return true;
@@ -1008,7 +959,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly diarizationModelExists = signal<boolean>(true);
   readonly diarizationModelHasConfig = signal<boolean>(true);
   readonly diarizationModelExpectedPath = signal<string>('');
-  readonly diarizationModelChecking = signal<boolean>(false);
   readonly diarizationSetupVisible = signal<boolean>(false);
   readonly voiceInputRecordingSegmentId = signal<number | null>(null);
   readonly voiceInputProcessingSegmentId = signal<number | null>(null);
@@ -1467,10 +1417,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.ngZone.run(() => this.systemPrefersDark.set(event.matches));
   };
 
-  get resultAsPrettyJson(): string {
-    return JSON.stringify(this.result(), null, 2);
-  }
-
   get segmentRows(): ReadonlyArray<TranscriptionSegment> {
     return this._segmentRowsComputed();
   }
@@ -1613,7 +1559,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private buildProofreadHint(
     originalText: string,
     revisedText: string,
-    confidenceRaw: number,
     reasonRaw: string,
     sensitiveEntityRaw?: unknown
   ): string {
@@ -1872,14 +1817,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return 1200;
     }
     return Math.max(200, Math.min(6000, Math.round(value)));
-  }
-
-  getProofreadRecommendedChunkSizeHint(): string {
-    return '推奨: 12';
-  }
-
-  getProofreadRecommendedChunkMaxCharsHint(): string {
-    return '推奨: 1200';
   }
 
   private isPunctuationOnlyProofreadReason(reasonRaw: string): boolean {
@@ -2504,11 +2441,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private getLocationAreaLabel(areaRaw: unknown): string {
-    const area = this.normalizeLocationArea(areaRaw);
-    return this.locationAreaOptions.find((option) => option.value === area)?.label ?? '関東';
-  }
-
   private inferLocationAreaFromPrefectures(prefectures: string[]): LocationAreaCode {
     const first = prefectures[0];
     if (!first) {
@@ -2517,10 +2449,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.locationAreaOptions.find((area) =>
       this.getLocationAreaPrefectureCodes(area.value).includes(first)
     )?.value ?? 'kanto';
-  }
-
-  private normalizeLocationDetectionMode(valueRaw: unknown): LocationDetectionMode {
-    return valueRaw === 'selectedRegions' ? 'selectedRegions' : 'commonOnly';
   }
 
   private normalizeLocationPrefectureCodes(value: unknown): string[] {
@@ -3198,17 +3126,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (wasPlaying && !this.previewPaused) {
       void audio.play();
     }
-  }
-
-  private isEditableEventTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) {
-      return false;
-    }
-    const tag = target.tagName.toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-      return true;
-    }
-    return target.isContentEditable;
   }
 
   openFindReplaceDialog(): void {
@@ -4023,7 +3940,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         hintMap[sid] = this.buildProofreadHint(
           metadata.diff.from,
           metadata.diff.to,
-          metadata.confidence,
           metadata.reason,
           metadata.sensitiveEntity
         );
@@ -4378,7 +4294,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           hintMap[sid] = this.buildProofreadHint(
             existingMeta.diff.from,
             existingMeta.diff.to,
-            existingMeta.confidence,
             existingMeta.reason,
             existingMeta.sensitiveEntity
           );
@@ -4405,7 +4320,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             hintMap[sid] = this.buildProofreadHint(
               existingMeta.diff.from,
               existingMeta.diff.to,
-              existingMeta.confidence,
               existingMeta.reason,
               existingMeta.sensitiveEntity
             );
@@ -4417,7 +4331,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // original の小さな誤字脱字修正として許可 → 下の通常適用へ（note は（元文）比較表示）。
       }
       const metadata = this.normalizeProofreadMetadata(prev, revised, item.confidence, diffReason, existingMeta?.sensitiveEntity, existingMeta?.lintIssues);
-      hintMap[sid] = this.buildProofreadHint(metadata.diff.from, metadata.diff.to, metadata.confidence, metadata.reason, metadata.sensitiveEntity);
+      hintMap[sid] = this.buildProofreadHint(metadata.diff.from, metadata.diff.to, metadata.reason, metadata.sensitiveEntity);
       metadataMap[sid] = metadata;
       currentTexts[sid] = revised;
       changedTexts[sid] = revised;
@@ -4575,10 +4489,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this._gemmaCheckBypassed = true;
       await this.runTranscription();
       return;
-    }
-
-    if (dialog.actionKind === 'resetProofreadSystemPrompt') {
-      this.resetProofreadSystemPromptForSelectedModel();
     }
 
     if (dialog.actionKind === 'resetOverallProofreadSystemPrompt') {
@@ -5302,7 +5212,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       proofreadHintBySegmentId[i] = this.buildProofreadHint(
         metadata.diff.from,
         metadata.diff.to,
-        metadata.confidence,
         metadata.reason,
         metadata.sensitiveEntity
       );
@@ -6275,7 +6184,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       });
       this.llmServerStatus.set('running');
       await this.syncLlmUrl();
-      void this.fetchLlmSystemInfo();
       void this.refreshLlmLoadedDevice();
     } catch (e) {
       this.llmLastError = this.normalizeErrorMessage(e);
@@ -6318,7 +6226,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       await invoke('stop_llm_server');
       this.llmServerStatus.set('stopped');
-      this.llmHwInfo.set(null);
       this.llmLoadedDevice.set('stopped');
     } catch { }
   }
@@ -6342,27 +6249,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  async installLlmEngine(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    this.llmServerStatus.set('installing');
-    this.llmInstallMessage.set('AI校正エンジンを起動中...');
-    const unlisten = await listen<{ stage: string; message: string }>(
-      'llm-install-progress',
-      (event) => this.llmInstallMessage.set(event.payload.message),
-    );
-    try {
-      await invoke('install_llm_engine');
-      this.llmServerStatus.set('running');
-      this.llmInstallMessage.set('');
-      void this.fetchLlmSystemInfo();
-    } catch (e) {
-      this.llmServerStatus.set('error');
-      this.error.set(this.normalizeErrorMessage(e));
-    } finally {
-      unlisten();
-    }
-  }
-
   async installLlmBackend(): Promise<void> {
     const entry = this.llmInstallableGpuEntry();
     if (!entry || !this.isTauriRuntime()) return;
@@ -6376,7 +6262,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await invoke('install_llm_backend', { backend: entry.installKey });
       this.llmBackendInstallMessage.set(`${entry.installKey} のインストールが完了しました`);
       await this.checkLlmGpuBackendInstalled();
-      await this.fetchLlmSystemInfo();
     } catch (e) {
       this.llmBackendInstallMessage.set(this.normalizeErrorMessage(e));
     } finally {
@@ -6389,155 +6274,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   resetLlmBackendNotNeeded(): void {
     this.lemonadeBackendNotNeeded.set(false);
     this.persistLlmSettings();
-  }
-
-  /** 「不要」ボタン押下時: GPU バックエンドプロンプトを永続的に非表示にする。 */
-  dismissLlmBackendPrompt(): void {
-    this.lemonadeBackendNotNeeded.set(true);
-    this.persistLlmSettings();
-  }
-
-  async fetchLlmSystemInfo(): Promise<void> {
-    const LLM_RECIPES: Record<string, string> = {
-      llamacpp: 'LlamaCPP',
-      flm: 'FLM',
-      'ryzenai-llm': 'RyzenAI',
-    };
-    const BACKEND_DISPLAY: Record<string, string> = {
-      vulkan: 'Vulkan', rocm: 'ROCm', cpu: 'CPU', metal: 'Metal',
-    };
-    const NPU_RECIPES = new Set(['flm', 'ryzenai-llm']);
-    const GPU_BACKENDS = new Set(['vulkan', 'rocm', 'metal']);
-    const STATE_ORDER: Record<string, number> = { installed: 0, update_required: 1, installable: 2 };
-    const CATEGORY_ORDER: Record<string, number> = { gpu: 0, npu: 1, cpu: 2 };
-
-    try {
-      const res = await fetch(`${this.lemonadeUrl()}/v1/system-info`);
-      if (!res.ok) { this.llmHwInfo.set(null); return; }
-      const data = await res.json();
-      const recipes = data?.recipes ?? {};
-
-      // Collect actual device names from the devices section
-      const devicesSection = data?.devices ?? {};
-      const amdGpuNames: string[] = (devicesSection.amd_gpu ?? [])
-        .map((g: any) => g?.name ?? '').filter(Boolean);
-      const nvidiaGpuNames: string[] = (devicesSection.nvidia_gpu ?? [])
-        .map((g: any) => g?.name ?? '').filter(Boolean);
-      const cpuName: string = devicesSection.cpu?.name ?? '';
-
-      const resolveDeviceSuffix = (backendDevices: string[]): string => {
-        if (backendDevices.includes('amd_gpu') && amdGpuNames.length > 0) return amdGpuNames[0];
-        if (backendDevices.includes('nvidia_gpu') && nvidiaGpuNames.length > 0) return nvidiaGpuNames[0];
-        if (backendDevices.includes('amd_npu')) return 'NPU';
-        if (backendDevices.includes('cpu') && cpuName) return cpuName;
-        return '';
-      };
-
-      const entries: LlmBackendEntry[] = [];
-
-      for (const [recipeKey, engineName] of Object.entries(LLM_RECIPES)) {
-        const recipeData = recipes[recipeKey] as any;
-        if (!recipeData?.backends) continue;
-        for (const [backendKey, backendData] of Object.entries(recipeData.backends as Record<string, any>)) {
-          const state = backendData?.state as string;
-          if (!state || state === 'unsupported') continue;
-
-          let label: string;
-          let category: 'gpu' | 'npu' | 'cpu';
-          const backendDevices: string[] = backendData?.devices ?? [];
-
-          if (backendKey === 'default') {
-            const isNpu = NPU_RECIPES.has(recipeKey);
-            const deviceSuffix = resolveDeviceSuffix(backendDevices);
-            label = isNpu
-              ? `${engineName} - NPU${deviceSuffix ? ` (${deviceSuffix})` : ''}`
-              : `${engineName}${deviceSuffix ? ` (${deviceSuffix})` : ''}`;
-            category = isNpu ? 'npu' : 'cpu';
-          } else {
-            const isGpu = GPU_BACKENDS.has(backendKey);
-            const deviceSuffix = resolveDeviceSuffix(backendDevices);
-            label = `${engineName} - ${BACKEND_DISPLAY[backendKey] ?? backendKey}${deviceSuffix ? ` (${deviceSuffix})` : ''}`;
-            category = isGpu ? 'gpu' : 'cpu';
-          }
-          const installKey = backendKey === 'default' ? recipeKey : `${recipeKey}:${backendKey}`;
-          entries.push({ label, state: state as LlmBackendEntry['state'], category, installKey });
-        }
-      }
-
-      entries.sort((a, b) => {
-        const sd = (STATE_ORDER[a.state] ?? 9) - (STATE_ORDER[b.state] ?? 9);
-        return sd !== 0 ? sd : (CATEGORY_ORDER[a.category] ?? 9) - (CATEGORY_ORDER[b.category] ?? 9);
-      });
-      // console.log('[Lemonade] systemInfo entries:', entries.length, entries.map(e => `${e.installKey}=${e.state}`));
-      this.llmHwInfo.set(entries.length > 0 ? entries : null);
-    } catch (e) {
-      // console.warn('[Lemonade] fetchLlmSystemInfo error:', e);
-      this.llmHwInfo.set(null);
-    }
-  }
-
-  onProofreadSystemPromptInput(event: Event): void {
-    if (this.proofreadSystemPromptReadonly()) {
-      this.proofreadSystemPrompt.set(this.fixedProofreadSystemPrompt());
-      return;
-    }
-    const value = event.target instanceof HTMLTextAreaElement ? event.target.value : '';
-    this.proofreadSystemPrompt.set(value);
-  }
-
-  saveProofreadSystemPromptForSelectedModel(): void {
-    if (!this.canSaveProofreadSystemPrompt()) {
-      return;
-    }
-    this.persistProofreadSystemPromptForSelectedModel(this.proofreadSystemPrompt());
-    const type = this.llmPromptType() === 'gemma4' ? 'Gemma4フォーマット' : 'オリジナルフォーマット';
-    this.snackBar.open(`プロンプトを保存しました（${type}）`, undefined, { duration: 2500 });
-  }
-
-  confirmResetProofreadSystemPrompt(): void {
-    if (this.proofreadSystemPromptReadonly()) return;
-    this.openConfirmDialog({
-      actionKind: 'resetProofreadSystemPrompt',
-      title: 'プロンプトを初期値に戻す',
-      message: '現在のプロンプトを破棄して初期値に戻します。よろしいですか？',
-      confirmLabel: '初期値に戻す',
-      cancelLabel: 'キャンセル',
-      confirmColor: 'warn',
-      cancelColor: null,
-    });
-  }
-
-  resetProofreadSystemPromptForSelectedModel(): void {
-    if (this.proofreadSystemPromptReadonly()) {
-      return;
-    }
-    const fallback = this.getDefaultForCurrentPromptType();
-    const llm = this.appSettings.llm ?? {};
-    const nextLlm = { ...llm, modelPath: this.llmModelPath() };
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (model) {
-        const key = `${this.llmBackendMode()}:${model}`;
-        const systemPromptsByBackend = { ...(llm.systemPromptsByBackend ?? {}) };
-        delete systemPromptsByBackend[key];
-        nextLlm.systemPromptsByBackend = systemPromptsByBackend;
-        this.appSettings = { ...this.appSettings, llm: nextLlm };
-        this.persistAppSettings();
-        this.promptSaveVersion.update(v => v + 1);
-      }
-    } else {
-      const key = this.getLlmModelFileName(this.llmModelPath());
-      if (!key || this.isGemma4DefaultLlmModelFileName(key)) {
-        return;
-      }
-      const systemPromptsByModelFileName = { ...(llm.systemPromptsByModelFileName ?? {}) };
-      delete systemPromptsByModelFileName[key];
-      nextLlm.systemPromptsByModelFileName = systemPromptsByModelFileName;
-      this.appSettings = { ...this.appSettings, llm: nextLlm };
-      this.persistAppSettings();
-      this.promptSaveVersion.update(v => v + 1);
-    }
-    this.proofreadSystemPrompt.set(fallback);
   }
 
   private getDefaultForCurrentPromptType(): string {
@@ -6576,33 +6312,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     promptTypeByBackend[key] = this.llmPromptType();
     this.appSettings = { ...this.appSettings, llm: { ...llm, promptTypeByBackend } };
     this.persistAppSettings();
-  }
-
-  private persistProofreadSystemPromptForSelectedModel(value: string): void {
-    const llm = this.appSettings.llm ?? {};
-    const nextLlm = { ...llm, modelPath: this.llmModelPath() };
-    if (this.llmBackendMode() !== 'local_gguf') {
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) return;
-      const key = `${this.llmBackendMode()}:${model}`;
-      const systemPromptsByBackend = { ...(llm.systemPromptsByBackend ?? {}) };
-      systemPromptsByBackend[key] = value;
-      nextLlm.systemPromptsByBackend = systemPromptsByBackend;
-    } else {
-      const key = this.getLlmModelFileName(this.llmModelPath());
-      if (!key || this.isGemma4DefaultLlmModelFileName(key)) {
-        return;
-      }
-      const systemPromptsByModelFileName = { ...(llm.systemPromptsByModelFileName ?? {}) };
-      systemPromptsByModelFileName[key] = value;
-      nextLlm.systemPromptsByModelFileName = systemPromptsByModelFileName;
-    }
-    this.appSettings = {
-      ...this.appSettings,
-      llm: nextLlm,
-    };
-    this.persistAppSettings();
-    this.promptSaveVersion.update(v => v + 1);
   }
 
   private getStoredProofreadSystemPrompt(): string {
@@ -6792,52 +6501,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return 'missing_community1';
     }
     return 'none';
-  }
-
-  async checkDiarizationModelStatus(showFeedback = false): Promise<void> {
-    if (!this.isTauriRuntime()) {
-      this.diarizationModelChecked.set(true);
-      this.diarizationModelExists.set(true);
-      this.diarizationModelHasConfig.set(true);
-      this.diarizationModelExpectedPath.set('');
-      this.diarizationSetupVisible.set(false);
-      if (showFeedback) {
-        this.diarizationCheckMessage.set('');
-        this.diarizationCheckIsError.set(false);
-      }
-      return;
-    }
-    this.diarizationModelChecking.set(true);
-    try {
-      const status = await invoke<DiarizationModelStatusResponse>('check_diarization_model_status');
-      this.diarizationModelExists.set(!!status.exists);
-      this.diarizationModelHasConfig.set(!!status.hasConfig);
-      this.diarizationModelExpectedPath.set(status.expectedPath ?? '');
-      this.diarizationSetupVisible.set(!(status.exists && status.hasConfig));
-      if (showFeedback) {
-        if (status.exists && status.hasConfig) {
-          this.diarizationCheckMessage.set('話者分離モデルを確認しました。利用可能です。');
-          this.diarizationCheckIsError.set(false);
-        } else {
-          this.diarizationCheckMessage.set(
-            `話者分離モデルが見つかりません。配置先を確認してください: ${status.expectedPath ?? ''}`
-          );
-          this.diarizationCheckIsError.set(true);
-        }
-      }
-    } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
-      this.diarizationModelExists.set(false);
-      this.diarizationModelHasConfig.set(false);
-      this.diarizationSetupVisible.set(true);
-      if (showFeedback) {
-        this.diarizationCheckMessage.set('モデル確認に失敗しました。ログを確認してください。');
-        this.diarizationCheckIsError.set(true);
-      }
-    } finally {
-      this.diarizationModelChecked.set(true);
-      this.diarizationModelChecking.set(false);
-    }
   }
 
   async devDeleteModels(): Promise<void> {
@@ -7038,16 +6701,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   editorVoiceInputPackComponentProgress(component: string): SetupProgressEvent | null {
     return this.editorVoiceInputPackProgressMap()[component] ?? null;
-  }
-
-  editorVoiceInputPackComponentPercent(component: string): number | null {
-    const progress = this.editorVoiceInputPackComponentProgress(component);
-    if (!progress || !Number.isFinite(progress.totalBytes) || Number(progress.totalBytes) <= 0) {
-      return null;
-    }
-    const downloaded = Math.max(0, Number(progress.downloadedBytes ?? 0));
-    const total = Math.max(1, Number(progress.totalBytes));
-    return Math.max(0, Math.min(100, (downloaded / total) * 100));
   }
 
   async checkAllSetupStatus(): Promise<void> {
@@ -8606,7 +8259,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         nextProofreadHintBySegmentId[mergedId] = this.buildProofreadHint(
           mergedMetadata.diff.from,
           mergedMetadata.diff.to,
-          mergedMetadata.confidence,
           mergedMetadata.reason,
           mergedMetadata.sensitiveEntity
         );
@@ -8825,28 +8477,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     const maxId = segments.reduce((maxValue, segment) => Math.max(maxValue, segment.id), segments[0].id);
     return maxId + 1;
-  }
-
-  onProofreadChunkSizeChange(valueRaw: string): void {
-    const numeric = Number(valueRaw);
-    if (!Number.isFinite(numeric)) {
-      this.proofreadChunkSize.set(12);
-      this.persistProofreadSettings();
-      return;
-    }
-    this.proofreadChunkSize.set(this.normalizeProofreadChunkSize(numeric));
-    this.persistProofreadSettings();
-  }
-
-  onProofreadChunkMaxCharsChange(valueRaw: string): void {
-    const numeric = Number(valueRaw);
-    if (!Number.isFinite(numeric)) {
-      this.proofreadChunkMaxChars.set(1200);
-      this.persistProofreadSettings();
-      return;
-    }
-    this.proofreadChunkMaxChars.set(this.normalizeProofreadChunkMaxChars(numeric));
-    this.persistProofreadSettings();
   }
 
   onLocationAreaChange(value: LocationAreaCode): void {
@@ -9381,22 +9011,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const nextMetadata = { ...metadataMap };
     delete nextMetadata[segmentId];
     this.proofreadMetadataBySegmentId.set(nextMetadata);
-
-    const hintMap = this.proofreadHintBySegmentId();
-    if (hintMap[segmentId] !== undefined) {
-      const nextHints = { ...hintMap };
-      delete nextHints[segmentId];
-      this.proofreadHintBySegmentId.set(nextHints);
-    }
-  }
-
-  private clearProofreadSuggestion(segmentId: number): void {
-    const metadataMap = this.proofreadMetadataBySegmentId();
-    if (metadataMap[segmentId] !== undefined) {
-      const nextMetadata = { ...metadataMap };
-      delete nextMetadata[segmentId];
-      this.proofreadMetadataBySegmentId.set(nextMetadata);
-    }
 
     const hintMap = this.proofreadHintBySegmentId();
     if (hintMap[segmentId] !== undefined) {

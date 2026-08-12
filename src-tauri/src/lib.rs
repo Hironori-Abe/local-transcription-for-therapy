@@ -1936,7 +1936,7 @@ fn amd_12b_launch_plan(
 }
 
 /// AMD 12B 起動の共通処理（ROCm 優先 → 起動失敗時 Vulkan フォールバック）。
-/// start_llm_server / install_llm_engine の spawn_blocking 内から呼ぶ。
+/// start_llm_server の spawn_blocking 内から呼ぶ。
 /// `success_msg` は成功時の戻り文字列（"started" / "installed_and_started"）。
 /// 成功すれば mode=1（per-job 停止・kill-on-close の対象）を保つ。
 #[allow(clippy::too_many_arguments)]
@@ -2618,149 +2618,6 @@ async fn install_llm_backend(app: AppHandle, backend: String) -> Result<String, 
     })
     .await
     .map_err(|e| format!("バックエンドインストールタスクエラー: {e}"))?
-}
-
-// オフライン動作専用: winget は使用しない。バンドルバイナリを起動するだけ
-#[tauri::command]
-async fn install_llm_engine(
-    app: AppHandle,
-    state: tauri::State<'_, LlmServer>,
-) -> Result<String, String> {
-    stop_retained_voice_input_server(&app);
-    // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
-    let nvidia_list = nvidia_gpu_priority_list();
-    let llama_server_bin = find_bundled_llama_server_bin(&app);
-    let model_path = get_default_llm_model_path(app.clone());
-    let mtp_model_path = match (&llama_server_bin, get_default_llm_mtp_model_path(&app)) {
-        (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
-        _ => None,
-    };
-
-    let resolved_port = match get_llm_engine_cache_dir(&app) {
-        Some(p) => {
-            let _ = std::fs::create_dir_all(&p);
-            let rp = resolve_llm_server_port(&p);
-            ensure_llm_server_port_config(&p, rp);
-            rp
-        }
-        None => 13306,
-    };
-    state.port.store(resolved_port as u32, Ordering::Relaxed);
-    let child_arc = Arc::clone(&state.child);
-    let mode_arc = Arc::clone(&state.mode);
-    let parallel_arc = Arc::clone(&state.parallel);
-    let purpose_arc = Arc::clone(&state.purpose);
-    let app_clone = app.clone();
-
-    if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
-        let bin = llama_server_bin.unwrap();
-        let mpath = model_path.unwrap();
-        let mtp_path = mtp_model_path;
-        // VRAM から並列スロット数・コンテキスト長を自動決定（install/start 経路は上書きなし=auto）
-        let vram_mib = nvidia_list.first().map(|g| g.2).unwrap_or(0);
-        let (n_parallel, ctx_size) = choose_llm_parallelism(vram_mib, None, None);
-        // 12B は auto-fit 起動。ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
-        // （auto-fit が本体を多く GPU に載せ高速化するため）。E4B は従来の自動値。
-        let is_12b = matches!(resolve_effective_proofread_tier(&app), GemmaTier::B12);
-        let (n_parallel, ctx_size) = if is_12b {
-            (1u32, AMD_12B_CTX_SIZE)
-        } else {
-            (n_parallel, ctx_size)
-        };
-        tauri::async_runtime::spawn_blocking(move || {
-            let _ = app_clone.emit(
-                "llm-install-progress",
-                serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
-            );
-            mode_arc.store(1, Ordering::Relaxed);
-            parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
-            // install/start 経路はデバイス選択 UI を経由しないため None（llama.cpp 既定）
-            start_cuda_llama_blocking(
-                &bin,
-                &mpath,
-                mtp_path.as_deref(),
-                None, // 校正は mmproj 無し
-                resolved_port,
-                n_parallel,
-                ctx_size,
-                None,
-                is_12b,
-                &child_arc,
-                &mode_arc,
-            )?;
-            purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
-            Ok("installed_and_started".to_string())
-        })
-        .await
-        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app, None) {
-        // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
-        tauri::async_runtime::spawn_blocking(move || {
-            let _ = app_clone.emit(
-                "llm-install-progress",
-                serde_json::json!({"stage": "starting", "message": "AI校正エンジン(高精度12B)を起動中..."}),
-            );
-            let result = start_amd_12b_blocking(
-                rocm,
-                vulkan,
-                &child_arc,
-                &mode_arc,
-                &parallel_arc,
-                resolved_port,
-                "installed_and_started",
-            );
-            if result.is_ok() {
-                purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
-            }
-            result
-        })
-        .await
-        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else {
-        // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
-        // どちらも不可ならエラー（lemond は撤去済み）。
-        let e4b_rocm = amd_e4b_rocm_launch(&app, None);
-        let e4b_vulkan = amd_e4b_vulkan_launch(&app, None);
-        tauri::async_runtime::spawn_blocking(move || {
-            let _ = app_clone.emit(
-                "llm-install-progress",
-                serde_json::json!({"stage": "starting", "message": "AI校正エンジンを起動中..."}),
-            );
-            // 1) ROCm 直起動（最速）。
-            if let Some(launch) = e4b_rocm {
-                if try_start_amd_e4b_rocm_direct(
-                    launch,
-                    None, // 校正は mmproj 無し
-                    &child_arc,
-                    &mode_arc,
-                    &parallel_arc,
-                    resolved_port,
-                ) {
-                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
-                    return Ok("installed_and_started".to_string());
-                }
-            }
-            // 2) Vulkan 直起動（単一GPU固定）。ROCm 不可な AMD 機の受け皿。
-            if let Some(launch) = e4b_vulkan {
-                if try_start_amd_e4b_vulkan_direct(
-                    launch,
-                    None, // 校正は mmproj 無し
-                    &child_arc,
-                    &mode_arc,
-                    &parallel_arc,
-                    resolved_port,
-                ) {
-                    purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
-                    return Ok("installed_and_started".to_string());
-                }
-            }
-            // どちらも起動できなかった。
-            mode_arc.store(0, Ordering::Relaxed);
-            Err("AI校正エンジンを起動できませんでした。セットアップタブでGPUランタイムとAI校正モデルの準備が完了しているか確認し、アプリを再起動してください。".to_string())
-        })
-        .await
-        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    }
 }
 
 #[tauri::command]
@@ -4379,20 +4236,6 @@ struct LocationDetectionScopeRequest {
     prefectures: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProofreadRuntimeConfigRequest {
-    chunk_size: Option<i64>,
-    chunk_max_chars: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProofreadRuntimeConfigResponse {
-    chunk_size: i64,
-    chunk_max_chars: i64,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProofreadTranscriptionResponse {
@@ -5107,14 +4950,6 @@ struct ReadFileSizeResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DiarizationModelStatusResponse {
-    exists: bool,
-    has_config: bool,
-    expected_path: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TranscriptionRuntimeStatusResponse {
     available: bool,
     reason: String,
@@ -5262,8 +5097,7 @@ fn python_sidecar_ld_library_path(
 /// app_local_data_dir配下の専用site-packagesだけを参照する。Windowsと開発時の
 /// system/venv Pythonの動作は従来どおり維持する。
 fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command) {
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8");
 
     #[cfg(target_os = "linux")]
     if let Some(runtime_root) = bundled_linux_python_root(python_bin) {
@@ -6442,15 +6276,12 @@ fn transcode_for_playback(
     };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let result = Err(format!(
-            "再生用の音声変換に失敗しました: {}",
-            stderr.trim()
-        ));
+        let result = Err(format!("再生用の音声変換に失敗しました: {}", stderr.trim()));
         finish(&result);
         return result;
     }
-    let result = fs::rename(&partial, dest)
-        .map_err(|e| format!("変換した音声の保存に失敗しました: {e}"));
+    let result =
+        fs::rename(&partial, dest).map_err(|e| format!("変換した音声の保存に失敗しました: {e}"));
     if result.is_ok() {
         guard.paths.clear();
     }
@@ -6989,28 +6820,6 @@ fn diarization_model_is_complete(model_dir: &Path) -> bool {
     }
 
     true
-}
-
-#[tauri::command]
-fn check_diarization_model_status(
-    app: AppHandle,
-) -> Result<DiarizationModelStatusResponse, String> {
-    if should_emulate_missing_community_1() {
-        let model_dir = resolve_default_diarization_model_dir(&app)?;
-        return Ok(DiarizationModelStatusResponse {
-            exists: false,
-            has_config: false,
-            expected_path: model_dir.to_string_lossy().to_string(),
-        });
-    }
-
-    let model_dir = resolve_default_diarization_model_dir(&app)?;
-    let has_config = diarization_model_is_complete(&model_dir);
-    Ok(DiarizationModelStatusResponse {
-        exists: model_dir.exists(),
-        has_config,
-        expected_path: model_dir.to_string_lossy().to_string(),
-    })
 }
 
 fn get_hf_hub_cache() -> PathBuf {
@@ -8609,11 +8418,6 @@ fn get_default_llm_model_path(app: AppHandle) -> Option<String> {
     resolve_gemma_main_path_for_tier(&app, resolve_effective_proofread_tier(&app))
 }
 
-fn get_default_llm_mtp_model_path(app: &AppHandle) -> Option<String> {
-    // 本体と同じ実効階層の MTP ドラフトを解決し、本体と MTP の階層が食い違わないようにする。
-    resolve_gemma_mtp_path_for_tier(app, resolve_effective_proofread_tier(app))
-}
-
 /// 校正AIモデルの選択（"e4b" / "12b"）を返す。AMD 版は常に "e4b"。
 #[tauri::command]
 fn get_proofread_model_tier(app: AppHandle) -> String {
@@ -8684,20 +8488,6 @@ fn cancel_diarization() -> Result<String, String> {
         true => Ok("話者分離処理の中止要求を送信しました。".to_string()),
         false => Ok("中止対象の話者分離処理は実行されていません。".to_string()),
     }
-}
-
-#[tauri::command]
-fn preview_proofread_runtime_config(
-    _app: AppHandle,
-    request: ProofreadRuntimeConfigRequest,
-) -> Result<ProofreadRuntimeConfigResponse, String> {
-    let chunk_size = request.chunk_size.unwrap_or(12).clamp(1, 64);
-    let chunk_max_chars = request.chunk_max_chars.unwrap_or(1200).clamp(200, 6000);
-
-    Ok(ProofreadRuntimeConfigResponse {
-        chunk_size,
-        chunk_max_chars,
-    })
 }
 
 fn proofread_transcription_blocking(
@@ -10041,6 +9831,33 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bundled_sidecar_candidates_keep_packaging_fallback_order() {
+        let resource_dir = Path::new("/bundle/resources");
+        assert_eq!(
+            bundled_sidecar_script_candidates(resource_dir, "transcribe_cli.py"),
+            vec![
+                resource_dir.join("python_sidecar/transcribe_cli.py"),
+                resource_dir.join("_up_/python_sidecar/transcribe_cli.py"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bundled_prompt_candidates_keep_all_packaging_layouts() {
+        let resource_dir = Path::new("/bundle/resources");
+        assert_eq!(
+            bundled_prompt_template_candidates(resource_dir, "proofread", "gemma4_system.txt"),
+            vec![
+                resource_dir.join("python_sidecar/prompt_templates/proofread/gemma4_system.txt"),
+                resource_dir
+                    .join("_up_/python_sidecar/prompt_templates/proofread/gemma4_system.txt"),
+                resource_dir.join("prompt_templates/proofread/gemma4_system.txt"),
+                resource_dir.join("_up_/prompt_templates/proofread/gemma4_system.txt"),
+            ]
+        );
+    }
+
     /// AppImage の AppRun が入れる $APPDIR 配下のライブラリ探索パスを、ホストコマンド
     /// （xdg-open / nvidia-smi など）へ渡さないこと。渡すと Arch 系ホストの /bin/sh が
     /// 同梱 libreadline.so.8 を掴んで `undefined symbol: rl_print_keybinding` で死ぬ。
@@ -10102,7 +9919,8 @@ mod tests {
 
         let appdir = Path::new("/tmp/.mount_LoTTxy");
         let env: HashMap<&str, &str> = HashMap::from([("PATH", "/tmp/.mount_LoTTxy/usr/bin")]);
-        let overrides = host_command_env_overrides(appdir, |name| env.get(name).map(OsString::from));
+        let overrides =
+            host_command_env_overrides(appdir, |name| env.get(name).map(OsString::from));
         assert_eq!(
             overrides,
             vec![(
@@ -10370,7 +10188,10 @@ mod tests {
             parse_ffmpeg_duration_line("  Duration: N/A, start: 0.000000, bitrate: N/A"),
             None
         );
-        assert_eq!(parse_ffmpeg_duration_line("  Stream #0:0: Audio: aac"), None);
+        assert_eq!(
+            parse_ffmpeg_duration_line("  Stream #0:0: Audio: aac"),
+            None
+        );
     }
 
     #[test]
@@ -10399,7 +10220,10 @@ mod tests {
     fn only_lgpl_decodable_codecs_skip_playback_transcoding() {
         // gst-plugins-base/good（LGPL）だけで再生できるもの
         for codec in ["pcm_s16le", "pcm_f32le", "mp3", "flac", "vorbis", "opus"] {
-            assert!(codec_is_directly_playable(codec), "{codec} should play directly");
+            assert!(
+                codec_is_directly_playable(codec),
+                "{codec} should play directly"
+            );
         }
         // LGPL 側にデコーダが無く、同梱 ffmpeg での FLAC 変換が要るもの
         for codec in ["aac", "alac", "ac3", "wmav2"] {
@@ -12393,8 +12217,12 @@ fn build_detailed_sidecar_error_message(
     }
 }
 
-fn resolve_encrypt_office_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "encrypt_office_cli.py";
+fn resolve_named_sidecar_script_path(
+    app: &AppHandle,
+    script_name: &str,
+    error_label: &str,
+    search_dev_cwd: bool,
+) -> Result<PathBuf, String> {
     let script_relative = PathBuf::from("python_sidecar").join(script_name);
 
     if cfg!(debug_assertions) {
@@ -12405,10 +12233,13 @@ fn resolve_encrypt_office_script_path(app: &AppHandle) -> Result<PathBuf, String
             return Ok(manifest_dev_path);
         }
 
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
+        if search_dev_cwd {
+            let cwd =
+                env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
+            let dev_path = cwd.join(&script_relative);
+            if dev_path.exists() {
+                return Ok(dev_path);
+            }
         }
     }
 
@@ -12420,121 +12251,49 @@ fn resolve_encrypt_office_script_path(app: &AppHandle) -> Result<PathBuf, String
     }
 
     Err(format!(
-        "暗号化スクリプトが見つかりません: {}",
+        "{error_label}: {}",
         bundled_candidates
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<String>>()
             .join(" / ")
     ))
+}
+
+fn resolve_encrypt_office_script_path(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_named_sidecar_script_path(
+        app,
+        "encrypt_office_cli.py",
+        "暗号化スクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "transcribe_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "Python sidecar スクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "transcribe_cli.py",
+        "Python sidecar スクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_diarize_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "diarize_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "Diarization sidecar スクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "diarize_cli.py",
+        "Diarization sidecar スクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_llm_proofread_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "proofread_llm_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "LLM proofread sidecar スクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "proofread_llm_cli.py",
+        "LLM proofread sidecar スクリプトが見つかりません",
+        true,
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -12554,38 +12313,12 @@ struct OverallProofreadResult {
 }
 
 fn resolve_overall_proofread_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "overall_proofread_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "overall proofread sidecar スクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "overall_proofread_cli.py",
+        "overall proofread sidecar スクリプトが見つかりません",
+        true,
+    )
 }
 
 fn run_overall_proofread_blocking(
@@ -13096,144 +12829,39 @@ fn run_download_streaming(
 }
 
 fn resolve_download_whisper_model_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "download_whisper_model_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "ダウンロードスクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "download_whisper_model_cli.py",
+        "ダウンロードスクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_download_gemma_gguf_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "download_gemma_gguf_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "Gemmaダウンロードスクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "download_gemma_gguf_cli.py",
+        "Gemmaダウンロードスクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_download_diarization_model_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "download_diarization_model_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "話者分離ダウンロードスクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "download_diarization_model_cli.py",
+        "話者分離ダウンロードスクリプトが見つかりません",
+        true,
+    )
 }
 
 fn resolve_download_llama_backend_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "download_llama_backend_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "llama-server バックエンドのダウンロードスクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "download_llama_backend_cli.py",
+        "llama-server バックエンドのダウンロードスクリプトが見つかりません",
+        true,
+    )
 }
 
 fn get_gemma_tier_target_dir(app: &AppHandle, tier: GemmaTier) -> PathBuf {
@@ -13393,33 +13021,12 @@ fn check_python_venv(_app: &AppHandle) -> (bool, String) {
 }
 
 fn resolve_setup_venv_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "setup_venv_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_path.exists() {
-            return Ok(manifest_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "setup_venv_cli.py が見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "setup_venv_cli.py",
+        "setup_venv_cli.py が見つかりません",
+        false,
+    )
 }
 
 fn resolve_requirements_runtime_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -13831,103 +13438,49 @@ async fn run_full_setup(app: AppHandle, hf_token: Option<String>) -> Result<bool
 }
 
 fn resolve_detect_env_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let script_name = "detect_env_cli.py";
-    let script_relative = PathBuf::from("python_sidecar").join(script_name);
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&script_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&script_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let bundled_candidates = resolve_bundled_sidecar_script_candidates(app, script_name)?;
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "detect_env_cli スクリプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_named_sidecar_script_path(
+        app,
+        "detect_env_cli.py",
+        "detect_env_cli スクリプトが見つかりません",
+        true,
+    )
 }
 
-fn resolve_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn bundled_prompt_template_candidates(
+    resource_dir: &Path,
+    category: &str,
+    filename: &str,
+) -> Vec<PathBuf> {
     let prompt_relative = PathBuf::from("python_sidecar")
         .join("prompt_templates")
-        .join("proofread")
-        .join("gemma4_system.txt");
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&prompt_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&prompt_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-    let bundled_candidates = vec![
+        .join(category)
+        .join(filename);
+    vec![
         resource_dir.join(&prompt_relative),
         resource_dir.join("_up_").join(&prompt_relative),
         resource_dir
             .join("prompt_templates")
-            .join("proofread")
-            .join("gemma4_system.txt"),
+            .join(category)
+            .join(filename),
         resource_dir
             .join("_up_")
             .join("prompt_templates")
-            .join("proofread")
-            .join("gemma4_system.txt"),
-    ];
-
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "校正プロンプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+            .join(category)
+            .join(filename),
+    ]
 }
 
-fn resolve_voice_input_prompt_template_path(
+fn resolve_prompt_template_path(
     app: &AppHandle,
+    category: &str,
     filename: &str,
+    current_dir_error_label: &str,
+    resource_dir_error_label: &str,
+    not_found_label: &str,
 ) -> Result<PathBuf, String> {
     let prompt_relative = PathBuf::from("python_sidecar")
         .join("prompt_templates")
-        .join("voice_input")
+        .join(category)
         .join(filename);
 
     if cfg!(debug_assertions) {
@@ -13938,7 +13491,7 @@ fn resolve_voice_input_prompt_template_path(
             return Ok(manifest_dev_path);
         }
 
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
+        let cwd = env::current_dir().map_err(|e| format!("{current_dir_error_label}: {e}"))?;
         let dev_path = cwd.join(&prompt_relative);
         if dev_path.exists() {
             return Ok(dev_path);
@@ -13948,20 +13501,8 @@ fn resolve_voice_input_prompt_template_path(
     let resource_dir = app
         .path()
         .resource_dir()
-        .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-    let bundled_candidates = vec![
-        resource_dir.join(&prompt_relative),
-        resource_dir.join("_up_").join(&prompt_relative),
-        resource_dir
-            .join("prompt_templates")
-            .join("voice_input")
-            .join(filename),
-        resource_dir
-            .join("_up_")
-            .join("prompt_templates")
-            .join("voice_input")
-            .join(filename),
-    ];
+        .map_err(|e| format!("{resource_dir_error_label}: {e}"))?;
+    let bundled_candidates = bundled_prompt_template_candidates(&resource_dir, category, filename);
 
     for candidate in &bundled_candidates {
         if candidate.exists() {
@@ -13970,13 +13511,38 @@ fn resolve_voice_input_prompt_template_path(
     }
 
     Err(format!(
-        "音声入力プロンプトが見つかりません: {}",
+        "{not_found_label}: {}",
         bundled_candidates
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<String>>()
             .join(" / ")
     ))
+}
+
+fn resolve_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_prompt_template_path(
+        app,
+        "proofread",
+        "gemma4_system.txt",
+        "カレントディレクトリ解決に失敗",
+        "resource_dir 解決に失敗",
+        "校正プロンプトが見つかりません",
+    )
+}
+
+fn resolve_voice_input_prompt_template_path(
+    app: &AppHandle,
+    filename: &str,
+) -> Result<PathBuf, String> {
+    resolve_prompt_template_path(
+        app,
+        "voice_input",
+        filename,
+        "カレントディレクトリ解決に失敗",
+        "resource_dir 解決に失敗",
+        "音声入力プロンプトが見つかりません",
+    )
 }
 
 fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -13988,170 +13554,38 @@ fn resolve_segment_retranscribe_system_prompt_path(app: &AppHandle) -> Result<Pa
 }
 
 fn resolve_default_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let prompt_relative = PathBuf::from("python_sidecar")
-        .join("prompt_templates")
-        .join("proofread")
-        .join("general_system.txt");
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&prompt_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("current_dir failed: {e}"))?;
-        let dev_path = cwd.join(&prompt_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir failed: {e}"))?;
-    let bundled_candidates = vec![
-        resource_dir.join(&prompt_relative),
-        resource_dir.join("_up_").join(&prompt_relative),
-        resource_dir
-            .join("prompt_templates")
-            .join("proofread")
-            .join("general_system.txt"),
-        resource_dir
-            .join("_up_")
-            .join("prompt_templates")
-            .join("proofread")
-            .join("general_system.txt"),
-    ];
-
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "Default proofread prompt not found: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_prompt_template_path(
+        app,
+        "proofread",
+        "general_system.txt",
+        "current_dir failed",
+        "resource_dir failed",
+        "Default proofread prompt not found",
+    )
 }
 
 fn resolve_overall_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let prompt_relative = PathBuf::from("python_sidecar")
-        .join("prompt_templates")
-        .join("proofread")
-        .join("gemma4_overall.txt");
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&prompt_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&prompt_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-    let bundled_candidates = vec![
-        resource_dir.join(&prompt_relative),
-        resource_dir.join("_up_").join(&prompt_relative),
-        resource_dir
-            .join("prompt_templates")
-            .join("proofread")
-            .join("gemma4_overall.txt"),
-        resource_dir
-            .join("_up_")
-            .join("prompt_templates")
-            .join("proofread")
-            .join("gemma4_overall.txt"),
-    ];
-
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "全体校正プロンプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_prompt_template_path(
+        app,
+        "proofread",
+        "gemma4_overall.txt",
+        "カレントディレクトリ解決に失敗",
+        "resource_dir 解決に失敗",
+        "全体校正プロンプトが見つかりません",
+    )
 }
 
 fn resolve_default_overall_proofread_system_prompt_path(
     app: &AppHandle,
 ) -> Result<PathBuf, String> {
-    let prompt_relative = PathBuf::from("python_sidecar")
-        .join("prompt_templates")
-        .join("proofread")
-        .join("general_overall.txt");
-
-    if cfg!(debug_assertions) {
-        let manifest_dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(&prompt_relative);
-        if manifest_dev_path.exists() {
-            return Ok(manifest_dev_path);
-        }
-
-        let cwd = env::current_dir().map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?;
-        let dev_path = cwd.join(&prompt_relative);
-        if dev_path.exists() {
-            return Ok(dev_path);
-        }
-    }
-
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-    let bundled_candidates = vec![
-        resource_dir.join(&prompt_relative),
-        resource_dir.join("_up_").join(&prompt_relative),
-        resource_dir
-            .join("prompt_templates")
-            .join("proofread")
-            .join("general_overall.txt"),
-        resource_dir
-            .join("_up_")
-            .join("prompt_templates")
-            .join("proofread")
-            .join("general_overall.txt"),
-    ];
-
-    for candidate in &bundled_candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
-        }
-    }
-
-    Err(format!(
-        "全体校正デフォルトプロンプトが見つかりません: {}",
-        bundled_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<String>>()
-            .join(" / ")
-    ))
+    resolve_prompt_template_path(
+        app,
+        "proofread",
+        "general_overall.txt",
+        "カレントディレクトリ解決に失敗",
+        "resource_dir 解決に失敗",
+        "全体校正デフォルトプロンプトが見つかりません",
+    )
 }
 
 fn resolve_bundled_sidecar_script_candidates(
@@ -14162,13 +13596,20 @@ fn resolve_bundled_sidecar_script_candidates(
         .path()
         .resource_dir()
         .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-    Ok(vec![
+    Ok(bundled_sidecar_script_candidates(
+        &resource_dir,
+        script_name,
+    ))
+}
+
+fn bundled_sidecar_script_candidates(resource_dir: &Path, script_name: &str) -> Vec<PathBuf> {
+    vec![
         resource_dir.join("python_sidecar").join(script_name),
         resource_dir
             .join("_up_")
             .join("python_sidecar")
             .join(script_name),
-    ])
+    ]
 }
 
 fn resolve_default_diarization_model_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -14301,7 +13742,6 @@ pub fn run() {
             proofread_transcription,
             proofread_transcription_llm,
             run_overall_proofread,
-            preview_proofread_runtime_config,
             cancel_transcription,
             cancel_diarization,
             cancel_proofread,
@@ -14326,7 +13766,6 @@ pub fn run() {
             read_file_size,
             open_external_url,
             check_transcription_runtime_support,
-            check_diarization_model_status,
             check_gpu_availability,
             detect_compute_env,
             check_whisper_model_installed,
@@ -14340,7 +13779,6 @@ pub fn run() {
             debounce_dev_window_focus,
             start_llm_server,
             stop_llm_server,
-            install_llm_engine,
             install_llm_backend,
             check_editor_voice_input_pack_status,
             install_editor_voice_input_pack,

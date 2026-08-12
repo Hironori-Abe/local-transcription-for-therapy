@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import platform as platform_module
 import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
 import urllib.request

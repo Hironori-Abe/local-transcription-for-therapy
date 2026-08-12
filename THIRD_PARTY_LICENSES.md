@@ -45,8 +45,6 @@
 | speechbrain | Apache-2.0 | NOTICE 保持 |
 | huggingface-hub | Apache-2.0 | NOTICE 保持 |
 | numpy / scipy 系 | BSD-3-Clause | 著作権＋本文同梱 |
-| sudachipy / sudachidict_core | Apache-2.0 | NOTICE 保持 |
-| neologdn | Apache-2.0（0.5.6 の dist-info で LICENSE 同梱を確認済み） | NOTICE 保持 |
 | msoffcrypto-tool | MIT | 著作権＋本文同梱 |
 | pyzipper | MIT | 著作権＋本文同梱 |
 | sympy | BSD-3-Clause | 著作権＋本文同梱 |

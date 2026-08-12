@@ -20,6 +20,14 @@ import { PasswordDialogComponent } from './password-dialog.component';
 import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.component';
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
+import { BestEffortBrowserStorage, loadAudioMetadataDuration } from './browser-adapters';
+import {
+  type AppSettingsV1,
+  type LlmBackendMode,
+  type LlmGpuMode,
+  type LlmPromptType,
+  type ThemeMode
+} from './app-settings';
 import {
   appendRuntimeEstimateSampleValue,
   aggregateDownloadProgressPercentValue,
@@ -92,7 +100,6 @@ import {
   normalizeLlmNCtxValue,
   normalizeLlmParallelValue,
   normalizeLocationAreaValue,
-  normalizeLocationDetectionScopeValue,
   normalizeSpeakerKeyValue,
   normalizeTimeInputValue,
   normalizeLocationPrefectureCodesValue,
@@ -109,6 +116,7 @@ import {
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
   resolveEstimateComputeTypeValue,
+  resolveGeneralAppSettingsValue,
   resolveTimeInputRangeValue,
   resamplePcmTo16kValue,
   resolveAudioPreprocessPresetValue,
@@ -248,13 +256,10 @@ interface ProofreadSegmentInput {
   words?: TranscriptionSegmentWord[];
 }
 
-type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
 // 「AI校正バックエンド」セレクタの UI 上の選択肢。内蔵モデルは E4B / 12B の
 // 2階層を別項目として見せるが、内部的にはどちらも backendMode='local_gguf' で、
 // 階層は proofreadModelTier（'e4b' / '12b'）で表す。'local_gguf_12b' は CUDA 版のみ。
 type LlmBackendSelection = LlmBackendMode | 'local_gguf_12b';
-type LlmGpuMode = 'gpu' | 'cpu';
-type LlmPromptType = 'gemma4' | 'original';
 
 interface LocalOpenAiModelsResponse {
   serverName: string;
@@ -333,76 +338,6 @@ interface ConfirmDialogState {
 interface AmdGpuFailureDialogState {
   operation: string;
   message: string;
-}
-
-/** 画面テーマ。system はOS設定に追従する。 */
-type ThemeMode = 'system' | 'light' | 'dark';
-
-interface AppSettingsV1 {
-  transcription?: {
-    device?: string;
-    computeType?: string;
-    language?: string;
-    hipDeviceIndex?: number;
-  };
-  diarization?: {
-    device?: string;
-    speakerCount?: number;
-  };
-  proofread?: {
-    chunkSize?: number;
-    chunkMaxChars?: number;
-    locationDetectionScope?: Partial<LocationDetectionScope>;
-  };
-  devEmulation?: {
-    mode?: string;
-    noCuda?: boolean;
-    missingCommunity1?: boolean;
-    capturedAt?: number;
-  };
-  playback?: {
-    rate?: number;
-  };
-  export?: {
-    addUtteranceNumber?: boolean;
-  };
-  ui?: {
-    themeMode?: ThemeMode;
-  };
-  llm?: {
-    modelPath?: string;
-    backendMode?: LlmBackendMode;
-    lemonadeRatioPct?: number;
-    /** @deprecated 旧フィールド。lemonadeParallelEnabled に移行。 */
-    cpuLlmRatioPct?: number;
-    systemPromptsByModelFileName?: Record<string, string>;
-    /** @deprecated 旧フィールド。systemPromptsByBackend に移行。 */
-    systemPromptsByLocalOpenAiProfileId?: Record<string, string>;
-    systemPromptsByBackend?: Record<string, string>;
-    overallSystemPromptsByModelFileName?: Record<string, string>;
-    overallSystemPromptsByBackend?: Record<string, string>;
-    /** モデルごとの校正プロンプトフォーマット。キー: `${backendMode}:${model}` */
-    promptTypeByBackend?: Record<string, LlmPromptType>;
-    inferenceParamsByKey?: Record<string, { nCtx?: number; maxBatch?: number }>;
-    lemonadeParallelEnabled?: boolean;
-    llmGpuMode?: LlmGpuMode;
-    /** @deprecated 旧フィールド。lemonadeParallelEnabled に移行。 */
-    backend?: string;
-    lemonadeUrl?: string;
-    lemonadeModel?: string;
-    lmstudioModel?: string;
-    ollamaModel?: string;
-    /** AMD GPUバックエンドが不要と明示されたとき true。AMD GPU選択を無効化する。 */
-    lemonadeBackendNotNeeded?: boolean;
-    /** AI校正に使用するGPUデバイスインデックス（-1=自動）。 */
-    llmHipDeviceIndex?: number;
-    /** 校正プロンプトの種別。 */
-    llmPromptType?: LlmPromptType;
-    /** AI校正の並列スロット数。0/未設定=自動（VRAMで決定）、1/2/4/8/12/16/20/24=手動上書き。 */
-    llmParallel?: number;
-    /** 内蔵校正AIモデルの階層。'e4b'=標準（既定）/ '12b'=高精度（CUDA版のみ・後からDL）。 */
-    proofreadModelTier?: 'e4b' | '12b';
-  };
 }
 
 interface LlmModelEntry {
@@ -1266,6 +1201,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly estimateMinRequired = 5;
   private readonly estimateStorageKey = 'offline_transcriber_runtime_estimate_samples_v2';
   private readonly appSettingsStorageKey = 'offline_transcriber_app_settings_v1';
+  private readonly browserStorage = new BestEffortBrowserStorage();
   private readonly fixedProofreadChunkSize = 12;
   private readonly fixedProofreadChunkMaxChars = 1200;
   private readonly fallbackDefaultProofreadSystemPrompt =
@@ -1597,14 +1533,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     }
     const src = await this.resolvePlayableAudioSrc(path);
-    return this.loadAudioDurationFromSrc(src);
+    return loadAudioMetadataDuration(src);
   }
 
   private async updateEstimatedTimeFromFile(file: File): Promise<void> {
     this.estimatingTime.set(true);
     const objectUrl = URL.createObjectURL(file);
     try {
-      const duration = await this.loadAudioDurationFromSrc(objectUrl);
+      const duration = await loadAudioMetadataDuration(objectUrl);
       this.estimatedAudioSeconds.set(duration);
       this.recalculateEstimatedTime(duration);
     } catch {
@@ -1628,146 +1564,64 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.estimatedAvgSeconds.set(estimate.avgSeconds);
   }
 
-  /**
-   * WebView のメディアバックエンドで再生時間を読む。
-   * Linux の WebKitGTK は GStreamer に依存し、対応デコーダが無いと
-   * loadedmetadata も error も返さないまま止まることがあるため、必ずタイムアウトする。
-   */
-  private loadAudioDurationFromSrc(src: string, timeoutMs = 12000): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const audio = new Audio();
-      let settled = false;
-      const finish = (action: () => void): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        audio.onloadedmetadata = null;
-        audio.onerror = null;
-        audio.src = '';
-        action();
-      };
-      const timer = setTimeout(
-        () => finish(() => reject(new Error('audio metadata timeout'))),
-        timeoutMs
-      );
-      audio.preload = 'metadata';
-      audio.onloadedmetadata = () => {
-        const duration = audio.duration;
-        finish(() => {
-          if (Number.isFinite(duration) && duration > 0) {
-            resolve(duration);
-          } else {
-            reject(new Error('duration unavailable'));
-          }
-        });
-      };
-      audio.onerror = () => finish(() => reject(new Error('audio load failed')));
-      audio.src = src;
-    });
-  }
-
   private loadEstimateSamples(): void {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      const raw = window.localStorage.getItem(this.estimateStorageKey);
-      this.estimateSamples = parseRuntimeEstimateSamplesValue(raw, this.cpuOnlyBuild);
-    } catch {
-      this.estimateSamples = [];
-    }
+    const raw = this.browserStorage.readText(this.estimateStorageKey);
+    this.estimateSamples = parseRuntimeEstimateSamplesValue(raw, this.cpuOnlyBuild);
   }
 
   private persistEstimateSamples(): void {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      window.localStorage.setItem(this.estimateStorageKey, JSON.stringify(this.estimateSamples));
-    } catch {
-      // ignore
-    }
+    this.browserStorage.writeJson(this.estimateStorageKey, this.estimateSamples);
   }
 
   private loadAppSettings(): void {
-    if (typeof window === 'undefined') {
-      this.appSettings = {};
-      return;
-    }
-    try {
-      const raw = window.localStorage.getItem(this.appSettingsStorageKey);
-      if (!raw) {
-        this.appSettings = {};
-        return;
-      }
-      const parsed = JSON.parse(raw) as AppSettingsV1;
-      this.appSettings = parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      this.appSettings = {};
-    }
+    this.appSettings = this.browserStorage.readObject<AppSettingsV1>(this.appSettingsStorageKey) ?? {};
   }
 
   private persistAppSettings(): void {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      window.localStorage.setItem(this.appSettingsStorageKey, JSON.stringify(this.appSettings));
-    } catch {
-      // ignore
-    }
+    this.browserStorage.writeJson(this.appSettingsStorageKey, this.appSettings);
   }
 
   private applyAppSettings(): void {
-    const transcription = this.appSettings.transcription;
-    if (transcription && typeof transcription.device === 'string') {
-      this.transcriptionDevice.set(this.normalizeTranscriptionDevice(transcription.device));
+    const general = resolveGeneralAppSettingsValue(this.appSettings, {
+      cpuOnlyBuild: this.cpuOnlyBuild,
+      transcriptionLanguageOptions: this.transcriptionLanguageOptions,
+      playbackRateOptions: this.playbackRateOptions
+    });
+    if (general.transcriptionDevice !== undefined) {
+      this.transcriptionDevice.set(general.transcriptionDevice);
     }
-    if (transcription && typeof transcription.computeType === 'string') {
-      this.computeType.set(this.normalizeComputeType(transcription.computeType));
+    if (general.computeType !== undefined) {
+      this.computeType.set(general.computeType);
     }
-    if (transcription && typeof transcription.language === 'string') {
-      this.transcriptionLanguage.set(this.normalizeTranscriptionLanguage(transcription.language));
+    if (general.transcriptionLanguage !== undefined) {
+      this.transcriptionLanguage.set(general.transcriptionLanguage);
     }
-    if (transcription && Number.isInteger(transcription.hipDeviceIndex)) {
-      this.selectedHipDeviceIndex.set(transcription.hipDeviceIndex!);
+    if (general.hipDeviceIndex !== undefined) {
+      this.selectedHipDeviceIndex.set(general.hipDeviceIndex);
     }
-
-    const playback = this.appSettings.playback;
-    if (playback && Number.isFinite(playback.rate) && this.playbackRateOptions.includes(Number(playback.rate))) {
-      this.playbackRate.set(Number(playback.rate));
+    if (general.playbackRate !== undefined) {
+      this.playbackRate.set(general.playbackRate);
     }
-
-    const proofread = this.appSettings.proofread;
-    if (proofread) {
-      if (Number.isFinite(proofread.chunkSize)) {
-        this.proofreadChunkSize.set(this.normalizeProofreadChunkSize(Number(proofread.chunkSize)));
+    if (general.proofread) {
+      if (general.proofread.chunkSize !== undefined) {
+        this.proofreadChunkSize.set(general.proofread.chunkSize);
       }
-      if (Number.isFinite(proofread.chunkMaxChars)) {
-        this.proofreadChunkMaxChars.set(this.normalizeProofreadChunkMaxChars(Number(proofread.chunkMaxChars)));
+      if (general.proofread.chunkMaxChars !== undefined) {
+        this.proofreadChunkMaxChars.set(general.proofread.chunkMaxChars);
       }
-      const locationScope = normalizeLocationDetectionScopeValue(proofread.locationDetectionScope);
+      const locationScope = general.proofread.locationDetectionScope;
       this.selectedLocationArea.set(locationScope.area ?? 'kanto');
       this.selectedLocationPrefecturesByArea.set(locationScope.prefecturesByArea ?? {});
       this.selectedLocationPrefectures.set(locationScope.prefectures);
     }
-
-    const diarization = this.appSettings.diarization;
-    if (diarization) {
-      if (typeof diarization.device === 'string') {
-        this.diarizationDevice.set(this.normalizeTranscriptionDevice(diarization.device));
-      }
-      if (Number.isFinite(diarization.speakerCount)) {
-        const normalized = Math.max(1, Math.min(5, Math.floor(Number(diarization.speakerCount))));
-        this.speakerCount.set(normalized);
-      }
+    if (general.diarizationDevice !== undefined) {
+      this.diarizationDevice.set(general.diarizationDevice);
     }
-
-    const exportSettings = this.appSettings.export;
-    if (exportSettings && typeof exportSettings.addUtteranceNumber === 'boolean') {
-      this.addUtteranceNumber.set(exportSettings.addUtteranceNumber);
+    if (general.speakerCount !== undefined) {
+      this.speakerCount.set(general.speakerCount);
+    }
+    if (general.addUtteranceNumber !== undefined) {
+      this.addUtteranceNumber.set(general.addUtteranceNumber);
     }
 
     const llm = this.appSettings.llm;
@@ -5573,22 +5427,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private loadEditorLowMemoryVoiceInputOptIn(): void {
     if (!this.cpuVoiceInputBuild) return;
-    try {
-      this.editorLowMemoryVoiceInputOptIn.set(
-        window.localStorage.getItem(this.editorLowMemoryVoiceInputOptInStorageKey) === '1'
-      );
-    } catch {
-      this.editorLowMemoryVoiceInputOptIn.set(false);
-    }
+    this.editorLowMemoryVoiceInputOptIn.set(
+      this.browserStorage.readFlag(this.editorLowMemoryVoiceInputOptInStorageKey)
+    );
   }
 
   private persistEditorLowMemoryVoiceInputOptIn(): void {
     this.editorLowMemoryVoiceInputOptIn.set(true);
-    try {
-      window.localStorage.setItem(this.editorLowMemoryVoiceInputOptInStorageKey, '1');
-    } catch {
-      // 保存できない場合も、現在の起動中は明示的な同意を有効として扱う。
-    }
+    // 保存できない場合も、現在の起動中は明示的な同意を有効として扱う。
+    this.browserStorage.writeFlag(this.editorLowMemoryVoiceInputOptInStorageKey);
   }
 
   async devDeleteEditorVoiceInputPack(): Promise<void> {

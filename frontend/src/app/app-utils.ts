@@ -1,3 +1,9 @@
+import type {
+  AppSettingsV1,
+  GeneralAppSettingsOptions,
+  GeneralAppSettingsValue
+} from './app-settings';
+
 export type DefaultExportFileKind = 'docx' | 'xlsx' | 'srt' | 'json' | 'runtime-csv';
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 export type ConcreteComputeType = Exclude<NormalizedComputeType, 'auto'>;
@@ -1896,6 +1902,69 @@ export function normalizeTranscriptionDeviceValue(
     return 'cpu';
   }
   return (valueRaw ?? '').trim().toLowerCase() === 'cpu' ? 'cpu' : 'cuda';
+}
+
+/** 保存済み設定のうち、LLM起動経路に依存しない値を検証・正規化する。 */
+export function resolveGeneralAppSettingsValue(
+  settings: AppSettingsV1,
+  options: GeneralAppSettingsOptions
+): GeneralAppSettingsValue {
+  const resolved: GeneralAppSettingsValue = {};
+  const transcription = settings.transcription;
+  if (transcription && typeof transcription.device === 'string') {
+    resolved.transcriptionDevice = normalizeTranscriptionDeviceValue(
+      transcription.device,
+      options.cpuOnlyBuild
+    );
+  }
+  if (transcription && typeof transcription.computeType === 'string') {
+    resolved.computeType = normalizeComputeTypeValue(transcription.computeType, options.cpuOnlyBuild);
+  }
+  if (transcription && typeof transcription.language === 'string') {
+    resolved.transcriptionLanguage = normalizeTranscriptionLanguageValue(
+      transcription.language,
+      options.transcriptionLanguageOptions
+    );
+  }
+  if (transcription && Number.isInteger(transcription.hipDeviceIndex)) {
+    resolved.hipDeviceIndex = transcription.hipDeviceIndex;
+  }
+
+  const playbackRate = Number(settings.playback?.rate);
+  if (Number.isFinite(playbackRate) && options.playbackRateOptions.includes(playbackRate)) {
+    resolved.playbackRate = playbackRate;
+  }
+
+  const proofread = settings.proofread;
+  if (proofread) {
+    resolved.proofread = {
+      locationDetectionScope: normalizeLocationDetectionScopeValue(proofread.locationDetectionScope)
+    };
+    if (Number.isFinite(proofread.chunkSize)) {
+      resolved.proofread.chunkSize = normalizeProofreadChunkSizeValue(Number(proofread.chunkSize));
+    }
+    if (Number.isFinite(proofread.chunkMaxChars)) {
+      resolved.proofread.chunkMaxChars = normalizeProofreadChunkMaxCharsValue(
+        Number(proofread.chunkMaxChars)
+      );
+    }
+  }
+
+  const diarization = settings.diarization;
+  if (diarization && typeof diarization.device === 'string') {
+    resolved.diarizationDevice = normalizeTranscriptionDeviceValue(
+      diarization.device,
+      options.cpuOnlyBuild
+    );
+  }
+  if (diarization && Number.isFinite(diarization.speakerCount)) {
+    resolved.speakerCount = Math.max(1, Math.min(5, Math.floor(Number(diarization.speakerCount))));
+  }
+
+  if (typeof settings.export?.addUtteranceNumber === 'boolean') {
+    resolved.addUtteranceNumber = settings.export.addUtteranceNumber;
+  }
+  return resolved;
 }
 
 export function normalizeLlmNCtxValue(value: number): number {

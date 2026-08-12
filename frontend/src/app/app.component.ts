@@ -23,6 +23,7 @@ import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration } from './browser-adapters';
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
+import { applyTextUpdates, insertTextAtSelection, SegmentTextHistoryStore } from './text-editing';
 import {
   type AppSettingsV1,
   type LlmBackendMode,
@@ -50,8 +51,6 @@ import {
   buildVoiceInputContextValue,
   canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
-  changedRangeEndValue,
-  coalescingInputKindValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
   displaySpeakerValue,
@@ -436,20 +435,6 @@ interface SetupProgressEvent {
   message: string;
   downloadedBytes?: number;
   totalBytes?: number;
-}
-
-interface SegmentTextHistoryEntry {
-  before: string;
-  after: string;
-  beforeCaret: number;
-  afterCaret: number;
-  inputKind: string;
-  timestamp: number;
-}
-
-interface SegmentTextHistory {
-  undo: SegmentTextHistoryEntry[];
-  redo: SegmentTextHistoryEntry[];
 }
 
 @Component({
@@ -848,9 +833,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly speakerAliasMap = signal<Record<string, string>>({});
   readonly selectedSpeakerBySegmentId = signal<Record<number, string>>({});
   readonly editedSegmentTextMap = signal<Record<number, string>>({});
-  private readonly segmentTextHistory = new Map<number, SegmentTextHistory>();
-  private readonly segmentTextHistoryLimit = 200;
-  private readonly segmentTextHistoryMergeWindowMs = 1000;
+  private readonly segmentTextHistory = new SegmentTextHistoryStore();
   readonly playingSegmentId = signal<number | null>(null);
   readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6 /*, 1.8, 2.0 */];
   readonly playbackRate = signal<number>(1.0);
@@ -6534,28 +6517,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private applyEditedTextsToResultSegments(textsBySegmentId: Record<number, string>): void {
-    const ids = new Set(Object.keys(textsBySegmentId).map((id) => Number(id)).filter(Number.isFinite));
-    if (ids.size === 0) {
-      return;
-    }
     const current = this.result();
     if (!current) {
       return;
     }
-    let changed = false;
-    const segments = current.segments.map((segment) => {
-      if (!ids.has(segment.id)) {
-        return segment;
-      }
-      const text = textsBySegmentId[segment.id];
-      if (typeof text !== 'string' || segment.text === text) {
-        return segment;
-      }
-      changed = true;
-      return { ...segment, text };
-    });
-    if (changed) {
-      this.result.set({ ...current, segments });
+    const updated = applyTextUpdates(current.segments, textsBySegmentId);
+    if (updated.changed) {
+      this.result.set({ ...current, segments: updated.rows });
     }
   }
 
@@ -6570,7 +6538,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   setEditableText(segmentId: number, value: string): void {
-    this.segmentTextHistory.delete(segmentId);
+    this.segmentTextHistory.clear(segmentId);
     this.updateEditableText(segmentId, value);
   }
 
@@ -6585,13 +6553,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     const inputKind = event instanceof InputEvent ? event.inputType : '';
-    this.recordSegmentTextEdit(
-      segmentId,
+    this.segmentTextHistory.record(segmentId, {
       before,
       after,
-      textarea.selectionStart ?? after.length,
-      inputKind,
-    );
+      afterCaret: textarea.selectionStart ?? after.length,
+      inputKind
+    });
     this.updateEditableText(segmentId, after);
   }
 
@@ -6602,76 +6569,20 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.clearProofreadMetadataIfTextDiverged(segmentId, value);
   }
 
-  private recordSegmentTextEdit(
-    segmentId: number,
-    before: string,
-    after: string,
-    afterCaret: number,
-    inputKind: string,
-  ): void {
-    const history = this.segmentTextHistory.get(segmentId) ?? { undo: [], redo: [] };
-    const timestamp = Date.now();
-    const normalizedKind = coalescingInputKindValue(inputKind);
-    const beforeCaret = changedRangeEndValue(before, after);
-    const previous = history.undo.at(-1);
-    const canMerge = !!previous
-      && normalizedKind.length > 0
-      && previous.inputKind === normalizedKind
-      && previous.after === before
-      && timestamp - previous.timestamp <= this.segmentTextHistoryMergeWindowMs;
-
-    if (canMerge && previous) {
-      previous.after = after;
-      previous.afterCaret = afterCaret;
-      previous.timestamp = timestamp;
-    } else {
-      if (previous && previous.after !== before) {
-        history.undo = [];
-      }
-      history.undo.push({
-        before,
-        after,
-        beforeCaret,
-        afterCaret,
-        inputKind: normalizedKind,
-        timestamp,
-      });
-      if (history.undo.length > this.segmentTextHistoryLimit) {
-        history.undo.splice(0, history.undo.length - this.segmentTextHistoryLimit);
-      }
-    }
-    history.redo = [];
-    this.segmentTextHistory.set(segmentId, history);
-  }
-
   private undoSegmentTextEdit(segmentId: number, textarea: HTMLTextAreaElement): void {
-    const history = this.segmentTextHistory.get(segmentId);
-    const entry = history?.undo.at(-1);
-    if (!history || !entry) {
+    const transition = this.segmentTextHistory.undo(segmentId, this.getEditableTextById(segmentId));
+    if (!transition) {
       return;
     }
-    if (this.getEditableTextById(segmentId) !== entry.after) {
-      this.segmentTextHistory.delete(segmentId);
-      return;
-    }
-    history.undo.pop();
-    history.redo.push(entry);
-    this.applySegmentTextHistoryValue(segmentId, entry.before, entry.beforeCaret, textarea);
+    this.applySegmentTextHistoryValue(segmentId, transition.value, transition.caret, textarea);
   }
 
   private redoSegmentTextEdit(segmentId: number, textarea: HTMLTextAreaElement): void {
-    const history = this.segmentTextHistory.get(segmentId);
-    const entry = history?.redo.at(-1);
-    if (!history || !entry) {
+    const transition = this.segmentTextHistory.redo(segmentId, this.getEditableTextById(segmentId));
+    if (!transition) {
       return;
     }
-    if (this.getEditableTextById(segmentId) !== entry.before) {
-      this.segmentTextHistory.delete(segmentId);
-      return;
-    }
-    history.redo.pop();
-    history.undo.push(entry);
-    this.applySegmentTextHistoryValue(segmentId, entry.after, entry.afterCaret, textarea);
+    this.applySegmentTextHistoryValue(segmentId, transition.value, transition.caret, textarea);
   }
 
   private applySegmentTextHistoryValue(
@@ -7373,13 +7284,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const selectionEnd = isFocused && typeof textInputEl?.selectionEnd === 'number'
       ? textInputEl.selectionEnd
       : storedSelection?.end ?? selectionStart;
-    const safeStart = Math.max(0, Math.min(base.length, selectionStart));
-    const safeEnd = Math.max(safeStart, Math.min(base.length, selectionEnd));
-    const updatedText = `${base.slice(0, safeStart)}${text}${base.slice(safeEnd)}`;
+    const insertion = insertTextAtSelection(base, text, selectionStart, selectionEnd);
+    const updatedText = insertion.text;
     const next = { ...current, [segmentId]: updatedText };
     this.editedSegmentTextMap.set(next);
     this.clearProofreadMetadataIfTextDiverged(segmentId, updatedText);
-    const nextPos = Math.max(0, Math.min(updatedText.length, safeStart + text.length));
+    const nextPos = insertion.caret;
     this.segmentCursorFocusTimer.schedule(() => {
       if (!textInputEl) return;
       textInputEl.focus({ preventScroll: true });

@@ -20,8 +20,6 @@ import {
   buildVoiceInputContextValue,
   canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
-  changedRangeEndValue,
-  coalescingInputKindValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
   countSubstringOccurrencesValue,
@@ -508,19 +506,6 @@ test('Hugging Face token validation preserves accepted values and error categori
   assert.match(validateHfTokenFormatValue('hf_short') ?? '', /短すぎます/);
   assert.match(validateHfTokenFormatValue('hf_abcdefghijklmnop-') ?? '', /使用できない文字/);
   assert.match(validateHfTokenFormatValue('hf_あいうえおかきくけこさしすせそたちつてとなにぬねの') ?? '', /使用できない文字/);
-});
-
-test('text edit coalescing and changed-range helpers preserve undo grouping', () => {
-  assert.equal(coalescingInputKindValue('insertText'), 'typing');
-  assert.equal(coalescingInputKindValue('insertCompositionText'), 'typing');
-  assert.equal(coalescingInputKindValue('deleteContentBackward'), 'delete-backward');
-  assert.equal(coalescingInputKindValue('deleteContentForward'), 'delete-forward');
-  assert.equal(coalescingInputKindValue('insertFromPaste'), '');
-  assert.equal(changedRangeEndValue('abc', 'abXc'), 2);
-  assert.equal(changedRangeEndValue('abcd', 'acd'), 2);
-  assert.equal(changedRangeEndValue('abc', 'abc'), 3);
-  assert.equal(changedRangeEndValue('abc', 'XYZ'), 3);
-  assert.equal(changedRangeEndValue('', 'new'), 0);
 });
 
 test('Levenshtein distance preserves empty, insertion, deletion, and replacement cases', () => {

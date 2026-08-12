@@ -372,36 +372,6 @@ export function validateHfTokenFormatValue(rawToken: string): string | null {
   return null;
 }
 
-export function coalescingInputKindValue(inputKind: string): string {
-  if (inputKind === 'insertText' || inputKind === 'insertCompositionText') {
-    return 'typing';
-  }
-  if (inputKind === 'deleteContentBackward') {
-    return 'delete-backward';
-  }
-  if (inputKind === 'deleteContentForward') {
-    return 'delete-forward';
-  }
-  return '';
-}
-
-export function changedRangeEndValue(before: string, after: string): number {
-  const maxPrefix = Math.min(before.length, after.length);
-  let prefix = 0;
-  while (prefix < maxPrefix && before[prefix] === after[prefix]) {
-    prefix += 1;
-  }
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix &&
-    suffix < after.length - prefix &&
-    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-  ) {
-    suffix += 1;
-  }
-  return before.length - suffix;
-}
-
 export function resolveTimeInputRangeValue(values: TimeInputValuesValue): ResolvedTimeRangeValue | null {
   const startMm = parseInt(values.startMm, 10);
   const startSs = parseInt(values.startSs, 10);

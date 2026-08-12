@@ -30,9 +30,165 @@ export interface TextRow {
   text: string;
 }
 
+export interface StructuralTranscriptSegment<Word = unknown> extends TextRow {
+  start: number;
+  end: number;
+  speaker?: string | null;
+  words?: Word[];
+}
+
+export interface SegmentStructureMaps<Metadata> {
+  editedTextById: Readonly<Record<number, string>>;
+  hiddenById: Readonly<Record<number, boolean>>;
+  speakerById: Readonly<Record<number, string>>;
+  proofreadHintById: Readonly<Record<number, string>>;
+  proofreadMetadataById: Readonly<Record<number, Metadata>>;
+}
+
+export interface SegmentStructureResult<Word, Metadata> {
+  segments: StructuralTranscriptSegment<Word>[];
+  transcriptText: string;
+  editedTextById: Record<number, string>;
+  hiddenById: Record<number, boolean>;
+  speakerById: Record<number, string>;
+  proofreadHintById: Record<number, string>;
+  proofreadMetadataById: Record<number, Metadata>;
+  createdIds: number[];
+}
+
 export interface ApplyTextUpdatesResult<T> {
   rows: T[];
   changed: boolean;
+}
+
+export function splitTextAtSentenceEndings(text: string, japanese: boolean): string[] {
+  const tokens = text.split(japanese ? /(。|？|！)/ : /([.?!]+)(?=\s|$)/);
+  const parts: string[] = [];
+  for (let index = 0; index < tokens.length; index += 2) {
+    const combined = japanese
+      ? tokens[index] + (tokens[index + 1] ?? '')
+      : (tokens[index] + (tokens[index + 1] ?? '')).trim();
+    if (combined.length > 0) {
+      parts.push(combined);
+    }
+  }
+  return parts;
+}
+
+export function buildVisibleTranscriptText(
+  rows: ReadonlyArray<TextRow>,
+  hiddenById: Readonly<Record<number, boolean>>,
+  editedTextById: Readonly<Record<number, string>>
+): string {
+  return rows
+    .filter((row) => !hiddenById[row.id])
+    .map((row) => typeof editedTextById[row.id] === 'string' ? editedTextById[row.id] : row.text)
+    .join(' ')
+    .trim();
+}
+
+export function nextSegmentId(rows: ReadonlyArray<{ id: number }>): number {
+  if (rows.length === 0) return 0;
+  return rows.reduce((highest, row) => Math.max(highest, row.id), rows[0].id) + 1;
+}
+
+export function insertSegmentRelative<Word, Metadata>(
+  rows: ReadonlyArray<StructuralTranscriptSegment<Word>>,
+  sourceId: number,
+  position: 'above' | 'below',
+  sourceEditableText: string,
+  maps: SegmentStructureMaps<Metadata>
+): SegmentStructureResult<Word, Metadata> | null {
+  const sourceIndex = rows.findIndex((row) => row.id === sourceId);
+  if (sourceIndex < 0) return null;
+  const source = rows[sourceIndex];
+  const createdId = nextSegmentId(rows);
+  const created: StructuralTranscriptSegment<Word> = {
+    id: createdId,
+    start: source.start,
+    end: source.end,
+    text: sourceEditableText,
+    speaker: null
+  };
+  const segments = [...rows];
+  segments.splice(position === 'above' ? sourceIndex : sourceIndex + 1, 0, created);
+  return finalizeStructuralEdit(segments, [createdId], maps, {
+    editedTextById: { [createdId]: sourceEditableText },
+    speakerById: { [createdId]: '' }
+  });
+}
+
+export function splitSegmentAtSentenceEndings<Word, Metadata>(
+  rows: ReadonlyArray<StructuralTranscriptSegment<Word>>,
+  sourceId: number,
+  sourceEditableText: string,
+  assignedSpeaker: string,
+  japanese: boolean,
+  maps: SegmentStructureMaps<Metadata>
+): SegmentStructureResult<Word, Metadata> | null {
+  const sourceIndex = rows.findIndex((row) => row.id === sourceId);
+  if (sourceIndex < 0) return null;
+  const parts = splitTextAtSentenceEndings(sourceEditableText, japanese);
+  if (parts.length <= 1) return null;
+
+  const source = rows[sourceIndex];
+  let createdId = nextSegmentId(rows);
+  const created = parts.slice(1).map((text) => ({
+    id: createdId++,
+    start: source.start,
+    end: source.end,
+    text,
+    speaker: source.speaker
+  } satisfies StructuralTranscriptSegment<Word>));
+  const segments = [...rows];
+  segments.splice(sourceIndex + 1, 0, ...created);
+  const editedTextById: Record<number, string> = { [sourceId]: parts[0] };
+  const speakerById: Record<number, string> = {};
+  for (const segment of created) {
+    editedTextById[segment.id] = segment.text;
+    speakerById[segment.id] = assignedSpeaker;
+  }
+  const result = finalizeStructuralEdit(
+    segments,
+    created.map((segment) => segment.id),
+    maps,
+    { editedTextById, speakerById }
+  );
+  // 元行も本文が変わるため、分割前の校正根拠は無効になる。
+  delete result.proofreadHintById[sourceId];
+  delete result.proofreadMetadataById[sourceId];
+  return result;
+}
+
+function finalizeStructuralEdit<Word, Metadata>(
+  segments: StructuralTranscriptSegment<Word>[],
+  createdIds: number[],
+  maps: SegmentStructureMaps<Metadata>,
+  additions: {
+    editedTextById: Readonly<Record<number, string>>;
+    speakerById: Readonly<Record<number, string>>;
+  }
+): SegmentStructureResult<Word, Metadata> {
+  const editedTextById = { ...maps.editedTextById, ...additions.editedTextById };
+  const hiddenById = { ...maps.hiddenById };
+  const speakerById = { ...maps.speakerById, ...additions.speakerById };
+  const proofreadHintById = { ...maps.proofreadHintById };
+  const proofreadMetadataById = { ...maps.proofreadMetadataById };
+  for (const id of createdIds) {
+    delete hiddenById[id];
+    delete proofreadHintById[id];
+    delete proofreadMetadataById[id];
+  }
+  return {
+    segments,
+    transcriptText: buildVisibleTranscriptText(segments, hiddenById, editedTextById),
+    editedTextById,
+    hiddenById,
+    speakerById,
+    proofreadHintById,
+    proofreadMetadataById,
+    createdIds
+  };
 }
 
 export function coalescingInputKind(inputKind: string): string {
@@ -83,6 +239,10 @@ export class SegmentTextHistoryStore {
 
   clear(segmentId: number): void {
     this.histories.delete(segmentId);
+  }
+
+  clearAll(): void {
+    this.histories.clear();
   }
 
   record(segmentId: number, edit: SegmentTextEdit): void {

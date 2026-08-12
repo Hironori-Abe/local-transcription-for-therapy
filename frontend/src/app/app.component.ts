@@ -20,10 +20,31 @@ import { PasswordDialogComponent } from './password-dialog.component';
 import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.component';
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
-import { BestEffortBrowserStorage, loadAudioMetadataDuration } from './browser-adapters';
+import { BestEffortBrowserStorage, loadAudioMetadataDuration, waitForAudioSeek } from './browser-adapters';
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
-import { applyTextUpdates, insertTextAtSelection, SegmentTextHistoryStore } from './text-editing';
+import {
+  buildPlaybackQueue,
+  clampPlaybackTarget,
+  clampTargetToRange,
+  normalizePlaybackRange,
+  resolveNextPlaybackSegment,
+  resolveSequenceSeek,
+  resolveShortcutTarget
+} from './playback-state';
+import {
+  applyTextUpdates,
+  insertSegmentRelative as buildRelativeSegmentInsertion,
+  insertTextAtSelection,
+  type SegmentStructureResult,
+  SegmentTextHistoryStore,
+  splitSegmentAtSentenceEndings
+} from './text-editing';
+import {
+  buildTranscriptionSavePlan,
+  ensureExportPathExtension,
+  type TranscriptionExportKind
+} from './transcription-io';
 import {
   type AppSettingsV1,
   type LlmBackendMode,
@@ -35,7 +56,6 @@ import {
   appendRuntimeEstimateSampleValue,
   aggregateDownloadProgressPercentValue,
   arrayBufferToBase64Value,
-  buildDefaultExportFileName,
   buildDocxExportRowsValue,
   buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
@@ -67,7 +87,6 @@ import {
   formatMinuteSecondValue,
   formatOverallProofreadProgressValue,
   filterOverallProofreadVisibleItemsValue,
-  generateNextSegmentIdValue,
   getAudioPreprocessPresetHintValue,
   getAudioPreprocessSettingsForPresetValue,
   getAudioDurationMessageValue,
@@ -108,7 +127,6 @@ import {
   normalizeSpeakerKeyValue,
   normalizeTimeInputValue,
   normalizeLocationPrefectureCodesValue,
-  mergeSegmentTextValue,
   normalizeProofreadChunkMaxCharsValue,
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
@@ -165,10 +183,12 @@ import {
 import {
   buildDiarizationEditedTextMapValue,
   buildExportTranscriptionPayloadValue,
+  buildImportedTranscriptionStateValue,
   buildProofreadHintValue,
   describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
   isPunctuationOnlyProofreadReasonValue,
+  mergeConsecutiveSpeakerSegmentsValue,
   normalizeProofreadMetadataValue,
   parseImportedTranscriptionJsonValue,
   reconcileRetranscriptionStateValue,
@@ -2095,48 +2115,25 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!audio) {
       return;
     }
-    const duration = audio.duration;
-    let target = audio.currentTime + deltaSeconds;
-    if (Number.isFinite(duration) && duration > 0) {
-      target = Math.min(Math.max(target, 0), duration);
-    } else {
-      target = Math.max(target, 0);
-    }
+    let target = clampPlaybackTarget(audio.currentTime, deltaSeconds, audio.duration);
 
     if (this.previewLoopEnabled) {
       // リピート再生中はセグメントを切り替えず、区間内にクランプする。
-      const lo = this.previewStartSeconds ?? 0;
-      const hi = this.previewEndSeconds ?? target;
-      target = Math.min(Math.max(target, lo), hi);
+      target = clampTargetToRange(target, {
+        start: this.previewStartSeconds ?? 0,
+        end: this.previewEndSeconds ?? target
+      });
       await this.seekPreviewToSegmentTime(null, target);
       return;
     }
 
     // 連続再生中: target 秒を含むセグメントを探し、そこから始まるシーケンスへ作り直す。
-    const rows = this.segmentRows;
-    let seg: TranscriptionSegment | null = null;
-    for (const s of rows) {
-      if (s.start > target) {
-        break;
-      }
-      seg = s;
-      if (target < s.end) {
-        break;
-      }
-    }
-    if (!seg && rows.length > 0) {
-      seg = rows[0];
-    }
-    if (!seg) {
-      return;
-    }
-
-    const ids = rows.map((v) => v.id);
-    const idx = ids.indexOf(seg.id);
-    this.previewSequenceSegmentIds = idx >= 0 ? ids.slice(idx) : [seg.id];
-    this.previewSequenceIndex = 0;
-    this.setActivePlayingSegment(seg.id);
-    await this.seekPreviewToSegmentTime(seg, target);
+    const resolved = resolveSequenceSeek(this.segmentRows, audio.currentTime, deltaSeconds, audio.duration);
+    if (!resolved) return;
+    this.previewSequenceSegmentIds = resolved.queue.segmentIds;
+    this.previewSequenceIndex = resolved.queue.index;
+    this.setActivePlayingSegment(resolved.segment.id);
+    await this.seekPreviewToSegmentTime(resolved.segment, resolved.targetSeconds);
   }
 
   /** Ctrl+Shift+E: 対象行の話者を次の選択肢へ送る（未入力は飛ばす）。 */
@@ -2165,22 +2162,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 3. 表示中の先頭行
    */
   private resolveShortcutTargetSegment(): TranscriptionSegment | null {
-    const rows = this.displayedSegmentRows;
-    if (rows.length === 0) {
-      return null;
-    }
-    const playingId = this.playingSegmentId();
-    if (playingId !== null) {
-      const playing = rows.find((s) => s.id === playingId);
-      if (playing) {
-        return playing;
-      }
-    }
-    const focused = this.segmentFromFocusedTextarea();
-    if (focused) {
-      return focused;
-    }
-    return rows[0];
+    return resolveShortcutTarget(
+      this.displayedSegmentRows,
+      this.playingSegmentId(),
+      this.segmentFromFocusedTextarea()?.id ?? null
+    );
   }
 
   /** フォーカス中の編集欄（.segment-content-input）が指す表示中のセグメントを返す。 */
@@ -2252,19 +2238,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.previewEndSeconds = null;
     // 進行中の advanceSequencePlayback や別の seek 処理を打ち切るための世代カウンタ。
     const gen = ++this.seekPlayGeneration;
-    await new Promise<void>((resolve) => {
-      const onSeeked = () => {
-        audio.removeEventListener('seeked', onSeeked);
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(() => {
-        audio.removeEventListener('seeked', onSeeked);
-        resolve();
-      }, 500);
-      audio.addEventListener('seeked', onSeeked);
-      audio.currentTime = targetSeconds;
-    });
+    try {
+      await waitForAudioSeek(audio, targetSeconds);
+    } catch {
+      // seek不能でも現在の再生状態を壊さず、次の操作を受け付ける。
+    }
     if (gen !== this.seekPlayGeneration) {
       return;
     }
@@ -3815,27 +3793,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     this.error.set('');
     const hasPassword = password.length > 0;
-
-    const targetPath = await save({
-      title: '文字起こし結果を保存',
-      defaultPath: hasPassword
-        ? buildDefaultExportFileName('json').replace(/\.json$/, '.zip')
-        : buildDefaultExportFileName('json'),
-      filters: hasPassword
-        ? [{ name: 'ZIP', extensions: ['zip'] }]
-        : [{ name: 'JSON', extensions: ['json'] }]
-    });
-
+    const targetPath = await this.selectExportTargetPath('json', hasPassword);
     if (!targetPath) {
       return;
     }
 
     try {
-      const ext = hasPassword ? '.zip' : '.json';
-      const finalPath = targetPath.toLowerCase().endsWith(ext) ? targetPath : `${targetPath}${ext}`;
       await invoke('save_transcription_json', {
         request: {
-          path: finalPath,
+          path: targetPath,
           content: JSON.stringify(this.buildExportTranscriptionPayload(), null, 2),
           password: hasPassword ? password : null
         }
@@ -3861,13 +3827,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     this.error.set('');
-
-    const targetPath = await save({
-      title: '文字起こし結果（Word）を保存',
-      defaultPath: buildDefaultExportFileName('docx'),
-      filters: [{ name: 'Word', extensions: ['docx'] }]
-    });
-
+    const targetPath = await this.selectExportTargetPath('docx', password.length > 0);
     if (!targetPath) {
       return;
     }
@@ -3903,24 +3863,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     this.error.set('');
-
-    const targetPath = await save({
-      title: '文字起こし結果（Excel）を保存',
-      defaultPath: buildDefaultExportFileName('xlsx'),
-      filters: [{ name: 'Excel', extensions: ['xlsx'] }]
-    });
-
+    const targetPath = await this.selectExportTargetPath('xlsx', password.length > 0);
     if (!targetPath) {
       return;
     }
 
     try {
-      const finalPath = targetPath.toLowerCase().endsWith('.xlsx') ? targetPath : `${targetPath}.xlsx`;
       const rows = buildXlsxExportRowsValue(this.buildDocumentExportSourceRows(), this.addUtteranceNumber());
 
       await invoke('save_transcription_xlsx', {
         request: {
-          path: finalPath,
+          path: targetPath,
           rows,
           password: password.length > 0 ? password : null
         }
@@ -3949,27 +3902,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     this.error.set('');
     const hasPassword = password.length > 0;
-    const targetPath = await save({
-      title: '文字起こし結果（SRT字幕）を保存',
-      defaultPath: hasPassword
-        ? buildDefaultExportFileName('srt').replace(/\.srt$/, '.zip')
-        : buildDefaultExportFileName('srt'),
-      filters: hasPassword
-        ? [{ name: 'パスワード付きZIP', extensions: ['zip'] }]
-        : [{ name: 'SRT字幕', extensions: ['srt'] }]
-    });
-
+    const targetPath = await this.selectExportTargetPath('srt', hasPassword);
     if (!targetPath) {
       return;
     }
 
     try {
-      const ext = hasPassword ? '.zip' : '.srt';
-      const finalPath = targetPath.toLowerCase().endsWith(ext) ? targetPath : `${targetPath}${ext}`;
       const rows = buildSrtExportRowsValue(this.buildDocumentExportSourceRows());
       await invoke('save_transcription_srt', {
         request: {
-          path: finalPath,
+          path: targetPath,
           rows,
           password: hasPassword ? password : null
         }
@@ -3986,21 +3928,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     this.error.set('');
-    const targetPath = await save({
-      title: '文字起こし・AI句読点付与 所要時間ログを保存',
-      defaultPath: buildDefaultExportFileName('runtime-csv'),
-      filters: [{ name: 'CSV', extensions: ['csv'] }]
-    });
-
+    const targetPath = await this.selectExportTargetPath('runtime-csv', false);
     if (!targetPath) {
       return;
     }
 
-    const finalPath = targetPath.toLowerCase().endsWith('.csv') ? targetPath : `${targetPath}.csv`;
     try {
       await invoke('save_runtime_estimate_csv', {
         request: {
-          path: finalPath,
+          path: targetPath,
           samples: this.estimateSamples
         }
       });
@@ -4017,6 +3953,19 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const input = document.querySelector<HTMLInputElement>('.speaker-alias-input');
       input?.focus();
     }, 0);
+  }
+
+  private async selectExportTargetPath(
+    kind: TranscriptionExportKind,
+    hasPassword: boolean
+  ): Promise<string | null> {
+    const plan = buildTranscriptionSavePlan(kind, hasPassword);
+    const targetPath = await save({
+      title: plan.title,
+      defaultPath: plan.defaultPath,
+      filters: plan.filters
+    });
+    return targetPath ? ensureExportPathExtension(targetPath, plan.extension) : null;
   }
 
   onAddUtteranceNumberChange(checked: boolean): void {
@@ -4100,41 +4049,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.overallProofreadResult.set(null);
     this.overallProofreadDismissedIds.set(new Set());
     this.overallProofreadDialogOpen.set(false);
+    this.segmentTextHistory.clearAll();
 
-    const proofreadHintBySegmentId: Record<number, string> = {};
-    const proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata> = {};
-    const segments: TranscriptionSegment[] = payload.transcriptionDataset.map((row, idx) => ({
-      id: idx,
-      start: row.startTime,
-      end: row.endTime,
-      speaker: row.speakerValue.trim().length > 0 ? row.speakerValue : null,
-      text: row.content
-    }));
-    for (let i = 0; i < payload.transcriptionDataset.length; i += 1) {
-      const row = payload.transcriptionDataset[i];
-      if (!row.proofread) {
-        continue;
-      }
-      const metadata = this.normalizeProofreadMetadata(
-        row.proofread.diff.from,
-        row.proofread.diff.to,
-        row.proofread.confidence,
-        row.proofread.reason,
-        row.proofread.sensitiveEntity,
-        row.proofread.lintIssues
-      );
-      proofreadMetadataBySegmentId[i] = metadata;
-      proofreadHintBySegmentId[i] = this.buildProofreadHint(
-        metadata.diff.from,
-        metadata.diff.to,
-        metadata.reason,
-        metadata.sensitiveEntity
-      );
-    }
-    const normalizedText = segments.map((s) => s.text).join(' ').trim();
+    const imported = buildImportedTranscriptionStateValue(payload);
     const importedResult: TranscriptionResult = {
-      text: normalizedText,
-      segments,
+      text: imported.text,
+      segments: imported.segments,
       settings: {
         model: 'imported-json',
         device: 'n/a',
@@ -4146,41 +4066,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       diarizationRequested: false
     };
 
-    const aliasMap: Record<string, string> = {};
-    for (const row of payload.speakerDataset) {
-      const key = row.speakerValue.trim();
-      if (!key) {
-        continue;
-      }
-      const display = row.displayName.trim();
-      aliasMap[key] = display.length > 0 ? display : key;
-    }
-    for (const segment of segments) {
-      const key = (segment.speaker ?? '').trim();
-      if (key && !aliasMap[key]) {
-        aliasMap[key] = key;
-      }
-    }
-
     this.result.set(importedResult);
     this.resultSource.set('json');
     this.lastRunElapsedSeconds.set(0);
     this.lastRunNotice.set('JSON から結果を読み込みました。');
-    this.editedSegmentTextMap.set(Object.fromEntries(segments.map((s) => [s.id, s.text])));
-    this.selectedSpeakerBySegmentId.set(
-      Object.fromEntries(segments.map((s) => [s.id, this.normalizeSpeakerKey(s.speaker)]))
-    );
-    this.speakerAliasMap.set(aliasMap);
-    this.proofreadMetadataBySegmentId.set(proofreadMetadataBySegmentId);
-    this.proofreadHintBySegmentId.set(proofreadHintBySegmentId);
-    this.proofreadCompleted.set(payload.proofreadCompleted === true);
-    const restoredLlmStatus: Record<number, 'done'> = {};
-    for (let i = 0; i < payload.transcriptionDataset.length; i += 1) {
-      if (payload.transcriptionDataset[i].llmProofread === true) {
-        restoredLlmStatus[i] = 'done';
-      }
-    }
-    this.llmSegmentStatus.set(restoredLlmStatus);
+    this.editedSegmentTextMap.set(imported.editedTextBySegmentId);
+    this.selectedSpeakerBySegmentId.set(imported.speakerBySegmentId);
+    this.speakerAliasMap.set(imported.speakerAliasMap);
+    this.proofreadMetadataBySegmentId.set(imported.proofreadMetadataBySegmentId);
+    this.proofreadHintBySegmentId.set(imported.proofreadHintBySegmentId);
+    this.proofreadCompleted.set(imported.proofreadCompleted);
+    this.llmSegmentStatus.set(imported.llmSegmentStatus);
     this.hiddenSegmentIds.set({});
     this.pendingConfirmDialog.set(null);
     this.stopSegmentPlayback();
@@ -6069,8 +5965,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.error.set(`音声を再生できませんでした: ${this.normalizeErrorMessage(e)}`);
       return;
     }
-    const start = Math.max(0, segment.start);
-    const end = Math.max(start + 0.1, segment.end);
+    const range = normalizePlaybackRange(segment);
+    const { start, end } = range;
     const currentPlayingId = this.playingSegmentId();
 
     if (currentPlayingId !== null && currentPlayingId !== segment.id) {
@@ -6085,35 +5981,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     textInputEl?.focus();
 
     this.previewLoopEnabled = loopEnabled;
-    if (loopEnabled) {
-      this.previewSequenceSegmentIds = [];
-      this.previewSequenceIndex = -1;
-    } else {
-      const ids = this.segmentRows.map((v) => v.id);
-      const idx = ids.indexOf(segment.id);
-      this.previewSequenceSegmentIds = idx >= 0 ? ids.slice(idx) : [segment.id];
-      this.previewSequenceIndex = 0;
-    }
+    const queue = buildPlaybackQueue(this.segmentRows, segment.id, loopEnabled);
+    this.previewSequenceSegmentIds = queue.segmentIds;
+    this.previewSequenceIndex = queue.index;
     this.previewStartSeconds = start;
     this.previewEndSeconds = end;
     this.setActivePlayingSegment(segment.id);
     this.openPlaybackSnackbar(loopEnabled);
     this.error.set('');
-
-    const waitSeek = (target: number): Promise<void> =>
-      new Promise<void>((resolve) => {
-        const onSeeked = () => {
-          audio.removeEventListener('seeked', onSeeked);
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          audio.removeEventListener('seeked', onSeeked);
-          resolve();
-        }, 500);
-        audio.addEventListener('seeked', onSeeked);
-        audio.currentTime = target;
-      });
 
     const gen = ++this.seekPlayGeneration;
     const seekAndPlay = async (): Promise<void> => {
@@ -6121,11 +5996,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // Wait for seek to complete before play().
         // On Linux WebKitGTK, currentTime assignment is asynchronous and play()
         // called immediately would start at the wrong position.
-        await waitSeek(start);
+        await waitForAudioSeek(audio, start);
         // GStreamer sometimes fires 'seeked' before the pipeline actually moves.
         // Retry up to 3 times until position is within 0.5 s of the target.
         for (let i = 0; i < 3 && start > 0.5 && Math.abs(audio.currentTime - start) > 0.5; i++) {
-          await waitSeek(start);
+          await waitForAudioSeek(audio, start);
         }
       } catch {
         // ignore seek issue
@@ -6140,13 +6015,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           // Expected when pause() races play() — not a user-visible error.
           return;
         }
-        this.setActivePlayingSegment(null, false);
-        this.previewLoopEnabled = false;
-        this.previewSequenceSegmentIds = [];
-        this.previewSequenceIndex = -1;
-
-        this.previewStartSeconds = null;
-        this.previewEndSeconds = null;
+        this.resetPlaybackState();
         this.error.set(this.normalizeErrorMessage(e));
       }
     };
@@ -6209,21 +6078,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.sequenceSnackBarRef = null;
     this.previewPaused = false;
     if (!this.previewAudio) {
-      this.setActivePlayingSegment(null, false);
-      this.previewLoopEnabled = false;
-      this.previewSequenceSegmentIds = [];
-      this.previewSequenceIndex = -1;
-
-      this.previewStartSeconds = null;
-      this.previewEndSeconds = null;
+      this.resetPlaybackState();
       return;
     }
     this.previewAudio.pause();
+    this.resetPlaybackState();
+  }
+
+  private resetPlaybackState(): void {
     this.setActivePlayingSegment(null, false);
     this.previewLoopEnabled = false;
     this.previewSequenceSegmentIds = [];
     this.previewSequenceIndex = -1;
-
     this.previewStartSeconds = null;
     this.previewEndSeconds = null;
   }
@@ -6298,13 +6164,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     };
     audio.onerror = () => {
-      this.setActivePlayingSegment(null, false);
-      this.previewLoopEnabled = false;
-      this.previewSequenceSegmentIds = [];
-      this.previewSequenceIndex = -1;
-  
-      this.previewStartSeconds = null;
-      this.previewEndSeconds = null;
+      this.resetPlaybackState();
       this.error.set('音声の再生に失敗しました。ファイル形式やパスを確認してください。');
     };
     this.previewAudio = audio;
@@ -6315,24 +6175,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.previewLoopEnabled) {
       return false;
     }
-    if (this.previewSequenceSegmentIds.length === 0 || this.previewSequenceIndex < 0) {
-      return false;
-    }
-    const nextIndex = this.previewSequenceIndex + 1;
-    if (nextIndex >= this.previewSequenceSegmentIds.length) {
-      return false;
-    }
-    const nextId = this.previewSequenceSegmentIds[nextIndex];
-    const nextSegment = this.segmentRows.find((v) => v.id === nextId);
-    if (!nextSegment) {
-      this.previewSequenceIndex = nextIndex;
-      return false;
-    }
+    const next = resolveNextPlaybackSegment(this.segmentRows, {
+      segmentIds: this.previewSequenceSegmentIds,
+      index: this.previewSequenceIndex
+    });
+    if (!next) return false;
 
-    this.previewSequenceIndex = nextIndex;
-    const newStart = Math.max(0, nextSegment.start);
-    const newEnd = Math.max(newStart + 0.1, nextSegment.end);
-    this.setActivePlayingSegment(nextSegment.id);
+    this.previewSequenceIndex = next.queueIndex;
+    const { start: newStart, end: newEnd } = next.range;
+    this.setActivePlayingSegment(next.segment.id);
 
     // Pause immediately so audio does not bleed past the segment boundary while seeking.
     // Clear previewEndSeconds first to prevent ontimeupdate from re-entering this method
@@ -6342,23 +6193,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.previewEndSeconds = null;
 
     const gen = this.seekPlayGeneration;
-    const waitSeek = new Promise<void>((resolve) => {
-      const onSeeked = () => {
-        audio.removeEventListener('seeked', onSeeked);
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(() => {
-        audio.removeEventListener('seeked', onSeeked);
-        resolve();
-      }, 500);
-      audio.addEventListener('seeked', onSeeked);
-      audio.currentTime = newStart;
-    });
-    void waitSeek.then(() => {
+    void waitForAudioSeek(audio, newStart).then(() => {
       if (gen !== this.seekPlayGeneration) return;
       this.previewEndSeconds = newEnd;
       void audio.play();
+    }).catch(() => {
+      if (gen === this.seekPlayGeneration) this.stopSegmentPlayback();
     });
     return true;
   }
@@ -6614,132 +6454,39 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    const mergedSegments: TranscriptionSegment[] = [];
-    const nextEditedTextMap: Record<number, string> = {};
-    const nextSpeakerMap: Record<number, string> = {};
-    const currentProofreadMetadata = this.proofreadMetadataBySegmentId();
-    const nextProofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata> = {};
-    const nextProofreadHintBySegmentId: Record<number, string> = {};
-
-    let i = 0;
-    while (i < sourceRows.length) {
-      const first = sourceRows[i];
-      const speakerKey = this.getAssignedSpeakerKey(first).trim();
-      let j = i;
-      if (speakerKey.length > 0) {
-        while (j + 1 < sourceRows.length) {
-          const nextSpeaker = this.getAssignedSpeakerKey(sourceRows[j + 1]).trim();
-          if (nextSpeaker !== speakerKey) {
-            break;
-          }
-          j += 1;
-        }
-      }
-
-      const group = sourceRows.slice(i, j + 1);
-      const mergedId = mergedSegments.length;
-      const mergedText = group
-        .map((seg) => this.getEditableText(seg))
-        .reduce((acc, text) => mergeSegmentTextValue(acc, text), '');
-      const mergedWords = group.flatMap((seg) => seg.words ?? []);
-      const mergedSpeaker = speakerKey || (group[0].speaker ?? '');
-
-      mergedSegments.push({
-        id: mergedId,
-        start: group[0].start,
-        end: group[group.length - 1].end,
-        text: mergedText,
-        speaker: mergedSpeaker,
-        words: mergedWords.length > 0 ? mergedWords : undefined
-      });
-      nextEditedTextMap[mergedId] = mergedText;
-      nextSpeakerMap[mergedId] = mergedSpeaker;
-
-      const groupMetadata = group
-        .map((seg) => currentProofreadMetadata[seg.id])
-        .filter((metadata): metadata is ExportProofreadMetadata => !!metadata);
-      const redCandidates = groupMetadata.filter((metadata) => this.isRedSensitiveEntityMetadata(metadata));
-      const yellowCandidates = groupMetadata.filter((metadata) => this.isYellowSensitiveEntityMetadata(metadata));
-      const selectedTier = redCandidates.length > 0 ? redCandidates : yellowCandidates;
-      const selected = selectedTier[0];
-      if (selected) {
-        const mergedKinds = Array.from(new Set(
-          selectedTier.flatMap((metadata) => metadata.sensitiveEntity?.kinds ?? [])
-            .map((kind) => String(kind).trim().toLowerCase())
-            .filter((kind) => kind.length > 0)
-        ));
-        const mergedNames = Array.from(new Set(
-          selectedTier.flatMap((metadata) => metadata.sensitiveEntity?.names ?? [])
-            .map((name) => String(name).trim())
-            .filter((name) => name.length > 0)
-        )).slice(0, 8);
-        const mergedPersonNames = Array.from(new Set(
-          selectedTier.flatMap((metadata) => metadata.sensitiveEntity?.personNames ?? [])
-            .map((name) => String(name).trim())
-            .filter((name) => name.length > 0)
-        )).slice(0, 8);
-        const mergedOrganizationNames = Array.from(new Set(
-          selectedTier.flatMap((metadata) => metadata.sensitiveEntity?.organizationNames ?? [])
-            .map((name) => String(name).trim())
-            .filter((name) => name.length > 0)
-        )).slice(0, 8);
-        const mergedLocationNames = Array.from(new Set(
-          selectedTier.flatMap((metadata) => metadata.sensitiveEntity?.locationNames ?? [])
-            .map((name) => String(name).trim())
-            .filter((name) => name.length > 0)
-        )).slice(0, 8);
-        const mergedSource = selected.sensitiveEntity?.personDetectionSource || '';
-        const mergedMetadata: ExportProofreadMetadata = {
-          diff: {
-            from: mergedText,
-            to: mergedText
-          },
-          confidence: Number.isFinite(selected.confidence) ? selected.confidence : 0.85,
-          reason: selected.reason || '',
-          lintIssues: [],
-          sensitiveEntity: {
-            hasSensitiveEntity: true,
-            kinds: mergedKinds,
-            names: mergedNames,
-            personNames: mergedPersonNames,
-            organizationNames: mergedOrganizationNames,
-            locationNames: mergedLocationNames,
-            personDetectionSource: mergedSource
-          }
-        };
-        nextProofreadMetadataBySegmentId[mergedId] = mergedMetadata;
-        nextProofreadHintBySegmentId[mergedId] = this.buildProofreadHint(
-          mergedMetadata.diff.from,
-          mergedMetadata.diff.to,
-          mergedMetadata.reason,
-          mergedMetadata.sensitiveEntity
-        );
-      }
-      i = j + 1;
-    }
-
-    const mergedCount = sourceRows.length - mergedSegments.length;
-    if (mergedCount <= 0) {
+    const merged = mergeConsecutiveSpeakerSegmentsValue(
+      sourceRows.map((segment) => ({
+        ...segment,
+        editableText: this.getEditableText(segment),
+        assignedSpeaker: this.getAssignedSpeakerKey(segment)
+      })),
+      this.proofreadMetadataBySegmentId()
+    );
+    if (merged.mergedCount <= 0) {
       this.mergeStatus.set('統合対象がありません。');
       return;
     }
 
     this.stopSegmentPlayback();
+    this.segmentTextHistory.clearAll();
     this.result.set({
       ...currentResult,
-      segments: mergedSegments,
-      text: mergedSegments.map((seg) => nextEditedTextMap[seg.id] ?? seg.text).join(' ').trim()
+      segments: merged.segments,
+      text: merged.segments
+        .map((segment) => merged.editedTextBySegmentId[segment.id] ?? segment.text)
+        .join(' ')
+        .trim()
     });
-    this.editedSegmentTextMap.set(nextEditedTextMap);
-    this.selectedSpeakerBySegmentId.set(nextSpeakerMap);
+    this.editedSegmentTextMap.set(merged.editedTextBySegmentId);
+    this.selectedSpeakerBySegmentId.set(merged.speakerBySegmentId);
     this.hiddenSegmentIds.set({});
-    this.proofreadHintBySegmentId.set(nextProofreadHintBySegmentId);
-    this.proofreadMetadataBySegmentId.set(nextProofreadMetadataBySegmentId);
-    this.proofreadUpdatedCount.set(Object.keys(nextProofreadMetadataBySegmentId).length);
+    this.proofreadHintBySegmentId.set(merged.proofreadHintBySegmentId);
+    this.proofreadMetadataBySegmentId.set(merged.proofreadMetadataBySegmentId);
+    this.proofreadUpdatedCount.set(Object.keys(merged.proofreadMetadataBySegmentId).length);
     if (this.segmentRowFilter() === 'caution' || this.segmentRowFilter() === 'caution_context') {
       this.refreshCautionPinnedSegmentIds(this.segmentRowFilter() === 'caution_context', this._cautionFilterGen);
     }
-    this.mergeStatus.set(`${mergedCount} 行を統合しました。`);
+    this.mergeStatus.set(`${merged.mergedCount} 行を統合しました。`);
   }
 
   async requestMergeConsecutiveSpeakerUtterances(): Promise<void> {
@@ -6768,144 +6515,61 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   insertSegmentRelative(sourceSegmentId: number, position: 'above' | 'below'): void {
     const currentResult = this.result();
-    if (!currentResult) {
-      return;
-    }
-
-    const segments = [...currentResult.segments];
-    const sourceIndex = segments.findIndex((segment) => segment.id === sourceSegmentId);
-    if (sourceIndex < 0) {
-      return;
-    }
-
-    const sourceSegment = segments[sourceIndex];
-    const sourceText = this.getEditableText(sourceSegment);
-    const insertIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
-    const newSegmentId = generateNextSegmentIdValue(segments);
-
-    const newSegment: TranscriptionSegment = {
-      id: newSegmentId,
-      start: sourceSegment.start,
-      end: sourceSegment.end,
-      text: sourceText,
-      speaker: null
-    };
-
-    segments.splice(insertIndex, 0, newSegment);
-
-    const currentTextMap = this.editedSegmentTextMap();
-    const nextTextMap = {
-      ...currentTextMap,
-      [newSegmentId]: sourceText
-    };
-
-    const hiddenMap = { ...this.hiddenSegmentIds() };
-    delete hiddenMap[newSegmentId];
-
-    const selectedSpeakerMap = {
-      ...this.selectedSpeakerBySegmentId(),
-      [newSegmentId]: ''
-    };
-
-    const proofreadHints = { ...this.proofreadHintBySegmentId() };
-    delete proofreadHints[newSegmentId];
-
-    const proofreadMetadata = { ...this.proofreadMetadataBySegmentId() };
-    delete proofreadMetadata[newSegmentId];
-
-    this.result.set({
-      ...currentResult,
-      segments,
-      text: segments
-        .filter((segment) => !hiddenMap[segment.id])
-        .map((segment) => (typeof nextTextMap[segment.id] === 'string' ? nextTextMap[segment.id] : segment.text))
-        .join(' ')
-        .trim()
-    });
-    this.editedSegmentTextMap.set(nextTextMap);
-    this.hiddenSegmentIds.set(hiddenMap);
-    this.selectedSpeakerBySegmentId.set(selectedSpeakerMap);
-    this.proofreadHintBySegmentId.set(proofreadHints);
-    this.proofreadMetadataBySegmentId.set(proofreadMetadata);
+    if (!currentResult) return;
+    const source = currentResult.segments.find((segment) => segment.id === sourceSegmentId);
+    if (!source) return;
+    const structuralEdit = buildRelativeSegmentInsertion(
+      currentResult.segments,
+      sourceSegmentId,
+      position,
+      this.getEditableText(source),
+      this.currentSegmentStructureMaps()
+    );
+    if (structuralEdit) this.applySegmentStructureResult(currentResult, structuralEdit);
   }
 
   splitSegmentByPeriod(sourceSegmentId: number): void {
     const currentResult = this.result();
     if (!currentResult) return;
 
-    const segments = [...currentResult.segments];
-    const sourceIndex = segments.findIndex((s) => s.id === sourceSegmentId);
-    if (sourceIndex < 0) return;
-
-    const sourceSegment = segments[sourceIndex];
+    const sourceSegment = currentResult.segments.find((segment) => segment.id === sourceSegmentId);
+    if (!sourceSegment) return;
     const sourceText = this.getEditableText(sourceSegment);
+    const structuralEdit = splitSegmentAtSentenceEndings(
+      currentResult.segments,
+      sourceSegmentId,
+      sourceText,
+      this.getAssignedSpeakerKey(sourceSegment),
+      this.editPunctuationIsJapanese(),
+      this.currentSegmentStructureMaps()
+    );
+    if (!structuralEdit) return;
+    this.segmentTextHistory.clear(sourceSegmentId);
+    this.applySegmentStructureResult(currentResult, structuralEdit);
+  }
 
-    // 文末記号で分割し、区切り文字を各パートの末尾に再付与する。
-    // 日本語: 「。」「？」「！」（ほぼ文末専用なので素朴に分割）。
-    // それ以外: 「.」「?」「!」だが、直後が空白／文末のときだけ分割する。
-    //   これで小数（3.14）や略語（U.S.A.）の途中では割れない（コンマは文中の区切りなので対象外）。
-    const isJa = this.editPunctuationIsJapanese();
-    const splitRe = isJa ? /(。|？|！)/ : /([.?!]+)(?=\s|$)/;
-    const tokens = sourceText.split(splitRe);
-    const parts: string[] = [];
-    for (let i = 0; i < tokens.length; i += 2) {
-      let combined = tokens[i] + (tokens[i + 1] ?? '');
-      if (!isJa) combined = combined.trim();
-      if (combined.length > 0) parts.push(combined);
-    }
+  private currentSegmentStructureMaps() {
+    return {
+      editedTextById: this.editedSegmentTextMap(),
+      hiddenById: this.hiddenSegmentIds(),
+      speakerById: this.selectedSpeakerBySegmentId(),
+      proofreadHintById: this.proofreadHintBySegmentId(),
+      proofreadMetadataById: this.proofreadMetadataBySegmentId()
+    };
+  }
 
-    if (parts.length <= 1) return;
-
-    const sourceSpeaker = this.getAssignedSpeakerKey(sourceSegment);
-    const newParts = parts.slice(1);
-    let maxId = segments.reduce((max, s) => Math.max(max, s.id), 0);
-    const newSegments: TranscriptionSegment[] = newParts.map((text) => ({
-      id: ++maxId,
-      start: sourceSegment.start,
-      end: sourceSegment.end,
-      text,
-      speaker: sourceSegment.speaker
-    }));
-
-    segments.splice(sourceIndex + 1, 0, ...newSegments);
-
-    const currentTextMap = { ...this.editedSegmentTextMap() };
-    currentTextMap[sourceSegmentId] = parts[0];
-    for (const seg of newSegments) {
-      currentTextMap[seg.id] = seg.text;
-    }
-
-    const hiddenMap = { ...this.hiddenSegmentIds() };
-    for (const seg of newSegments) {
-      delete hiddenMap[seg.id];
-    }
-
-    const speakerMap = { ...this.selectedSpeakerBySegmentId() };
-    for (const seg of newSegments) {
-      speakerMap[seg.id] = sourceSpeaker;
-    }
-
-    const proofreadHints = { ...this.proofreadHintBySegmentId() };
-    const proofreadMetadata = { ...this.proofreadMetadataBySegmentId() };
-    for (const seg of newSegments) {
-      delete proofreadHints[seg.id];
-      delete proofreadMetadata[seg.id];
-    }
-
-    this.result.set({
-      ...currentResult,
-      segments,
-      text: segments
-        .filter((s) => !hiddenMap[s.id])
-        .map((s) => (typeof currentTextMap[s.id] === 'string' ? currentTextMap[s.id] : s.text))
-        .join(' ')
-        .trim()
-    });
-    this.editedSegmentTextMap.set(currentTextMap);
-    this.hiddenSegmentIds.set(hiddenMap);
-    this.selectedSpeakerBySegmentId.set(speakerMap);
-    this.proofreadHintBySegmentId.set(proofreadHints);
-    this.proofreadMetadataBySegmentId.set(proofreadMetadata);
+  private applySegmentStructureResult(
+    currentResult: TranscriptionResult,
+    edit: SegmentStructureResult<TranscriptionSegmentWord, ExportProofreadMetadata>
+  ): void {
+    for (const id of edit.createdIds) this.segmentTextHistory.clear(id);
+    this.result.set({ ...currentResult, segments: edit.segments, text: edit.transcriptText });
+    this.editedSegmentTextMap.set(edit.editedTextById);
+    this.hiddenSegmentIds.set(edit.hiddenById);
+    this.selectedSpeakerBySegmentId.set(edit.speakerById);
+    this.proofreadHintBySegmentId.set(edit.proofreadHintById);
+    this.proofreadMetadataBySegmentId.set(edit.proofreadMetadataById);
+    this.proofreadUpdatedCount.set(Object.keys(edit.proofreadMetadataById).length);
   }
 
   onLocationAreaChange(value: LocationAreaCode): void {

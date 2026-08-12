@@ -83,6 +83,55 @@ export interface ReconciledRetranscriptionState {
   proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata>;
 }
 
+export interface MergeableTranscriptSegment<Word = unknown> {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string | null;
+  words?: Word[];
+  editableText: string;
+  assignedSpeaker: string;
+}
+
+export interface MergedTranscriptSegment<Word = unknown> {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+  speaker: string;
+  words?: Word[];
+}
+
+export interface MergeConsecutiveSpeakerSegmentsResult<Word = unknown> {
+  mergedCount: number;
+  segments: MergedTranscriptSegment<Word>[];
+  editedTextBySegmentId: Record<number, string>;
+  speakerBySegmentId: Record<number, string>;
+  proofreadHintBySegmentId: Record<number, string>;
+  proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata>;
+}
+
+export interface ImportedTranscriptionSegment {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+  speaker: string | null;
+}
+
+export interface ImportedTranscriptionState {
+  text: string;
+  segments: ImportedTranscriptionSegment[];
+  editedTextBySegmentId: Record<number, string>;
+  speakerBySegmentId: Record<number, string>;
+  speakerAliasMap: Record<string, string>;
+  proofreadHintBySegmentId: Record<number, string>;
+  proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata>;
+  llmSegmentStatus: Record<number, 'done'>;
+  proofreadCompleted: boolean;
+}
+
 export type ParseImportedTranscriptionJsonResult =
   | { ok: true; value: ExportTranscriptionPayload }
   | { ok: false; error: string };
@@ -269,6 +318,74 @@ export function buildExportTranscriptionPayloadValue(
   };
 }
 
+/** 保存JSONから、画面へ適用する永続データだけを正規化して再構築する。 */
+export function buildImportedTranscriptionStateValue(
+  payload: ExportTranscriptionPayload
+): ImportedTranscriptionState {
+  const segments = payload.transcriptionDataset.map((row, id) => ({
+    id,
+    start: row.startTime,
+    end: row.endTime,
+    speaker: row.speakerValue.trim().length > 0 ? row.speakerValue.trim() : null,
+    text: row.content
+  }));
+  const editedTextBySegmentId: Record<number, string> = {};
+  const speakerBySegmentId: Record<number, string> = {};
+  const proofreadHintBySegmentId: Record<number, string> = {};
+  const proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata> = {};
+  const llmSegmentStatus: Record<number, 'done'> = {};
+
+  for (const segment of segments) {
+    editedTextBySegmentId[segment.id] = segment.text;
+    speakerBySegmentId[segment.id] = segment.speaker ?? '';
+    const row = payload.transcriptionDataset[segment.id];
+    if (row.proofread) {
+      const metadata = normalizeProofreadMetadataValue(
+        row.proofread.diff.from,
+        row.proofread.diff.to,
+        row.proofread.confidence,
+        row.proofread.reason,
+        row.proofread.sensitiveEntity,
+        row.proofread.lintIssues
+      );
+      proofreadMetadataBySegmentId[segment.id] = metadata;
+      proofreadHintBySegmentId[segment.id] = buildProofreadHintValue(
+        metadata.diff.from,
+        metadata.diff.to,
+        metadata.reason,
+        metadata.sensitiveEntity
+      );
+    }
+    if (row.llmProofread === true) {
+      llmSegmentStatus[segment.id] = 'done';
+    }
+  }
+
+  const speakerAliasMap: Record<string, string> = {};
+  for (const row of payload.speakerDataset) {
+    const key = row.speakerValue.trim();
+    if (!key) continue;
+    const displayName = row.displayName.trim();
+    speakerAliasMap[key] = displayName || key;
+  }
+  for (const segment of segments) {
+    const key = segment.speaker ?? '';
+    if (key && !speakerAliasMap[key]) speakerAliasMap[key] = key;
+  }
+
+  return {
+    text: segments.map((segment) => segment.text).join(' ').trim(),
+    segments,
+    editedTextBySegmentId,
+    speakerBySegmentId,
+    speakerAliasMap,
+    proofreadHintBySegmentId,
+    proofreadMetadataBySegmentId,
+    llmSegmentStatus,
+    proofreadCompleted: payload.proofreadCompleted === true
+  };
+}
+
 export function reconcileRetranscriptionStateValue(
   segments: ReadonlyArray<RetranscriptionSegmentInput>,
   previousEditedTextBySegmentId: Readonly<Record<number, string>>,
@@ -324,6 +441,128 @@ export function buildDiarizationEditedTextMapValue(
       ];
     })
   );
+}
+
+export function mergeSegmentTextValue(leftRaw: string, rightRaw: string): string {
+  const left = (leftRaw ?? '').trim();
+  const right = (rightRaw ?? '').trim();
+  if (!left) return right;
+  if (!right) return left;
+  const needsSpace = /[A-Za-z0-9]/.test(left[left.length - 1]) && /[A-Za-z0-9]/.test(right[0]);
+  return needsSpace ? `${left} ${right}` : `${left}${right}`;
+}
+
+/** 同じ話者が連続する行を統合し、関連する編集・注意表示状態も新IDへ再構築する。 */
+export function mergeConsecutiveSpeakerSegmentsValue<Word>(
+  rows: ReadonlyArray<MergeableTranscriptSegment<Word>>,
+  metadataBySegmentId: Readonly<Record<number, ExportProofreadMetadata>>
+): MergeConsecutiveSpeakerSegmentsResult<Word> {
+  const segments: MergedTranscriptSegment<Word>[] = [];
+  const editedTextBySegmentId: Record<number, string> = {};
+  const speakerBySegmentId: Record<number, string> = {};
+  const proofreadHintBySegmentId: Record<number, string> = {};
+  const proofreadMetadataBySegmentId: Record<number, ExportProofreadMetadata> = {};
+
+  let rowIndex = 0;
+  while (rowIndex < rows.length) {
+    const first = rows[rowIndex];
+    const speakerKey = first.assignedSpeaker.trim();
+    let groupEnd = rowIndex;
+    if (speakerKey.length > 0) {
+      while (
+        groupEnd + 1 < rows.length &&
+        rows[groupEnd + 1].assignedSpeaker.trim() === speakerKey
+      ) {
+        groupEnd += 1;
+      }
+    }
+
+    const group = rows.slice(rowIndex, groupEnd + 1);
+    const mergedId = segments.length;
+    const mergedText = group
+      .map((segment) => segment.editableText)
+      .reduce((text, next) => mergeSegmentTextValue(text, next), '');
+    const words = group.flatMap((segment) => segment.words ?? []);
+    const mergedSpeaker = speakerKey || (first.speaker ?? '');
+    segments.push({
+      id: mergedId,
+      start: first.start,
+      end: group[group.length - 1].end,
+      text: mergedText,
+      speaker: mergedSpeaker,
+      words: words.length > 0 ? words : undefined
+    });
+    editedTextBySegmentId[mergedId] = mergedText;
+    speakerBySegmentId[mergedId] = mergedSpeaker;
+
+    const metadata = mergeSensitiveMetadataForGroup(
+      group.map((segment) => metadataBySegmentId[segment.id]).filter(Boolean),
+      mergedText
+    );
+    if (metadata) {
+      proofreadMetadataBySegmentId[mergedId] = metadata;
+      proofreadHintBySegmentId[mergedId] = buildProofreadHintValue(
+        metadata.diff.from,
+        metadata.diff.to,
+        metadata.reason,
+        metadata.sensitiveEntity
+      );
+    }
+    rowIndex = groupEnd + 1;
+  }
+
+  return {
+    mergedCount: rows.length - segments.length,
+    segments,
+    editedTextBySegmentId,
+    speakerBySegmentId,
+    proofreadHintBySegmentId,
+    proofreadMetadataBySegmentId
+  };
+}
+
+function mergeSensitiveMetadataForGroup(
+  metadata: ExportProofreadMetadata[],
+  mergedText: string
+): ExportProofreadMetadata | null {
+  const red = metadata.filter(
+    (entry) => getSensitiveEntityHighlightLevelValue(entry.sensitiveEntity) === 'red'
+  );
+  const yellow = metadata.filter(
+    (entry) => getSensitiveEntityHighlightLevelValue(entry.sensitiveEntity) === 'yellow'
+  );
+  const selectedTier = red.length > 0 ? red : yellow;
+  const selected = selectedTier[0];
+  if (!selected) return null;
+
+  const collect = (
+    selector: (entry: ExportProofreadMetadata) => ReadonlyArray<string> | undefined,
+    lowerCase = false,
+    limit: number | null = 8
+  ): string[] => {
+    const values = Array.from(new Set(
+    selectedTier.flatMap((entry) => selector(entry) ?? [])
+      .map((value) => lowerCase ? String(value).trim().toLowerCase() : String(value).trim())
+      .filter((value) => value.length > 0)
+    ));
+    return limit === null ? values : values.slice(0, limit);
+  };
+
+  return {
+    diff: { from: mergedText, to: mergedText },
+    confidence: Number.isFinite(selected.confidence) ? selected.confidence : 0.85,
+    reason: selected.reason || '',
+    lintIssues: [],
+    sensitiveEntity: {
+      hasSensitiveEntity: true,
+      kinds: collect((entry) => entry.sensitiveEntity?.kinds, true, null),
+      names: collect((entry) => entry.sensitiveEntity?.names),
+      personNames: collect((entry) => entry.sensitiveEntity?.personNames),
+      organizationNames: collect((entry) => entry.sensitiveEntity?.organizationNames),
+      locationNames: collect((entry) => entry.sensitiveEntity?.locationNames),
+      personDetectionSource: selected.sensitiveEntity?.personDetectionSource || ''
+    }
+  };
 }
 
 export function parseImportedTranscriptionJsonValue(

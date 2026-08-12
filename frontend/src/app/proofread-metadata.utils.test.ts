@@ -4,18 +4,147 @@ import test from 'node:test';
 import {
   buildDiarizationEditedTextMapValue,
   buildExportTranscriptionPayloadValue,
+  buildImportedTranscriptionStateValue,
   buildProofreadHintValue,
   buildSensitiveEntityProofreadHintValue,
   compactProofreadHintTextValue,
   describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
   isPunctuationOnlyProofreadReasonValue,
+  mergeConsecutiveSpeakerSegmentsValue,
+  mergeSegmentTextValue,
   normalizeLintIssuesValue,
   normalizeProofreadMetadataValue,
   normalizeSensitiveEntityMetadataValue,
   parseImportedTranscriptionJsonValue,
   reconcileRetranscriptionStateValue
 } from './proofread-metadata.utils.ts';
+
+test('import state rebuilds segments, aliases, proofreading, and LLM completion', () => {
+  const state = buildImportedTranscriptionStateValue({
+    audioFileName: 'session.wav',
+    proofreadCompleted: true,
+    speakerDataset: [
+      { speakerValue: ' Th ', displayName: ' Therapist ' },
+      { speakerValue: '', displayName: 'ignored' }
+    ],
+    transcriptionDataset: [
+      {
+        startTime: 0,
+        endTime: 1,
+        speakerValue: 'Th',
+        content: '最初',
+        llmProofread: true,
+        proofread: {
+          diff: { from: '最初', to: '最初' },
+          confidence: 0.9,
+          reason: 'llm_correction',
+          sensitiveEntity: { hasSensitiveEntity: false, kinds: [], names: [] }
+        }
+      },
+      { startTime: 1, endTime: 2, speakerValue: ' Cl ', content: '次' }
+    ]
+  });
+
+  assert.equal(state.text, '最初 次');
+  assert.deepEqual(state.segments, [
+    { id: 0, start: 0, end: 1, speaker: 'Th', text: '最初' },
+    { id: 1, start: 1, end: 2, speaker: 'Cl', text: '次' }
+  ]);
+  assert.deepEqual(state.editedTextBySegmentId, { 0: '最初', 1: '次' });
+  assert.deepEqual(state.speakerBySegmentId, { 0: 'Th', 1: 'Cl' });
+  assert.deepEqual(state.speakerAliasMap, { Th: 'Therapist', Cl: 'Cl' });
+  assert.deepEqual(state.llmSegmentStatus, { 0: 'done' });
+  assert.equal(state.proofreadCompleted, true);
+  assert.ok(state.proofreadMetadataBySegmentId[0]);
+  assert.equal(state.proofreadHintBySegmentId[0], 'AI：（変更無し）');
+});
+
+test('import state falls back empty aliases and omits absent optional state', () => {
+  const state = buildImportedTranscriptionStateValue({
+    audioFileName: '',
+    proofreadCompleted: false,
+    speakerDataset: [{ speakerValue: 'IP', displayName: ' ' }],
+    transcriptionDataset: [{ startTime: 0, endTime: 1, speakerValue: '', content: '' }]
+  });
+  assert.deepEqual(state.speakerAliasMap, { IP: 'IP' });
+  assert.deepEqual(state.proofreadMetadataBySegmentId, {});
+  assert.deepEqual(state.proofreadHintBySegmentId, {});
+  assert.deepEqual(state.llmSegmentStatus, {});
+  assert.equal(state.segments[0].speaker, null);
+});
+
+test('segment text merging trims edges and inserts spaces only between ASCII words', () => {
+  assert.equal(mergeSegmentTextValue('  今日は、 ', ' 晴れです。  '), '今日は、晴れです。');
+  assert.equal(mergeSegmentTextValue('hello', 'world'), 'hello world');
+  assert.equal(mergeSegmentTextValue('item1', '2nd'), 'item1 2nd');
+  assert.equal(mergeSegmentTextValue('hello.', 'world'), 'hello.world');
+  assert.equal(mergeSegmentTextValue('日本語', 'English'), '日本語English');
+  assert.equal(mergeSegmentTextValue('', ' 右 '), '右');
+  assert.equal(mergeSegmentTextValue(' 左 ', '  '), '左');
+});
+
+test('consecutive speaker merge rebuilds IDs, text, words, and speaker maps', () => {
+  const result = mergeConsecutiveSpeakerSegmentsValue([
+    { id: 10, start: 0, end: 1, text: 'old', editableText: 'hello', speaker: 'raw-a', assignedSpeaker: ' Th ', words: ['a'] },
+    { id: 20, start: 1, end: 3, text: 'old', editableText: 'world', speaker: 'raw-b', assignedSpeaker: 'Th', words: ['b'] },
+    { id: 30, start: 3, end: 4, text: '末尾', editableText: '末尾', speaker: 'Cl', assignedSpeaker: 'Cl' }
+  ], {});
+
+  assert.equal(result.mergedCount, 1);
+  assert.deepEqual(result.segments, [
+    { id: 0, start: 0, end: 3, text: 'hello world', speaker: 'Th', words: ['a', 'b'] },
+    { id: 1, start: 3, end: 4, text: '末尾', speaker: 'Cl', words: undefined }
+  ]);
+  assert.deepEqual(result.editedTextBySegmentId, { 0: 'hello world', 1: '末尾' });
+  assert.deepEqual(result.speakerBySegmentId, { 0: 'Th', 1: 'Cl' });
+});
+
+test('consecutive speaker merge does not combine rows whose assigned speaker is empty', () => {
+  const result = mergeConsecutiveSpeakerSegmentsValue([
+    { id: 1, start: 0, end: 1, text: 'a', editableText: 'a', speaker: null, assignedSpeaker: '' },
+    { id: 2, start: 1, end: 2, text: 'b', editableText: 'b', speaker: null, assignedSpeaker: ' ' }
+  ], {});
+  assert.equal(result.mergedCount, 0);
+  assert.equal(result.segments.length, 2);
+});
+
+test('consecutive speaker merge prioritizes red metadata and combines sensitive names', () => {
+  const yellow = normalizeProofreadMetadataValue('a', 'a', 0.7, 'yellow', {
+    hasSensitiveEntity: true,
+    kinds: ['organization'],
+    names: ['相談室'],
+    organizationNames: ['相談室']
+  });
+  const red1 = normalizeProofreadMetadataValue('b', 'b', 0.9, 'red', {
+    hasSensitiveEntity: true,
+    kinds: ['person'],
+    names: ['山田'],
+    personNames: ['山田'],
+    personDetectionSource: 'dictionary'
+  });
+  const red2 = normalizeProofreadMetadataValue('c', 'c', 0.8, 'red2', {
+    hasSensitiveEntity: true,
+    kinds: ['location', 'person'],
+    names: ['東京', '山田'],
+    personNames: ['山田'],
+    locationNames: ['東京']
+  });
+  const result = mergeConsecutiveSpeakerSegmentsValue([
+    { id: 1, start: 0, end: 1, text: 'a', editableText: 'a', assignedSpeaker: 'Th' },
+    { id: 2, start: 1, end: 2, text: 'b', editableText: 'b', assignedSpeaker: 'Th' },
+    { id: 3, start: 2, end: 3, text: 'c', editableText: 'c', assignedSpeaker: 'Th' }
+  ], { 1: yellow, 2: red1, 3: red2 });
+
+  const metadata = result.proofreadMetadataBySegmentId[0];
+  assert.equal(metadata.reason, 'red');
+  assert.equal(metadata.confidence, 0.9);
+  assert.deepEqual(metadata.sensitiveEntity?.kinds, ['person', 'location']);
+  assert.deepEqual(metadata.sensitiveEntity?.names, ['山田', '東京']);
+  assert.deepEqual(metadata.sensitiveEntity?.personNames, ['山田']);
+  assert.deepEqual(metadata.sensitiveEntity?.locationNames, ['東京']);
+  assert.match(result.proofreadHintBySegmentId[0], /山田|東京/);
+});
 
 test('normalizeLintIssuesValue trims, defaults, filters, and limits issues', () => {
   const raw = [

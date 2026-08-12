@@ -10,7 +10,6 @@ import type {
   ResolveLlmAppSettingsOptions
 } from './app-settings';
 
-export type DefaultExportFileKind = 'docx' | 'xlsx' | 'srt' | 'json' | 'runtime-csv';
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 export type ConcreteComputeType = Exclude<NormalizedComputeType, 'auto'>;
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
@@ -1180,37 +1179,6 @@ export function llmBackendModeOptionsValue(
   return options;
 }
 
-function timestampParts(now: Date): {
-  date: string;
-  time: string;
-  milliseconds: string;
-} {
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const hh = String(now.getHours()).padStart(2, '0');
-  const mi = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
-  const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-  return { date: `${yyyy}${mm}${dd}`, time: `${hh}${mi}${ss}`, milliseconds };
-}
-
-export function buildDefaultExportFileName(kind: DefaultExportFileKind, now = new Date()): string {
-  const { date, time, milliseconds } = timestampParts(now);
-  switch (kind) {
-    case 'docx':
-      return `lott_${date}_${time}.docx`;
-    case 'xlsx':
-      return `lott_${date}_${time}_${milliseconds}.xlsx`;
-    case 'srt':
-      return `lott_${date}_${time}.srt`;
-    case 'json':
-      return `lott_${date}_${time}.json`;
-    case 'runtime-csv':
-      return `lott_runtime_log_${date}_${time}.csv`;
-  }
-}
-
 export function formatAudioDurationValue(seconds: number | null): string {
   if (seconds === null || Number.isNaN(seconds) || seconds <= 0) {
     return '-';
@@ -1421,34 +1389,6 @@ export function countSubstringOccurrencesValue(text: string, needle: string): nu
     count += 1;
     start = index + needle.length;
   }
-}
-
-export function mergeSegmentTextValue(leftRaw: string, rightRaw: string): string {
-  const left = (leftRaw ?? '').trim();
-  const right = (rightRaw ?? '').trim();
-  if (!left) {
-    return right;
-  }
-  if (!right) {
-    return left;
-  }
-  const leftLast = left[left.length - 1];
-  const rightFirst = right[0];
-  const needsSpace = /[A-Za-z0-9]/.test(leftLast) && /[A-Za-z0-9]/.test(rightFirst);
-  return needsSpace ? `${left} ${right}` : `${left}${right}`;
-}
-
-export function generateNextSegmentIdValue(
-  segments: ReadonlyArray<{ id: number }>
-): number {
-  if (segments.length === 0) {
-    return 0;
-  }
-  const maxId = segments.reduce(
-    (maxValue, segment) => Math.max(maxValue, segment.id),
-    segments[0].id
-  );
-  return maxId + 1;
 }
 
 export function themeModeLabelValue(mode: NormalizedThemeMode): string {

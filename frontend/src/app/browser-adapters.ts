@@ -132,3 +132,39 @@ export function loadAudioMetadataDuration(
     audio.src = src;
   });
 }
+
+export interface SeekableAudioElement {
+  currentTime: number;
+  addEventListener(type: 'seeked', listener: () => void): void;
+  removeEventListener(type: 'seeked', listener: () => void): void;
+}
+
+/**
+ * WebKitGTKの非同期seek完了を待つ。イベントが来ないバックエンドでもtimeoutで進み、
+ * 成功・timeout・currentTime設定失敗のすべてでlistenerとtimerを解放する。
+ */
+export function waitForAudioSeek(
+  audio: SeekableAudioElement,
+  targetSeconds: number,
+  timeoutMs = 500
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      audio.removeEventListener('seeked', onSeeked);
+      if (error !== undefined) reject(error);
+      else resolve();
+    };
+    const onSeeked = (): void => finish();
+    const timer = setTimeout(() => finish(), timeoutMs);
+    audio.addEventListener('seeked', onSeeked);
+    try {
+      audio.currentTime = targetSeconds;
+    } catch (error) {
+      finish(error);
+    }
+  });
+}

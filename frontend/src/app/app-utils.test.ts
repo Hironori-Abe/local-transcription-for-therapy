@@ -5,7 +5,6 @@ import {
   appendRuntimeEstimateSampleValue,
   aggregateDownloadProgressPercentValue,
   arrayBufferToBase64Value,
-  buildDefaultExportFileName,
   buildDocxExportRowsValue,
   buildExportSpeakerLabelByRowIdValue,
   buildFinalInitialPromptValue,
@@ -37,7 +36,6 @@ import {
   formatMinuteSecondValue,
   formatOverallProofreadProgressValue,
   filterOverallProofreadVisibleItemsValue,
-  generateNextSegmentIdValue,
   getAudioPreprocessPresetHintValue,
   getAudioPreprocessSettingsForPresetValue,
   getAudioDurationMessageValue,
@@ -79,7 +77,6 @@ import {
   normalizeTimeInputValue,
   normalizeLocationPrefectureCodesValue,
   normalizeLocationPrefecturesByAreaValue,
-  mergeSegmentTextValue,
   normalizeProofreadChunkMaxCharsValue,
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
@@ -120,15 +117,6 @@ import {
   voiceInputButtonTooltipValue,
   processingStatusTextValue
 } from './app-utils.ts';
-
-test('buildDefaultExportFileName preserves every existing filename format', () => {
-  const now = new Date(2026, 7, 12, 14, 5, 9, 7);
-  assert.equal(buildDefaultExportFileName('docx', now), 'lott_20260812_140509.docx');
-  assert.equal(buildDefaultExportFileName('xlsx', now), 'lott_20260812_140509_007.xlsx');
-  assert.equal(buildDefaultExportFileName('srt', now), 'lott_20260812_140509.srt');
-  assert.equal(buildDefaultExportFileName('json', now), 'lott_20260812_140509.json');
-  assert.equal(buildDefaultExportFileName('runtime-csv', now), 'lott_runtime_log_20260812_140509.csv');
-});
 
 test('duration formatters preserve rounding and negative-value behavior', () => {
   assert.equal(formatAudioDurationValue(null), '-');
@@ -916,23 +904,6 @@ test('substring occurrence counting preserves non-overlapping replace-all semant
   assert.equal(countSubstringOccurrencesValue('東京東京', '東京'), 2);
   assert.equal(countSubstringOccurrencesValue('abc', 'x'), 0);
   assert.equal(countSubstringOccurrencesValue('abc', ''), 0);
-});
-
-test('segment text merging trims edges and inserts spaces only between ASCII words', () => {
-  assert.equal(mergeSegmentTextValue('  今日は、 ', ' 晴れです。  '), '今日は、晴れです。');
-  assert.equal(mergeSegmentTextValue('hello', 'world'), 'hello world');
-  assert.equal(mergeSegmentTextValue('item1', '2nd'), 'item1 2nd');
-  assert.equal(mergeSegmentTextValue('hello.', 'world'), 'hello.world');
-  assert.equal(mergeSegmentTextValue('日本語', 'English'), '日本語English');
-  assert.equal(mergeSegmentTextValue('', ' 右 '), '右');
-  assert.equal(mergeSegmentTextValue(' 左 ', '  '), '左');
-});
-
-test('next segment ID uses the highest existing ID without changing source order', () => {
-  const segments = [{ id: 8 }, { id: 2 }, { id: 11 }, { id: -1 }];
-  assert.equal(generateNextSegmentIdValue([]), 0);
-  assert.equal(generateNextSegmentIdValue(segments), 12);
-  assert.deepEqual(segments, [{ id: 8 }, { id: 2 }, { id: 11 }, { id: -1 }]);
 });
 
 test('theme labels preserve all three UI display names', () => {

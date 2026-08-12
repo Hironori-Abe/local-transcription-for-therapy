@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   BestEffortBrowserStorage,
   loadAudioMetadataDuration,
+  waitForAudioSeek,
   type AudioMetadataElement,
   type KeyValueStorage
 } from './browser-adapters.ts';
@@ -34,6 +35,42 @@ test('browser storage reads and writes text, JSON objects, and flags', () => {
   assert.equal(storage.readFlag('enabled'), false);
   assert.equal(storage.writeFlag('enabled'), true);
   assert.equal(storage.readFlag('enabled'), true);
+});
+
+class FakeSeekableAudio {
+  private value = 0;
+  readonly listeners = new Set<() => void>();
+  throwOnSet = false;
+
+  get currentTime(): number { return this.value; }
+  set currentTime(value: number) {
+    if (this.throwOnSet) throw new Error('seek rejected');
+    this.value = value;
+  }
+  addEventListener(_type: 'seeked', listener: () => void): void { this.listeners.add(listener); }
+  removeEventListener(_type: 'seeked', listener: () => void): void { this.listeners.delete(listener); }
+  emitSeeked(): void { for (const listener of [...this.listeners]) listener(); }
+}
+
+test('audio seek waiter resolves on seeked and removes its listener', async () => {
+  const audio = new FakeSeekableAudio();
+  const pending = waitForAudioSeek(audio, 12.5, 1000);
+  assert.equal(audio.currentTime, 12.5);
+  assert.equal(audio.listeners.size, 1);
+  audio.emitSeeked();
+  await pending;
+  assert.equal(audio.listeners.size, 0);
+});
+
+test('audio seek waiter releases its listener on timeout and assignment failure', async () => {
+  const timeoutAudio = new FakeSeekableAudio();
+  await waitForAudioSeek(timeoutAudio, 4, 1);
+  assert.equal(timeoutAudio.listeners.size, 0);
+
+  const failingAudio = new FakeSeekableAudio();
+  failingAudio.throwOnSet = true;
+  await assert.rejects(waitForAudioSeek(failingAudio, 4, 1000), /seek rejected/);
+  assert.equal(failingAudio.listeners.size, 0);
 });
 
 test('browser storage preserves best-effort behavior for invalid and unavailable storage', () => {

@@ -186,3 +186,74 @@ LOTT_GDK_BACKEND=x11 "/path/to/Local Transcription for Therapy_0.9.8_amd64.AppIm
 ```bash
 tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
 ```
+
+## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（暫定調査）
+
+> **暫定結果（2026-08-14）:** 以下は Ryzen 7 3700X / RTX 2070 Super / CachyOS / KDE Plasma Wayland の1環境を中心に行った比較結果です。現時点で最も良かった条件と、可能性が低くなった原因候補を記録したものであり、根本原因を確定した最終結論ではありません。`x86-64-v3`での改善も利用者による体感比較で、フレーム時間を計測した定量結果ではありません。
+
+### 症状と切り分け条件
+
+- 文字起こし結果の行・セグメントをスクロールすると、描画が周期的に引っ掛かる。
+- 約10分・約273行のJSONを起動直後に読み込んだだけでも再現し、文字起こし、話者分離、校正の実行中に限らない。
+- 症状発生時のGPU使用率は約4%で、校正等が使用したVRAMも解放済みだった。
+- 同じCachyOSでも Radeon 7600M XT の開発機では滑らかだったため、データ量やディストリビューション名だけでは再現条件を説明できない。
+
+### 比較結果
+
+| 比較内容 | 結果 | 現時点での解釈 |
+| --- | --- | --- |
+| `cdkTextareaAutosize`だけを外す | 変化なし | autosize単独が主因とは考えにくい |
+| 固定高さvirtual scrollへ変更 | 変化なし | 可変行高や通常の行描画だけでは説明できない |
+| `OnPush`変更だけを適用 | 変化なし | Angularの変更検知方式だけでは解消しない |
+| 「要注意行」のみ表示 | 変化なし | 表示行数や校正ヒントの有無は主因ではなさそう |
+| 直近リファクタリング前のフロントエンドを、現在のネイティブ側と組み合わせる | 変化なし | 2026-08-12〜13頃のフロントエンド変更は主因ではなさそう。旧成果物の`main-O57AABPQ.js`と一致するビルドでも確認した |
+| AppImageではなくホストWebKitGTKへリンクしたpacman版 | AppImageより改善したが、カクつきは残った | AppImage同梱ランタイムの影響はあるが、WebKitGTKの同梱有無だけが原因ではない |
+| `LOTT_GDK_BACKEND=wayland` | X11より悪化 | この環境ではGTK WaylandよりXWayland経路の方が良い |
+| DMA-BUF rendererを有効化 | `Failed to create GBM buffer ...: 無効な引数です`が再発 | このNVIDIA環境では`WEBKIT_DISABLE_DMABUF_RENDERER=1`を維持する必要がある |
+| 互換性優先の`x86-64`から、AVX-512を含まない`x86-64-v3`へ変更 | 完全には消えないが「これまでよりだいぶマシ」 | CPU最適化レベルが描画応答へ影響している可能性が高まった。ただし単独の根本原因とは未確定 |
+
+JSONの大きさ、GPU負荷、校正後のVRAM残留、表示行数、および上記のAngular実装3点は、少なくともこの再現条件における主因としては可能性が低くなりました。一方、ホストWebKitGTK、NVIDIAドライバー、KDE Plasma Wayland/XWayland、DMA-BUFを無効にした共有メモリ描画、CPU最適化レベルの組み合わせには未分離の要因が残っています。
+
+### 現時点で最も良かった構成
+
+次の組み合わせが、この実機で確認できた範囲では最も良好でした。
+
+- ホストWebKitGTKを使うCachyOS向けpacmanパッケージ
+- CPUターゲット: `x86-64-v3`（AVX-512は不使用）
+- GTK表示バックエンド: `GDK_BACKEND=x11`（Plasma Waylandセッション上ではXWayland）
+- WebKit renderer: `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+
+experimental版は次のコマンドでビルドします。
+
+```sh
+bash scripts/build-cachyos-experimental-package.sh
+```
+
+成果物名は通常版と区別されます。
+
+```text
+dist/cachyos/experimental/v0.9.8/LoTT-v0.9.8-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst
+```
+
+インストール後は通常どおり起動します。パッケージのランチャーがX11とDMA-BUF無効を既定値として設定します。
+
+```sh
+lott
+```
+
+`x86-64-v3`版はAVX2 / BMI2等に対応するCPU専用です。非対応CPUでは、互換性優先の通常版を`bash scripts/build-arch-package.sh`で生成してください。以前確認したCachyOS x86-64-v4由来のAVX-512 `SIGILL`を避けるため、experimental版もAVX-512命令を静的検査で拒否します。
+
+### 関連した別症状
+
+- 文字起こし後半（句読点追加付近）のUI停止は、結果表示直後に先頭の話者名入力へ自動フォーカスしていた処理を外し、段階ログを追加した版で、文字起こしから句読点追加まで完走を確認した。これはスクロールのカクつきとは別問題として扱う。
+- pacmanインストール後にアプリアイコンが出ない問題は、hicolorテーマの標準サイズへアイコンを配置し、ウィンドウアイコンも設定することで修正した。これも描画性能とは直接関係しない。
+
+### 未確定事項と今後の確認候補
+
+- `x86-64-v3`のどの最適化が差を生んだかは未特定。Rust本体、WebKitとのイベント処理、タイマー精度などを分離できていない。
+- ネイティブのPlasma X11セッションは未比較。現在の`GDK_BACKEND=x11`はWaylandセッション上のXWaylandである。
+- WebKitGTK、NVIDIAドライバー、Plasmaの更新で結果が変わる可能性がある。
+- フレーム時間、main/WebKitプロセス別CPU時間、描画イベントの長時間タスクを計測していないため、残るカクつきのボトルネックは未確定。
+- 別のNVIDIA機、別CPU、ネイティブX11セッションで同じA/B比較を行い、再現性を確認するまでは一般化しない。
+
+したがって、現時点の運用上の回答は「対象のCachyOS / NVIDIA機では、ホストWebKitGTK + X11 + DMA-BUF無効 + `x86-64-v3`が最も良かった」です。ただし、これは**暫定的な回避構成であり、カクつきの根本原因や恒久対策を確定したものではありません**。

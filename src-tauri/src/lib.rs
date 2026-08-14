@@ -17,7 +17,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -3754,6 +3754,7 @@ static PROOFREAD_PID: AtomicU32 = AtomicU32::new(0);
 static LLM_PROOFREAD_PID: AtomicU32 = AtomicU32::new(0);
 static DIARIZATION_PID: AtomicU32 = AtomicU32::new(0);
 static LLM_PROOFREAD_INVOCATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+static TRANSCRIPTION_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TRANSCRIPTION_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PROOFREAD_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static LLM_PROOFREAD_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -4079,6 +4080,7 @@ fn request_cancel(kind: RunningTaskKind) -> Result<bool, String> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RunTranscriptionRequest {
+    run_id: Option<u64>,
     audio_path: String,
     diarization: bool,
     speaker_count: Option<u8>,
@@ -11291,6 +11293,15 @@ fn run_transcription_blocking(
     app: AppHandle,
     request: RunTranscriptionRequest,
 ) -> Result<RunTranscriptionResponse, String> {
+    let run_id = request
+        .run_id
+        .unwrap_or_else(|| TRANSCRIPTION_RUN_COUNTER.fetch_add(1, Ordering::Relaxed) + 1);
+    let run_started = Instant::now();
+    eprintln!(
+        "[LoTT][transcription][run_id={run_id}][stage=start] diarization={} parallel_diarization={}",
+        request.diarization,
+        request.parallel_diarization.unwrap_or(false)
+    );
     set_cancel_requested(RunningTaskKind::Transcription, false);
     let amd_gpu_required = is_amd_gpu_build(&app);
     let script_path = resolve_sidecar_script_path(&app)?;
@@ -11477,6 +11488,13 @@ fn run_transcription_blocking(
         false,
         request.hip_device_index,
     )?;
+    eprintln!(
+        "[LoTT][transcription][run_id={run_id}][stage=transcription_sidecar_done] elapsed_ms={} exit={:?} stdout_bytes={} stderr_bytes={}",
+        run_started.elapsed().as_millis(),
+        output.status.code(),
+        output.stdout.len(),
+        output.stderr.len()
+    );
     if take_cancel_requested(RunningTaskKind::Transcription) {
         let diar_pid = DIARIZATION_PID.load(Ordering::SeqCst);
         if diar_pid > 0 {
@@ -11668,6 +11686,13 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                         request.hip_device_index,
                     )?
                 };
+                eprintln!(
+                    "[LoTT][transcription][run_id={run_id}][stage=diarization_sidecar_done] elapsed_ms={} exit={:?} stdout_bytes={} stderr_bytes={}",
+                    run_started.elapsed().as_millis(),
+                    diarization_output.status.code(),
+                    diarization_output.stdout.len(),
+                    diarization_output.stderr.len()
+                );
                 let mut diarization_device = transcription_device.clone();
                 let mut diarization_note: Option<String> = None;
 
@@ -11780,7 +11805,21 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                     .unwrap_or_default();
 
                 if let Some(result_obj) = result.as_mut() {
+                    let transcription_segment_count = result_obj
+                        .get("segments")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    let assign_started = Instant::now();
+                    eprintln!(
+                        "[LoTT][transcription][run_id={run_id}][stage=speaker_assignment_start] transcription_segments={} diarization_segments={}",
+                        transcription_segment_count,
+                        diarization_segments.len()
+                    );
                     assign_speakers_to_segments(result_obj, &diarization_segments);
+                    eprintln!(
+                        "[LoTT][transcription][run_id={run_id}][stage=speaker_assignment_done] elapsed_ms={}",
+                        assign_started.elapsed().as_millis()
+                    );
                 }
 
                 if let Some(obj) = result.as_mut().and_then(Value::as_object_mut) {
@@ -11813,6 +11852,21 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                     );
                 }
             }
+            emit_progress(
+                &app,
+                "done",
+                "文字起こし結果を画面へ反映します...",
+                Some(100.0),
+            );
+            let response_bytes = result
+                .as_ref()
+                .and_then(|value| serde_json::to_vec(value).ok())
+                .map_or(0, |bytes| bytes.len());
+            eprintln!(
+                "[LoTT][transcription][run_id={run_id}][stage=ipc_return] elapsed_ms={} result_bytes={}",
+                run_started.elapsed().as_millis(),
+                response_bytes
+            );
             return Ok(RunTranscriptionResponse {
                 success: true,
                 result,
@@ -14201,6 +14255,12 @@ pub fn run() {
         .setup(|app| {
             cleanup_stale_private_temp_files(app.handle());
             if let Some(window) = app.get_webview_window("main") {
+                // Linuxのネイティブパッケージではdesktop entryのテーマアイコンに加え、
+                // 実ウィンドウにもアイコンを設定する。KDE/X11のタスク切替表示で
+                // _NET_WM_ICONが空になり汎用アイコンへ落ちるのを防ぐ。
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    let _ = window.set_icon(icon);
+                }
                 #[cfg(target_os = "linux")]
                 {
                     let _ = window.with_webview(|webview| {

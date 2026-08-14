@@ -1170,7 +1170,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly shortcutSeekSeconds = 5;
   private readonly shortcutFocusRetryTimer = new OneShotTimer();
   private readonly findReplaceFocusTimer = new OneShotTimer();
-  private readonly speakerAliasFocusTimer = new OneShotTimer();
   private readonly segmentCursorFocusTimer = new OneShotTimer();
   private readonly timeEditFocusTimer = new OneShotTimer();
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
@@ -1871,7 +1870,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     window.removeEventListener('scroll', this._refreshSegmentTableInView);
     this.shortcutFocusRetryTimer.cancel();
     this.findReplaceFocusTimer.cancel();
-    this.speakerAliasFocusTimer.cancel();
     this.segmentCursorFocusTimer.cancel();
     this.timeEditFocusTimer.cancel();
   }
@@ -2634,13 +2632,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.startRunningTicker();
     this.startSmoothProgress();
     let autoEntityCheckAfterTranscription = false;
+    const runId = Date.now();
 
     try {
       this.runningStatus.set('Python sidecar を起動しています...');
+      console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_start]`);
       const response = await invoke<{ success: boolean; result?: TranscriptionResult; errorMessage?: string }>(
         'run_transcription',
         {
           request: {
+            runId,
             audioPath: this.selectedAudioPath(),
             diarization: true,
             speakerCount: this.speakerCount(),
@@ -2661,6 +2662,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           }
         }
       );
+      console.info(
+        `[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_resolved] success=${response.success} segments=${response.result?.segments.length ?? 0}`
+      );
 
       if (!response.success || !response.result) {
         throw new Error(response.errorMessage ?? '文字起こしに失敗しました。');
@@ -2670,6 +2674,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.lastRunNotice.set('再試行またはフォールバックが発生しました。結果は取得できていますが、初回実行は失敗しています。');
       }
 
+      console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=result_state_start]`);
       this.result.set(response.result);
       this.resultSource.set('transcription');
       const reconciledState = reconcileRetranscriptionStateValue(
@@ -2683,14 +2688,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.proofreadMetadataBySegmentId.set(reconciledState.proofreadMetadataBySegmentId);
       this.speakerAliasMap.set(buildInitialSpeakerAliasMapValue(response.result.segments));
       this.selectedSpeakerBySegmentId.set(buildInitialSpeakerSelectionMapValue(response.result.segments));
-      this.focusFirstSpeakerAliasInput();
+      // 結果反映直後の入力欄への自動フォーカスは行わない。WebKitGTK + XWayland +
+      // IMEの組み合わせでは、処理完了の描画中にIMEを起動するとイベントループが
+      // 停止することがある。利用者が明示的にクリックしたときだけ入力を開始する。
       this.lastObservedComputeType =
         String((response.result.settings as { computeType?: unknown })?.computeType ?? this.computeType());
       this.lastObservedTranscriptionDevice =
         String((response.result.settings as { device?: unknown })?.device ?? this.transcriptionDevice());
       autoEntityCheckAfterTranscription = true;
+      console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=result_state_done]`);
     } catch (error) {
       const message = this.normalizeErrorMessage(error);
+      console.error(`[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_error]`);
       this.error.set(message);
       this.showAmdGpuProcessingFailure('文字起こし・話者分離', message);
     } finally {
@@ -2703,13 +2712,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.runningStepTotal.set(0);
       this.runningComputeType.set('');
       this.parallelDiarizationStatus.set('');
+      console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=transcription_ui_released]`);
     }
 
     try {
       if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
         if (this.aiProofreadBuild) {
           // GPU版は、保存中の高精度モデル設定に関係なくE4Bで句読点を自動付与する。
+          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=auto_punctuation_start]`);
           await this.startAutoLlmProofread();
+          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=auto_punctuation_done]`);
         } else if (this.cpuOnlyBuild) {
           // CPU版のpunctモードは、単純句読点付与と固有名詞チェックを一度に実行する。
           await this.runProofread('transcription', false, 'punct');
@@ -2740,7 +2752,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
       }
       if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
+        console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=entity_check_start]`);
         await this.runProofread('transcription', false, 'entity');
+        console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=entity_check_done]`);
       }
     } finally {
       // 句読点付与前の失敗・中止などでもタイマーを確実に終了する。
@@ -2749,6 +2763,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.transcriptionPipelineRunning.set(false);
       this.transcriptionPipelineCanceling.set(false);
       this.dismissProgressSnackbar();
+      console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=pipeline_released]`);
     }
   }
 
@@ -3910,16 +3925,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch (error) {
       this.error.set(this.normalizeErrorMessage(error));
     }
-  }
-
-  private focusFirstSpeakerAliasInput(): void {
-    if (typeof document === 'undefined') {
-      return;
-    }
-    this.speakerAliasFocusTimer.schedule(() => {
-      const input = document.querySelector<HTMLInputElement>('.speaker-alias-input');
-      input?.focus();
-    }, 0);
   }
 
   private async selectExportTargetPath(

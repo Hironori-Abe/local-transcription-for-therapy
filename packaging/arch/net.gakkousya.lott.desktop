@@ -1,9 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=Local Transcription for Therapy
+Name=LoTT - Local Transcription for Therapy
+Name[ja]=LoTT（ローカル文字起こし）
+GenericName=Local transcription application
+GenericName[ja]=ローカル文字起こしアプリ
 Comment=Local Japanese transcription desktop app
-Exec=lott
+Comment[ja]=音声データをPC外へ送信しない文字起こしアプリ
+Exec=/usr/bin/lott
 Icon=net.gakkousya.lott
 Terminal=false
 StartupWMClass=lott-bin
 Categories=AudioVideo;Audio;
+Keywords=LoTT;transcription;therapy;audio;
+Keywords[ja]=LoTT;文字起こし;逐語録;カウンセリング;音声;

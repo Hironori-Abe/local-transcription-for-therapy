@@ -1,14 +1,16 @@
 pkgname=local-transcription-for-therapy-cuda
 pkgver=0.9.8
-pkgrel=2
+pkgrel=5
 pkgdesc='Local transcription and proofreading for therapy sessions (NVIDIA CUDA)'
 arch=('x86_64')
 url='https://github.com/Hironori-Abe/local-transcription-for-therapy'
 license=('Apache-2.0')
 depends=(
+  'desktop-file-utils'
   'glibc'
   'glib2'
   'gtk3'
+  'hicolor-icon-theme'
   'gst-plugins-base'
   'gst-plugins-good'
   'webkit2gtk-4.1'
@@ -35,6 +37,23 @@ sha256sums=()
 
 _product_name='Local Transcription for Therapy'
 _repo_root="${LOTT_REPO_ROOT:-$(cd "$startdir/../.." && pwd)}"
+_cpu_target="${LOTT_CPU_TARGET:-x86-64}"
+case "$_cpu_target" in
+  x86-64)
+    _lott_march='x86-64'
+    ;;
+  x86-64-v3)
+    # CachyOS experimental版。AVX2/BMI2等までを使うがAVX-512は要求しない。
+    _lott_march='x86-64-v3'
+    ;;
+  *)
+    printf '[ERROR] 未対応のCPUターゲットです: %s\n' "$_cpu_target" >&2
+    return 1
+    ;;
+esac
+_lott_cflags="-march=$_lott_march -mtune=generic -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
+_lott_cxxflags="$_lott_cflags -Wp,-D_GLIBCXX_ASSERTIONS"
+_lott_rustflags="-C opt-level=2 -C target-cpu=$_cpu_target"
 
 build() {
   cd "$_repo_root"
@@ -42,6 +61,15 @@ build() {
   test -x node_modules/.bin/tauri
   test -x src-tauri/resources/python312-linux/bin/python3.12
   test -x src-tauri/resources/ffmpeg/ffmpeg
+
+  # 配布物へビルド機固有の命令（CachyOSのtarget-cpu=native等）を混入させない。
+  # 専用makepkg設定とここで二重に固定し、Cargo成果物もmakepkgのcleanbuild対象へ
+  # 分離する。これにより過去のx86-64-v4中間生成物は再利用されない。
+  export CFLAGS="$_lott_cflags"
+  export CXXFLAGS="$_lott_cxxflags"
+  export RUSTFLAGS="$_lott_rustflags"
+  export CARGO_TARGET_DIR="$srcdir/cargo-target-x86-64"
+  unset CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER
 
   # Arch/CachyOSのWebKitGTKへリンクしたrelease本体だけを作る。
   # resourcesはpackage()でArchの標準配置へ明示的に収録する。
@@ -54,13 +82,19 @@ build() {
 package() {
   local app_dir="$pkgdir/usr/lib/$_product_name"
   local sidecar_dir="$app_dir/_up_/python_sidecar"
+  local cargo_target_dir="$srcdir/cargo-target-x86-64"
 
-  install -Dm755 "$_repo_root/src-tauri/target/release/offline-transcriber" \
+  install -Dm755 "$cargo_target_dir/release/offline-transcriber" \
     "$app_dir/lott-bin"
   install -Dm755 "$startdir/lott" \
     "$pkgdir/usr/bin/lott"
   install -Dm644 "$startdir/net.gakkousya.lott.desktop" \
     "$pkgdir/usr/share/applications/net.gakkousya.lott.desktop"
+  local icon_size
+  for icon_size in 16 32 48 64 128 256 512; do
+    install -Dm644 "$_repo_root/src-tauri/icons/${icon_size}x${icon_size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/net.gakkousya.lott.png"
+  done
   install -Dm644 "$_repo_root/src-tauri/icons/icon.png" \
     "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/net.gakkousya.lott.png"
 
@@ -74,6 +108,19 @@ package() {
     "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
   install -Dm644 "$_repo_root/THIRD_PARTY_LICENSES.md" \
     "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES.md"
+
+  # .BUILDINFOはホストの導入済みパッケージを記録するため、実際に指定した
+  # CPUターゲットは配布物内にも別途保存する。
+  install -d "$pkgdir/usr/share/doc/$pkgname"
+  {
+    printf 'cpu_target=%s\n' "$_cpu_target"
+    printf 'cflags=%s\n' "$_lott_cflags"
+    printf 'cxxflags=%s\n' "$_lott_cxxflags"
+    printf 'rustflags=%s\n' "$_lott_rustflags"
+    printf 'cargo_target_dir=clean-makepkg-srcdir\n'
+    printf 'source_commit=%s\n' \
+      "$(git -C "$_repo_root" rev-parse --verify HEAD 2>/dev/null || printf unknown)"
+  } >"$pkgdir/usr/share/doc/$pkgname/BUILD_CPU_TARGET.txt"
 
   mkdir -p "$app_dir/_up_/licenses"
   cp -a --no-preserve=ownership "$_repo_root/licenses/." "$app_dir/_up_/licenses/"

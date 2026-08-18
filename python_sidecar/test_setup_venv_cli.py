@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import http.server
+import io
 import os
 import sys
 import threading
 import unittest
+import urllib.request
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -45,6 +48,39 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         return
+
+
+class _WheelMetadataRangeHandler(_RangeHandler):
+    def do_HEAD(self):  # noqa: N802 - explicitly exercise GET Range fallback
+        self.send_response(405)
+        self.end_headers()
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path.split("?", 1)[0].endswith(".whl.metadata"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        range_header = self.headers.get("Range", "")
+        if range_header.startswith("bytes="):
+            start_text, end_text = range_header.removeprefix("bytes=").split("-", 1)
+            start = int(start_text)
+            end = min(int(end_text), len(self.payload) - 1) if end_text else len(self.payload) - 1
+            if start >= len(self.payload) or end < start:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(self.payload)}")
+                self.end_headers()
+                return
+            body = self.payload[start : end + 1]
+            self.__class__.ranges.append(range_header)
+            self.send_response(206)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(self.payload)}")
+            self.send_header("ETag", self.etag)
+            self.send_header("Last-Modified", "Tue, 01 Jan 2030 00:00:00 GMT")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
 
 
 class ResumableDownloadTests(unittest.TestCase):
@@ -112,6 +148,127 @@ class ResumableDownloadTests(unittest.TestCase):
         self.assertIn(setup.PYPI_INDEX, command)
         self.assertIn(setup.PIP_UPGRADE_REQUIREMENT, command)
         self.assertNotIn("--resume-retries", command)
+
+    def test_known_amd_rocm_archive_hash_fills_hashless_report(self):
+        url = "https://repo.amd.com/rocm/whl-multi-arch/rocm-7.14.0.tar.gz"
+        report = {
+            "install": [
+                {
+                    "download_info": {
+                        "url": url,
+                        "archive_info": {},
+                    }
+                }
+            ]
+        }
+        artifacts = setup._report_artifacts(report, Path("/tmp/wheelhouse"))
+        self.assertEqual(
+            artifacts[0]["sha256"],
+            "77c622d8eef7bf7fa1af70d410a05a621abbd2baaf53e52ab268dc6d140e15b2",
+        )
+
+        unknown = {
+            "install": [
+                {
+                    "download_info": {
+                        "url": "https://repo.amd.com/rocm/whl-multi-arch/unknown.tar.gz",
+                        "archive_info": {},
+                    }
+                }
+            ]
+        }
+        self.assertIsNone(setup._report_artifacts(unknown, Path("/tmp/wheelhouse"))[0]["sha256"])
+
+    def test_known_rocm_triton_wheel_hash_fills_hashless_index_link(self):
+        link = {
+            "url": "https://download-r2.pytorch.org/whl/"
+            "triton_rocm-3.6.0-cp312-cp312-linux_x86_64.whl",
+            "filename": "triton_rocm-3.6.0-cp312-cp312-linux_x86_64.whl",
+        }
+        self.assertEqual(
+            setup._wheel_hash(link),
+            "cff15082784c7056b0af9347770e034ab0a8ccbce0642723ddc8c8de1bd6af3f",
+        )
+
+    def test_windows_rocm_build_dependency_is_version_bounded(self):
+        self.assertEqual(
+            setup.ROCM_WINDOWS_BUILD_REQUIREMENTS,
+            ("setuptools>=70.2.0,<82",),
+        )
+
+    def test_missing_pep658_metadata_reads_only_remote_wheel_metadata(self):
+        metadata = (
+            "Metadata-Version: 2.1\n"
+            "Name: torch\n"
+            "Version: 2.11.0\n"
+            "Requires-Dist: pytorch-triton-rocm==3.3.0\n"
+        ).encode("utf-8")
+        wheel_buffer = io.BytesIO()
+        with zipfile.ZipFile(wheel_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            # Keep the object larger than one Range block so the test proves
+            # central-directory + METADATA reads do not fetch the whole wheel.
+            archive.writestr("torch/payload.bin", os.urandom(2 * 1024 * 1024), zipfile.ZIP_STORED)
+            archive.writestr("torch-2.11.0.dist-info/METADATA", metadata)
+        payload = wheel_buffer.getvalue()
+        _WheelMetadataRangeHandler.payload = payload
+        _WheelMetadataRangeHandler.ranges = []
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _WheelMetadataRangeHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/torch-2.11.0.whl"
+            link = {
+                "url": url + "#sha256=" + hashlib.sha256(payload).hexdigest(),
+                "filename": "torch-2.11.0.whl",
+                "metadata": "",
+            }
+            # The local test server is HTTP-only; patch the reader URL guard
+            # at the request boundary while preserving the HTTPS policy in
+            # production and exercising the complete Range/ZIP path.
+            original_reader_init = setup._HTTPRangeReader.__init__
+            original_urlopen = setup.urllib.request.urlopen
+
+            def local_reader_init(reader, reader_url, **kwargs):
+                return original_reader_init(reader, reader_url.replace("http://", "https://", 1), **kwargs)
+
+            def local_urlopen(request, *args, **kwargs):
+                if isinstance(request, urllib.request.Request) and request.full_url.startswith("https://127.0.0.1:"):
+                    request = urllib.request.Request(
+                        request.full_url.replace("https://", "http://", 1),
+                        headers=dict(request.header_items()),
+                        method=request.get_method(),
+                    )
+                return original_urlopen(request, *args, **kwargs)
+
+            from unittest.mock import patch
+
+            with patch.object(setup._HTTPRangeReader, "__init__", local_reader_init), patch.object(
+                setup.urllib.request, "urlopen", side_effect=local_urlopen
+            ):
+                result = setup._fetch_wheel_metadata(link)
+            self.assertIn("Requires-Dist: pytorch-triton-rocm==3.3.0", result)
+            requested = sum(
+                int(item.split("=", 1)[1].split("-", 1)[1])
+                - int(item.split("=", 1)[1].split("-", 1)[0])
+                + 1
+                for item in _WheelMetadataRangeHandler.ranges
+                if item.startswith("bytes=")
+            )
+            self.assertLess(requested, len(payload))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_rocm_triton_uses_backend_index_before_pypi(self):
+        candidates = setup._index_candidates_for_package(
+            "pytorch-triton-rocm", setup.PYTORCH_ROCM_INDEX
+        )
+        self.assertEqual(candidates[0], setup.PYTORCH_ROCM_INDEX)
+        self.assertEqual(
+            setup._index_candidates_for_package("MarkupSafe", setup.PYTORCH_ROCM_INDEX),
+            [setup.PYPI_INDEX],
+        )
 
     def test_pip_failure_categories_are_actionable(self):
         self.assertEqual(setup._classify_pip_failure("No space left on device"), "容量不足")

@@ -14,6 +14,7 @@ import re
 import subprocess
 import json
 import argparse
+import io
 import traceback
 import urllib.request
 import urllib.error
@@ -26,6 +27,7 @@ import importlib
 import importlib.util
 import sysconfig
 import time
+from collections import OrderedDict
 from functools import lru_cache
 from email.parser import Parser
 from html.parser import HTMLParser
@@ -44,6 +46,18 @@ PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 PYPI_INDEX = "https://pypi.org/simple"
 PYPI_NVIDIA_INDEX = "https://pypi.nvidia.com"
+ROCM_WINDOWS_BUILD_REQUIREMENTS = ("setuptools>=70.2.0,<82",)
+
+# A few official AMD/PyTorch artifacts are currently published without a
+# PEP 503 ``#sha256=...`` fragment.  Keep exceptions narrowly scoped to the
+# exact immutable URL/version; every other hash-less artifact remains rejected
+# by the wheelhouse verifier.
+KNOWN_ARTIFACT_SHA256 = {
+    "https://repo.amd.com/rocm/whl-multi-arch/rocm-7.14.0.tar.gz":
+        "77c622d8eef7bf7fa1af70d410a05a621abbd2baaf53e52ab268dc6d140e15b2",
+    "https://download-r2.pytorch.org/whl/triton_rocm-3.6.0-cp312-cp312-linux_x86_64.whl":
+        "cff15082784c7056b0af9347770e034ab0a8ccbce0642723ddc8c8de1bd6af3f",
+}
 
 # pip 25.2 introduced resumable downloads for the HTTP downloader.  The
 # application still has its own wheelhouse downloader below because pip's
@@ -53,6 +67,13 @@ PIP_RETRIES = 12
 PIP_RESUME_RETRIES = 12
 PIP_RESUME_MIN_VERSION = (25, 2)
 PIP_UPGRADE_REQUIREMENT = "pip>=25.2,<26"
+# A remote wheel's central directory and METADATA should be small.  Refuse to
+# turn a missing PEP 658 endpoint into an unbounded download, even if a broken
+# server advertises a very large or inconsistent range.
+REMOTE_WHEEL_BLOCK_BYTES = 1024 * 1024
+REMOTE_WHEEL_CACHE_BLOCKS = 8
+REMOTE_WHEEL_MAX_FETCH_BYTES = 64 * 1024 * 1024
+REMOTE_WHEEL_MAX_METADATA_BYTES = 8 * 1024 * 1024
 PYTHON_SETUP_MARKER = ".lott-python-setup-complete.json"
 
 _PIP_SUPPORTS_RESUME = False
@@ -196,6 +217,12 @@ def _safe_filename(url: str, expected_hash: str | None = None) -> str:
     # shell/control characters from a malicious index response.
     name = re.sub(r"[^A-Za-z0-9_.+@-]", "_", name)
     return name[:240]
+
+
+def _artifact_hash_key(url: str) -> str:
+    """Canonicalize a report URL for the narrow known-hash allowlist."""
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
 
 
 def _download_url_resumable(
@@ -406,6 +433,8 @@ def _download_url_resumable(
 def _download_report_artifact(artifact: dict, wheelhouse: Path) -> Path:
     url = str(artifact.get("url", ""))
     expected_hash = artifact.get("sha256")
+    if not expected_hash:
+        expected_hash = KNOWN_ARTIFACT_SHA256.get(_artifact_hash_key(url))
     if not url.startswith("https://"):
         raise DownloadError(f"安全性を確認できないパッケージURLです: {_sanitize_url(url)}")
     if not expected_hash or not re.fullmatch(r"[0-9a-fA-F]{64}", str(expected_hash)):
@@ -756,6 +785,8 @@ def _report_artifacts(report: dict, wheelhouse: Path) -> list[dict]:
         if not sha256:
             fragment = parse_qs(urlsplit(url).fragment).get("sha256", [""])[0]
             sha256 = fragment or None
+        if not sha256:
+            sha256 = KNOWN_ARTIFACT_SHA256.get(_artifact_hash_key(url))
         filename = _safe_filename(url, str(sha256) if sha256 else None)
         key = (filename, str(sha256 or ""))
         if key in seen:
@@ -895,15 +926,17 @@ def _requirement_marker_matches(marker, environment: dict[str, str]) -> bool:
 def _index_candidates_for_package(package: str, primary_index: str) -> list[str]:
     """Choose an official index order without mixing generic PyPI wheels.
 
-    The CUDA simple index mirrors some generic packages (for example
-    MarkupSafe) but may not expose their PEP 658 metadata endpoint.  Only the
-    CUDA-specific graph is resolved from that index first; ordinary Python
-    dependencies are intentionally queried from PyPI first and do not fall
-    back to the CUDA mirror.
+    The CUDA/ROCm simple indexes mirror some generic packages (for example
+    MarkupSafe) but may not expose their PEP 658 metadata endpoint.  Only
+    backend-specific packages are resolved from that index first; ordinary
+    Python dependencies are intentionally queried from PyPI first and do not
+    fall back to a backend mirror.
     """
     name = _package_name_normalized(package)
     if name.startswith("nvidia-"):
         return list(dict.fromkeys([primary_index, PYPI_NVIDIA_INDEX, PYPI_INDEX]))
+    if name in {"pytorch-triton-rocm", "triton-rocm"}:
+        return list(dict.fromkeys([primary_index, PYPI_INDEX]))
     if name in {"torch", "torchaudio", "torchvision", "triton"}:
         if name == "triton":
             return list(dict.fromkeys([primary_index, PYPI_NVIDIA_INDEX, PYPI_INDEX]))
@@ -950,6 +983,285 @@ def _metadata_url_for_wheel(url: str) -> str:
     return clean + ".metadata"
 
 
+class _HTTPRangeReader(io.RawIOBase):
+    """Small seekable remote file backed by strict HTTP byte ranges.
+
+    ``zipfile.ZipFile`` seeks to the end of a wheel to read its central
+    directory and then seeks back to the selected ``.dist-info/METADATA``
+    member.  This reader fetches only fixed-size blocks for those seeks; it
+    never hands a multi-gigabyte wheel to ``zipfile`` or to the pip temp dir.
+    The cache is deliberately small because it is metadata plumbing, not a
+    second package cache.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        block_size: int = REMOTE_WHEEL_BLOCK_BYTES,
+        max_fetch_bytes: int = REMOTE_WHEEL_MAX_FETCH_BYTES,
+    ) -> None:
+        super().__init__()
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() != "https" or not parsed.netloc:
+            raise DownloadError("remote wheel metadataはHTTPS URLだけを許可しています。")
+        self._url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+        self._block_size = max(4096, int(block_size))
+        self._max_fetch_bytes = max(self._block_size, int(max_fetch_bytes))
+        self._position = 0
+        self._fetched_bytes = 0
+        self._etag: str | None = None
+        self._last_modified: str | None = None
+        self._blocks: OrderedDict[int, bytes] = OrderedDict()
+        self._size = self._discover_size()
+        if self._size <= 0:
+            raise DownloadError("remote wheelのサイズを確認できませんでした。")
+
+    @staticmethod
+    def _response_status(response) -> int:
+        return int(getattr(response, "status", response.getcode()))
+
+    @staticmethod
+    def _content_length(headers) -> int | None:
+        value = headers.get("Content-Length", "")
+        if value.isdigit():
+            return int(value)
+        return None
+
+    @staticmethod
+    def _content_range(value: str) -> tuple[int, int, int] | None:
+        match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", value.strip())
+        if not match:
+            return None
+        start, end, total = (int(match.group(index)) for index in (1, 2, 3))
+        if end < start or total <= end:
+            return None
+        return start, end, total
+
+    def _request(self, headers: dict[str, str]):
+        request = urllib.request.Request(self._url, headers=headers)
+        try:
+            return urllib.request.urlopen(request, timeout=PIP_TIMEOUT_SECONDS)
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            raise DownloadError(
+                f"remote wheelメタデータ取得中のHTTPエラー: HTTP {exc.code}"
+            ) from exc
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+            raise DownloadError(
+                f"remote wheelメタデータ取得中の通信エラー: {_sanitize_text(str(exc))}"
+            ) from exc
+
+    def _remember_validator(self, headers) -> None:
+        etag = headers.get("ETag")
+        last_modified = headers.get("Last-Modified")
+        if self._etag and etag and self._etag != etag:
+            raise DownloadError("remote wheelのETagが取得途中で変化しました。")
+        if self._last_modified and last_modified and self._last_modified != last_modified:
+            raise DownloadError("remote wheelのLast-Modifiedが取得途中で変化しました。")
+        if etag:
+            self._etag = etag
+        if last_modified:
+            self._last_modified = last_modified
+
+    def _discover_size(self) -> int:
+        # HEAD is cheap, but several package indexes disable it.  Fall back to
+        # a one-byte GET range and require Content-Range/Content-Length.
+        try:
+            request = urllib.request.Request(self._url, method="HEAD")
+            with urllib.request.urlopen(request, timeout=PIP_TIMEOUT_SECONDS) as response:
+                status = self._response_status(response)
+                if 200 <= status < 300:
+                    length = self._content_length(response.headers)
+                    if length is not None:
+                        self._remember_validator(response.headers)
+                        return length
+        except urllib.error.HTTPError as exc:
+            exc.close()
+        except (urllib.error.URLError, http.client.HTTPException, OSError):
+            pass
+
+        response = self._request(
+            {
+                "Range": "bytes=0-0",
+                "User-Agent": "Local-Transcription-for-Therapy/1 package metadata",
+            }
+        )
+        try:
+            status = self._response_status(response)
+            self._remember_validator(response.headers)
+            content_range = self._content_range(response.headers.get("Content-Range", ""))
+            if status == 206 and content_range and content_range[:2] == (0, 0):
+                body = response.read(1)
+                if len(body) != 1:
+                    raise DownloadError("remote wheelの先頭Range応答が不完全です。")
+                self._fetched_bytes += 1
+                return content_range[2]
+            if status == 200:
+                # A server ignoring Range is acceptable only when its
+                # Content-Length identifies the object.  Read one byte and
+                # close immediately; never buffer the whole wheel.
+                length = self._content_length(response.headers)
+                if length is not None and length > 0:
+                    body = response.read(1)
+                    if len(body) != 1:
+                        raise DownloadError("remote wheelの応答が空です。")
+                    self._fetched_bytes += 1
+                    return length
+            raise DownloadError("remote wheelのサイズ応答がHTTP Range仕様に適合しません。")
+        finally:
+            response.close()
+
+    def _fetch_block(self, start: int) -> bytes:
+        end = min(self._size - 1, start + self._block_size - 1)
+        expected = end - start + 1
+        if self._fetched_bytes + expected > self._max_fetch_bytes:
+            raise DownloadError(
+                "remote wheelのメタデータ取得量が上限を超えました。"
+                " PEP658対応indexまたは別の配布元を確認してください。"
+            )
+        headers = {
+            "Range": f"bytes={start}-{end}",
+            "User-Agent": "Local-Transcription-for-Therapy/1 package metadata",
+        }
+        if self._etag:
+            headers["If-Range"] = self._etag
+        elif self._last_modified:
+            headers["If-Range"] = self._last_modified
+        response = self._request(headers)
+        try:
+            status = self._response_status(response)
+            self._remember_validator(response.headers)
+            if status == 206:
+                content_range = self._content_range(response.headers.get("Content-Range", ""))
+                if (
+                    content_range is None
+                    or content_range[0] != start
+                    or content_range[1] != end
+                    or content_range[2] != self._size
+                ):
+                    raise DownloadError("remote wheelのContent-Rangeが要求範囲と一致しません。")
+                content_length = self._content_length(response.headers)
+                if content_length is not None and content_length != expected:
+                    raise DownloadError("remote wheelのContent-Lengthが要求範囲と一致しません。")
+            elif status == 200 and start == 0 and end == self._size - 1:
+                # Only a complete response for a complete request is safe if
+                # the server ignores Range.  Normal large wheels take the
+                # 206 branch above.
+                pass
+            else:
+                raise DownloadError("remote wheelが206 Partial Contentを返しませんでした。")
+
+            chunks: list[bytes] = []
+            remaining = expected
+            while remaining:
+                chunk = response.read(remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b"".join(chunks)
+            if len(body) != expected:
+                raise DownloadError("remote wheelのRange応答が途中で終了しました。")
+            self._fetched_bytes += len(body)
+            return body
+        finally:
+            response.close()
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._position
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            position = offset
+        elif whence == io.SEEK_CUR:
+            position = self._position + offset
+        elif whence == io.SEEK_END:
+            position = self._size + offset
+        else:
+            raise ValueError(f"unsupported seek mode: {whence}")
+        if position < 0:
+            raise ValueError("negative seek position")
+        self._position = position
+        return position
+
+    def read(self, size: int = -1) -> bytes:
+        if self.closed:
+            raise ValueError("I/O operation on closed remote wheel")
+        if self._position >= self._size:
+            return b""
+        if size is None or size < 0:
+            size = self._size - self._position
+        size = min(size, self._size - self._position)
+        if size <= 0:
+            return b""
+
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining:
+            block_start = (self._position // self._block_size) * self._block_size
+            block = self._blocks.get(block_start)
+            if block is None:
+                block = self._fetch_block(block_start)
+                self._blocks[block_start] = block
+                self._blocks.move_to_end(block_start)
+                while len(self._blocks) > REMOTE_WHEEL_CACHE_BLOCKS:
+                    self._blocks.popitem(last=False)
+            else:
+                self._blocks.move_to_end(block_start)
+            offset = self._position - block_start
+            chunk = block[offset : offset + remaining]
+            if not chunk:
+                break
+            chunks.append(chunk)
+            self._position += len(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+
+def _fetch_wheel_metadata_from_range(link: dict[str, str]) -> str:
+    """Read a wheel's METADATA member without downloading its full payload."""
+    wheel_hash = _wheel_hash(link)
+    if not wheel_hash:
+        raise DownloadError(
+            f"{link['filename']} はSHA-256付きwheel URLではないため、remote metadataを安全に読めません。"
+        )
+    reader = _HTTPRangeReader(link["url"])
+    try:
+        with zipfile.ZipFile(reader) as archive:
+            metadata_info = next(
+                (
+                    info
+                    for info in archive.infolist()
+                    if info.filename.replace("\\", "/").lower().endswith(".dist-info/metadata")
+                ),
+                None,
+            )
+            if metadata_info is None:
+                raise DownloadError(f"{link['filename']}にdist-info/METADATAがありません。")
+            if metadata_info.file_size > REMOTE_WHEEL_MAX_METADATA_BYTES:
+                raise DownloadError(f"{link['filename']}のMETADATAが大きすぎます。")
+            with archive.open(metadata_info) as metadata_file:
+                content = metadata_file.read(REMOTE_WHEEL_MAX_METADATA_BYTES + 1)
+            if len(content) > REMOTE_WHEEL_MAX_METADATA_BYTES:
+                raise DownloadError(f"{link['filename']}のMETADATAが大きすぎます。")
+            return content.decode("utf-8", errors="replace")
+    except DownloadError:
+        raise
+    except (EOFError, OSError, KeyError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+        raise DownloadError(
+            f"{link['filename']}のremote wheel metadataを読み取れませんでした: {_sanitize_text(str(exc))}"
+        ) from exc
+    finally:
+        reader.close()
+
+
 def _fetch_wheel_metadata(link: dict[str, str]) -> str:
     metadata_url = _metadata_url_for_wheel(link["url"])
     request = urllib.request.Request(
@@ -960,6 +1272,9 @@ def _fetch_wheel_metadata(link: dict[str, str]) -> str:
         with urllib.request.urlopen(request, timeout=PIP_TIMEOUT_SECONDS) as response:
             content = response.read()
     except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            exc.close()
+            return _fetch_wheel_metadata_from_range(link)
         raise DownloadError(
             f"{link['filename']} のwheelメタデータを取得できませんでした（HTTP {exc.code}）。"
         ) from exc
@@ -980,7 +1295,7 @@ def _wheel_hash(link: dict[str, str]) -> str | None:
     fragment = parse_qs(urlsplit(link["url"]).fragment).get("sha256", [""])[0]
     if re.fullmatch(r"[0-9a-fA-F]{64}", fragment):
         return fragment
-    return None
+    return KNOWN_ARTIFACT_SHA256.get(_artifact_hash_key(link["url"]))
 
 
 def _resolve_direct_wheels(
@@ -1430,13 +1745,32 @@ def main() -> None:
     _detect_pip_capabilities(python)
     _remove_gpl_ffmpeg_packages(python)
 
-    # PyTorch とその CUDA/ROCm runtime 依存を、pip の解決レポートに固定し
-    # wheelhouseへ先に取得する。アプリ再起動後は各ファイルの .part から再開する。
+    # PyTorch とその CUDA/ROCm runtime 依存を、LinuxではPEP 503/658の
+    # メタデータ（ROCm wheelに658が無い場合はremote ZIP metadata）から
+    # 先に固定し、wheelhouseへ取得する。アプリ再起動後は各ファイルの
+    # .partから再開する。Windowsは既存のpip report経路を維持する。
     if args.variant == "rocm" and os.name == "nt":
         gfx_target = os.environ.get("LOTT_ROCM_GFX_TARGET", "gfx1103").strip() or "gfx1103"
         rocm_index = os.environ.get(
             "LOTT_PYTORCH_ROCM_INDEX_URL", PYTORCH_ROCM_WINDOWS_INDEX
         ).strip() or PYTORCH_ROCM_WINDOWS_INDEX
+        # ROCm Core 7.14.0 is published as a source archive whose isolated
+        # build requires setuptools>=70.2.  Resolve that small build wheel
+        # from PyPI first so the subsequent --no-index installation remains
+        # offline and deterministic.  Do not mix PyPI into AMD's package
+        # index with --extra-index-url.
+        _install_resolved_phase(
+            python,
+            wheelhouse,
+            [
+                "--prefer-binary",
+                "--index-url",
+                PYPI_INDEX,
+                *ROCM_WINDOWS_BUILD_REQUIREMENTS,
+            ],
+            label="ROCm Windows build dependency",
+            force_reinstall=False,
+        )
         emit(
             "progress",
             f"ROCm Core {PYTORCH_ROCM_WINDOWS_VERSION} ({gfx_target}, Windows) をインストール中...",
@@ -1500,14 +1834,20 @@ def main() -> None:
         ]
         label = "PyTorch (CPU)"
 
-    if args.variant == "cuda" and os.name != "nt":
-        # Do not let pip inspect CUDA wheels in /tmp while generating a report:
-        # NVIDIA's PEP658 metadata is small, while the wheels themselves can
-        # be hundreds of megabytes.  Resolve the metadata graph first, then
-        # download every selected wheel through the durable Range downloader.
+    if args.variant in {"cuda", "rocm"} and os.name != "nt":
+        # Do not let pip inspect backend wheels in /tmp while generating a
+        # report.  CUDA generally has PEP658 metadata; ROCm torch 2.11 wheels
+        # are multi-gigabyte files without it, so _fetch_wheel_metadata falls
+        # back to reading only the remote ZIP METADATA member via HTTP Range.
+        direct_requirements = (
+            ["torch==2.11.0", "torchaudio==2.11.0"]
+            if args.variant == "rocm"
+            else ["torch==2.10.0", "torchaudio==2.10.0"]
+        )
+        direct_index = PYTORCH_ROCM_INDEX if args.variant == "rocm" else PYTORCH_CUDA_INDEX
         direct_artifacts = _resolve_direct_wheels(
-            ["torch==2.10.0", "torchaudio==2.10.0"],
-            primary_index=PYTORCH_CUDA_INDEX,
+            direct_requirements,
+            primary_index=direct_index,
             label=label,
         )
         _install_direct_artifacts(

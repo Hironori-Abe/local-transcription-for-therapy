@@ -5125,11 +5125,16 @@ fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command
     #[cfg(target_os = "windows")]
     if let Ok(app_cache_dir) = app.path().app_cache_dir() {
         let pip_cache_dir = app_cache_dir.join("python-pip");
+        let python_tmp_dir = app_cache_dir.join("python-tmp");
         let wheelhouse_dir = app_cache_dir.join("python-downloads").join("wheelhouse");
         let setup_log = app_cache_dir.join("python-setup.log");
         let _ = fs::create_dir_all(&pip_cache_dir);
+        let _ = fs::create_dir_all(&python_tmp_dir);
         let _ = fs::create_dir_all(&wheelhouse_dir);
         cmd.env("PIP_CACHE_DIR", &pip_cache_dir)
+            .env("TMPDIR", &python_tmp_dir)
+            .env("TEMP", &python_tmp_dir)
+            .env("TMP", &python_tmp_dir)
             .env("LOTT_WHEELHOUSE_DIR", &wheelhouse_dir)
             .env("LOTT_PYTHON_SETUP_LOG", &setup_log);
     }
@@ -7144,6 +7149,21 @@ fn is_cpu_only_build(app: &AppHandle) -> bool {
 
 fn is_amd_gpu_build(app: &AppHandle) -> bool {
     app.config().identifier.contains("amd")
+}
+
+/// Select the Python dependency variant from the packaged application ID.
+///
+/// Keep this independent of Tauri/OS cfgs so both the Linux and Windows setup
+/// paths use the same rule.  CPU is deliberately checked first for the
+/// unlikely case that a custom CPU identifier also contains "amd".
+fn python_setup_variant(identifier: &str, cpu_only: bool) -> &'static str {
+    if cpu_only {
+        "cpu"
+    } else if identifier.contains("amd") {
+        "rocm"
+    } else {
+        "cuda"
+    }
 }
 
 fn editor_voice_input_allowed(app: &AppHandle) -> bool {
@@ -10173,6 +10193,20 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_setup_variant_matches_packaged_gpu_flavor() {
+        assert_eq!(python_setup_variant("net.gakkousya.lott-cpu", true), "cpu");
+        assert_eq!(
+            python_setup_variant("net.gakkousya.lott-amd", false),
+            "rocm"
+        );
+        assert_eq!(python_setup_variant("net.gakkousya.lott", false), "cuda");
+        assert_eq!(
+            python_setup_variant("net.gakkousya.lott-amd-cpu", true),
+            "cpu"
+        );
+    }
 
     #[test]
     fn proofread_segment_serialization_preserves_speaker_labels() {
@@ -13761,13 +13795,8 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
         let python_bin = get_python_bin(_app);
         let script_path = resolve_setup_venv_script_path(_app)?;
         let req_path = resolve_requirements_runtime_path(_app)?;
-        let variant = if is_cpu_only_build(_app) {
-            "cpu"
-        } else if _app.config().identifier.contains("amd") {
-            "rocm"
-        } else {
-            "cuda"
-        };
+        let variant =
+            python_setup_variant(_app.config().identifier.as_str(), is_cpu_only_build(_app));
         let mut cmd = Command::new(&python_bin);
         configure_python_command(_app, &python_bin, &mut cmd);
         cmd.env("PYTHONUTF8", "1")
@@ -13810,11 +13839,8 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
         let mut cmd = Command::new(&bundled_python);
         apply_windows_no_window(&mut cmd);
         configure_python_command(_app, &bundled_python.to_string_lossy(), &mut cmd);
-        let variant = if is_cpu_only_build(_app) {
-            "cpu"
-        } else {
-            "cuda"
-        };
+        let variant =
+            python_setup_variant(_app.config().identifier.as_str(), is_cpu_only_build(_app));
         cmd.env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .args([

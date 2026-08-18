@@ -5344,7 +5344,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       // invokeへ渡した直後に入力欄から除去し、長時間のモデル取得中に保持しない。
       this.diarizationInstallToken.set('');
       tokenForValidation = '';
-      await setupTask;
+      const setupOk = await setupTask;
+      // Python/package/model setup must finish before attempting the optional
+      // proofreading backend.  Rust returns false for a classified download
+      // failure; continuing here used to hide the root cause behind a second
+      // backend error and made a failed first setup look partially complete.
+      if (!setupOk) {
+        return;
+      }
 
       // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
       // 関係なくGPUバックエンドを準備する。

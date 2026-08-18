@@ -5070,6 +5070,9 @@ fn python_sidecar_ld_library_path(
 fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command) {
     cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8");
 
+    #[cfg(target_os = "windows")]
+    let _ = python_bin;
+
     #[cfg(target_os = "linux")]
     if let Some(runtime_root) = bundled_linux_python_root(python_bin) {
         if let Ok(app_data_dir) = app.path().app_local_data_dir() {
@@ -5090,11 +5093,45 @@ fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command
             );
             cmd.env("LD_LIBRARY_PATH", library_path);
         }
-        if let Ok(app_cache_dir) = app.path().app_cache_dir() {
-            let pip_cache_dir = app_cache_dir.join("python-pip");
-            let _ = fs::create_dir_all(&pip_cache_dir);
-            cmd.env("PIP_CACHE_DIR", pip_cache_dir);
+    }
+
+    // CachyOS/Arch commonly mounts /tmp as a small tmpfs.  pip's unpack
+    // directory can temporarily contain several CUDA/NVIDIA wheels, so keep
+    // both temporary files and the resumable wheelhouse on the application's
+    // disk-backed cache.  The wheelhouse contains packages, not conversation
+    // data, but is still private to the current user (0700/0600).
+    #[cfg(target_os = "linux")]
+    if let Ok(app_cache_dir) = app.path().app_cache_dir() {
+        let pip_cache_dir = app_cache_dir.join("python-pip");
+        let python_tmp_dir = app_cache_dir.join("python-tmp");
+        let wheelhouse_dir = app_cache_dir.join("python-downloads").join("wheelhouse");
+        let setup_log = app_cache_dir.join("python-setup.log");
+        for directory in [&pip_cache_dir, &python_tmp_dir, &wheelhouse_dir] {
+            let _ = fs::create_dir_all(directory);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
+            }
         }
+        cmd.env("PIP_CACHE_DIR", &pip_cache_dir)
+            .env("TMPDIR", &python_tmp_dir)
+            .env("TEMP", &python_tmp_dir)
+            .env("TMP", &python_tmp_dir)
+            .env("LOTT_WHEELHOUSE_DIR", &wheelhouse_dir)
+            .env("LOTT_PYTHON_SETUP_LOG", &setup_log);
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Ok(app_cache_dir) = app.path().app_cache_dir() {
+        let pip_cache_dir = app_cache_dir.join("python-pip");
+        let wheelhouse_dir = app_cache_dir.join("python-downloads").join("wheelhouse");
+        let setup_log = app_cache_dir.join("python-setup.log");
+        let _ = fs::create_dir_all(&pip_cache_dir);
+        let _ = fs::create_dir_all(&wheelhouse_dir);
+        cmd.env("PIP_CACHE_DIR", &pip_cache_dir)
+            .env("LOTT_WHEELHOUSE_DIR", &wheelhouse_dir)
+            .env("LOTT_PYTHON_SETUP_LOG", &setup_log);
     }
 }
 
@@ -13531,7 +13568,14 @@ fn check_python_venv(_app: &AppHandle) -> (bool, String) {
         let ok = cmd
             .args([
                 "-c",
-                "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('faster_whisper') else 1)",
+                r#"import importlib.util, os, pathlib, sys, sysconfig
+target = pathlib.Path(os.environ.get('PIP_TARGET') or sysconfig.get_paths()['purelib'])
+marker = target / '.lott-python-setup-complete.json'
+required = ('torch', 'torchaudio', 'faster_whisper', 'ctranslate2', 'pyannote.audio', 'requests')
+forbidden = ('av', 'imageio_ffmpeg')
+ok = marker.is_file() and all(importlib.util.find_spec(name) is not None for name in required)
+ok = ok and not any((target / name).exists() for name in forbidden)
+sys.exit(0 if ok else 1)"#,
             ])
             .output()
             .map(|o| o.status.success())
@@ -13567,9 +13611,25 @@ fn check_python_venv(_app: &AppHandle) -> (bool, String) {
                 let packages_ok = py312
                     .join("Lib")
                     .join("site-packages")
-                    .join("faster_whisper")
-                    .join("__init__.py")
-                    .exists();
+                    .join(".lott-python-setup-complete.json")
+                    .exists()
+                    && py312
+                        .join("Lib")
+                        .join("site-packages")
+                        .join("faster_whisper")
+                        .join("__init__.py")
+                        .exists()
+                    && py312
+                        .join("Lib")
+                        .join("site-packages")
+                        .join("torch")
+                        .is_dir()
+                    && !py312.join("Lib").join("site-packages").join("av").exists()
+                    && !py312
+                        .join("Lib")
+                        .join("site-packages")
+                        .join("imageio_ffmpeg")
+                        .exists();
                 return (packages_ok, path_str);
             }
 
@@ -13749,6 +13809,7 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
 
         let mut cmd = Command::new(&bundled_python);
         apply_windows_no_window(&mut cmd);
+        configure_python_command(_app, &bundled_python.to_string_lossy(), &mut cmd);
         let variant = if is_cpu_only_build(_app) {
             "cpu"
         } else {

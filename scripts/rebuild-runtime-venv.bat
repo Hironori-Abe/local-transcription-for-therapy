@@ -49,7 +49,7 @@ if errorlevel 1 (
 
 set "PYTHON_BIN=%cd%\%MAIN_VENV%\Scripts\python.exe"
 echo [4/9] Upgrading pip tooling ...
-call "%PYTHON_BIN%" -m pip install --upgrade "pip<26" "setuptools<81" wheel
+call "%PYTHON_BIN%" -m pip install --upgrade "pip>=25.2,<26" "setuptools<81" wheel
 if errorlevel 1 goto :fail
 
 echo [5/9] Installing torch stack first (reduces resolver complexity) ...

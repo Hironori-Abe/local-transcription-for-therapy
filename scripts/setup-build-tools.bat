@@ -131,6 +131,15 @@ if errorlevel 1 (
 if exist "%TEMP%\getpip_dl_result.tmp" del /q "%TEMP%\getpip_dl_result.tmp" >nul 2>&1
 
 :after_get_pip
+if exist "%PYTHON312_DEST%\get-pip.py" (
+  echo [INFO] Ensuring resumable pip (>=25.2, ^<26)...
+  "%PYTHON312_DEST%\python.exe" "%PYTHON312_DEST%\get-pip.py" --no-warn-script-location "pip>=25.2,<26"
+  if errorlevel 1 (
+    echo [ERROR] Failed to install the resumable pip build.
+    goto :hold_error
+  )
+  echo [OK] Resumable pip is ready.
+)
 echo.
 
 :: --- Lemonade is NOT bundled in the NVIDIA build ---

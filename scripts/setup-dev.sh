@@ -828,7 +828,7 @@ install_npm_dependencies() {
 
 install_python_dependencies() {
   info "[3/6] Python dependencies..."
-  "$PYTHON_BIN" -m pip install --upgrade "pip<26" "setuptools<81" wheel || die "pip tooling install failed."
+  "$PYTHON_BIN" -m pip install --upgrade "pip>=25.2,<26" "setuptools<81" wheel || die "pip tooling install failed."
   "$PYTHON_BIN" -m pip uninstall -y torch torchaudio torchvision torchcodec >/dev/null 2>&1 || true
 
   case "$TORCH_BACKEND" in

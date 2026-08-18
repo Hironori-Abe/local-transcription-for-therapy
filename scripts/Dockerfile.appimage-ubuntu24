@@ -65,6 +65,8 @@ RUN runtime=/opt/lott-python312 \
     && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
        "$runtime/bin/python3.12" -c 'import encodings, pip; assert encodings.__file__' \
     && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
+       "$runtime/bin/python3.12" -m pip install --no-cache-dir --upgrade "pip>=25.2,<26" \
+    && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
        "$runtime/bin/python3.12" -m pip --version
 
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \

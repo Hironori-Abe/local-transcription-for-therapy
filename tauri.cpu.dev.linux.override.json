@@ -1,0 +1,7 @@
+{
+  "build": {
+    "beforeDevCommand": "echo Frontend is managed by scripts/run-dev-cpu.sh",
+    "devUrl": "http://127.0.0.1:4202",
+    "frontendDist": "../frontend"
+  }
+}

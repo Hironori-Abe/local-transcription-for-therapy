@@ -12,6 +12,37 @@ import type {
 
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 export type ConcreteComputeType = Exclude<NormalizedComputeType, 'auto'>;
+export interface RuntimeBuildFlagsValue {
+  cpuOnlyBuild: boolean;
+  aiProofreadBuild: boolean;
+  cpuVoiceInputBuild: boolean;
+}
+
+/**
+ * Resolve build capabilities from the packaged frontend flag and the Rust
+ * runtime identifier.  The frontend is normally compiled with the matching
+ * Angular configuration, but keeping the Rust result as a second source of
+ * truth prevents a CPU package accidentally built with the default frontend
+ * from enabling GPU/LLM-only flows.
+ */
+export function resolveRuntimeBuildFlagsValue(
+  editorOnlyBuild: boolean,
+  compileTimeCpuOnlyBuild: boolean,
+  runtimeBuildVariant: string | null | undefined
+): RuntimeBuildFlagsValue {
+  const hasRuntimeVariant = runtimeBuildVariant === 'cuda'
+    || runtimeBuildVariant === 'rocm'
+    || runtimeBuildVariant === 'cpu';
+  const cpuOnlyBuild = hasRuntimeVariant
+    ? runtimeBuildVariant === 'cpu'
+    : compileTimeCpuOnlyBuild;
+  return {
+    cpuOnlyBuild,
+    aiProofreadBuild: !editorOnlyBuild && !cpuOnlyBuild,
+    cpuVoiceInputBuild: editorOnlyBuild || cpuOnlyBuild
+  };
+}
+
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
 export type NormalizedTranscriptionDevice = 'cuda' | 'cpu';
 export type DevEmulationMode = 'none' | 'no_cuda' | 'missing_community1';

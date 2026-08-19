@@ -6,9 +6,77 @@ set "HOLD_ON_EXIT=1"
 if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
 if /I "%~2"=="--trace" echo on
 
+set "BUILD_CONFIG=tauri.nvidia.windows.override.json"
+set "BUILD_LINE=NVIDIA CUDA"
+set "BUILD_VARIANT=nvidia"
+set "BUILD_OPTION="
+set "DRY_RUN=0"
+
+REM Keep the historical no-argument invocation on the NVIDIA line, while
+REM allowing the other Windows installers to use the same explicit variant
+REM model as setup-build-tools-linux.sh.
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="--no-hold" (
+  set "HOLD_ON_EXIT=0"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--trace" (
+  echo on
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--dry-run" (
+  set "DRY_RUN=1"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--amd" (
+  if defined BUILD_OPTION goto duplicate_variant
+  set "BUILD_OPTION=--amd"
+  set "BUILD_LINE=AMD ROCm"
+  set "BUILD_CONFIG=tauri.amd.windows.override.json"
+  set "BUILD_VARIANT=amd"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--cpu" (
+  if defined BUILD_OPTION goto duplicate_variant
+  set "BUILD_OPTION=--cpu"
+  set "BUILD_LINE=CPU"
+  set "BUILD_CONFIG=tauri.cpu.windows.override.json"
+  set "BUILD_VARIANT=cpu"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--editor" (
+  if defined BUILD_OPTION goto duplicate_variant
+  set "BUILD_OPTION=--editor"
+  set "BUILD_LINE=Editor"
+  set "BUILD_CONFIG=tauri.editor.windows.override.json"
+  set "BUILD_VARIANT=editor"
+  shift
+  goto parse_args
+)
+goto unknown_option
+
+:args_done
+
 cd /d "%~dp0\.."
 
-echo === Build NSIS Installer (venv excluded) ===
+echo === Build NSIS Installer: %BUILD_LINE% (venv excluded) ===
+echo [INFO] Tauri override: %BUILD_CONFIG%
+echo [INFO] Release variant: %BUILD_VARIANT%
+if not exist "%BUILD_CONFIG%" (
+  echo [ERROR] Tauri override was not found: %BUILD_CONFIG%
+  goto :hold_error
+)
+if "%DRY_RUN%"=="1" (
+  echo [DRY-RUN] cargo tauri build --bundles nsis --config %BUILD_CONFIG%
+  echo [DRY-RUN] collect_release_artifacts.py --platform windows --variant %BUILD_VARIANT%
+  goto :hold_success
+)
 echo.
 echo Included in installer:
 echo   - App executable (offline-transcriber.exe)
@@ -16,12 +84,12 @@ echo   - Python 3.12 Embeddable runtime (resources/python312/)
 echo   - Python scripts (transcribe_cli.py, diarize_cli.py, prompt_templates)
 echo   - LGPL FFmpeg CLI (resources/ffmpeg/)
 echo   - Third-party license texts (licenses/)
-echo   - llama-server + CUDA DLLs (AI proofreading engine, launched directly)
+if /I "%BUILD_VARIANT%"=="nvidia" echo   - llama-server + CUDA DLLs (AI proofreading engine, launched directly)
 echo.
 echo Not included (downloaded after install via setup UI):
 echo   - Python packages (faster-whisper, pyannote, torch, etc.)
 echo   - Whisper turbo model
-echo   - Gemma 4 E4B GGUF model
+if /I not "%BUILD_VARIANT%"=="editor" echo   - Gemma 4 E4B GGUF model (Full editions; optional for CPU)
 echo   - Diarization model (pyannote community-1)
 echo.
 
@@ -157,15 +225,17 @@ echo.
 
 :: --- Collect third-party license texts ---
 echo [INFO] Collecting third-party license texts...
-if exist ".venv312\Lib\site-packages" (
-  "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --venv .venv312 --frontend frontend --tauri src-tauri --out licenses
+set "LICENSE_VENV=.venv312"
+if /I "%BUILD_VARIANT%"=="amd" set "LICENSE_VENV=.venv312-amd"
+if exist "%LICENSE_VENV%\Lib\site-packages" (
+  "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --venv "%LICENSE_VENV%" --frontend frontend --tauri src-tauri --out licenses
   if errorlevel 1 (
     echo [ERROR] Failed to collect third-party license texts.
     goto :hold_error
   )
   echo [OK] Updated licenses\THIRD_PARTY_FULL.txt
 ) else (
-  echo [WARN] .venv312\Lib\site-packages was not found. Skipping Python dependency license refresh.
+  echo [WARN] %LICENSE_VENV%\Lib\site-packages was not found. Skipping Python dependency license refresh.
   echo [WARN] Run scripts\collect_licenses.py with the distribution-equivalent Python environment before release.
   set "HAS_WARN=1"
 )
@@ -186,10 +256,10 @@ if exist "%TAURI_RELEASE_UP%" (
   )
 )
 
-echo [INFO] Building installer (frontend build is included)...
+echo [INFO] Building %BUILD_LINE% installer (frontend build is included)...
 echo [INFO] This may take several minutes.
 echo.
-cargo tauri build --bundles nsis --config tauri.nvidia.windows.override.json
+cargo tauri build --bundles nsis --config "%BUILD_CONFIG%"
 if errorlevel 1 (
   echo.
   echo [ERROR] Build failed.
@@ -203,7 +273,7 @@ if "%HAS_WARN%"=="1" (
   echo [OK] Build completed.
 )
 echo [INFO] Collecting release artifacts under the release naming convention...
-"%PYTHON312_DEST%\python.exe" scripts\collect_release_artifacts.py --platform windows --variant nvidia --source-dir "src-tauri\target\release\bundle\nsis"
+"%PYTHON312_DEST%\python.exe" scripts\collect_release_artifacts.py --platform windows --variant "%BUILD_VARIANT%" --source-dir "src-tauri\target\release\bundle\nsis"
 if errorlevel 1 (
   echo [ERROR] Failed to collect release artifacts.
   goto :hold_error
@@ -216,6 +286,26 @@ goto :hold_success
 :normalize_python_pth
 powershell -NoProfile -NonInteractive -Command "$path = '%~1'; $lines = [System.IO.File]::ReadAllLines($path) -replace '^#import site$', 'import site'; $utf8NoBom = [System.Text.UTF8Encoding]::new($false); [System.IO.File]::WriteAllLines($path, $lines, $utf8NoBom)"
 exit /b %ERRORLEVEL%
+
+:duplicate_variant
+echo [ERROR] Specify only one Windows build line: --amd, --cpu, or --editor.
+goto :show_help
+
+:unknown_option
+echo [ERROR] Unknown option: %~1
+goto :show_help
+
+:show_help
+echo Usage: scripts\setup-build-tools.bat [--amd ^| --cpu ^| --editor] [--dry-run] [--no-hold] [--trace]
+echo.
+echo   (default)  Build the NVIDIA CUDA NSIS installer.
+echo   --amd      Build the AMD ROCm Windows installer.
+echo   --cpu      Build the CPU Windows installer.
+echo   --editor   Build the lightweight Editor Windows installer.
+echo   --dry-run   Print the selected config and release variant without building.
+echo   --no-hold   Return immediately instead of waiting for Q after completion.
+echo   --trace     Enable cmd.exe command tracing.
+exit /b 2
 
 :hold_error
 if "%HOLD_ON_EXIT%"=="0" exit /b 1

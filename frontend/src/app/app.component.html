@@ -51,7 +51,7 @@
       <div class="tab-content">
         <!-- GPU未検出バナー（CUDA/ROCm未インストール時） -->
         <!-- 開発用プレビュー: OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda で表示 -->
-        <div *ngIf="!cpuOnlyBuild && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
+        <div *ngIf="!runtimeCpuOnlyBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
             <span class="gpu-setup-title">
@@ -206,7 +206,7 @@
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
             <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild && !allSetupStatus()?.llmBackend">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
                 [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
@@ -220,7 +220,7 @@
                 *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma GGUF -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild()">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaGguf"
@@ -235,7 +235,7 @@
                 *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="aiProofreadBuild && buildVariant() === 'cuda'">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && buildVariant() === 'cuda'">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
@@ -492,7 +492,7 @@
               </div>
             </div>
 
-            <div *ngIf="!cpuOnlyBuild && gpuSetupHint" class="gpu-hint-block">
+            <div *ngIf="!runtimeCpuOnlyBuild() && gpuSetupHint" class="gpu-hint-block">
               <p class="gpu-hint-title">GPU設定ヒント</p>
               <pre class="gpu-hint">{{ gpuSetupHint }}</pre>
             </div>
@@ -571,7 +571,7 @@
                     <mat-option value="whisper_turbo">Whisper turbo</mat-option>
                     <mat-option value="whisper_large_v3">Whisper large-v3</mat-option>
                     <mat-option value="diarization">話者分離モデル</mat-option>
-                    <mat-option *ngIf="aiProofreadBuild" value="llm">LLMモデル</mat-option>
+                    <mat-option *ngIf="runtimeAiProofreadBuild()" value="llm">LLMモデル</mat-option>
                     <mat-option value="all">すべて</mat-option>
                   </mat-select>
                 </mat-form-field>
@@ -627,7 +627,7 @@
                     <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
                   </div>
                 </div>
-                <ng-container *ngIf="!cpuOnlyBuild">
+                <ng-container *ngIf="!runtimeCpuOnlyBuild()">
                   <ng-container *ngIf="computeEnvInfo(); else envLoading">
                     <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
                       [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
@@ -661,7 +661,7 @@
                   <mat-label>計算方式</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
                     [value]="computeType()" (valueChange)="onComputeTypeChange($event)">
-                    <mat-option *ngFor="let option of computeTypeOptions" [value]="option.value"
+                    <mat-option *ngFor="let option of computeTypeOptions()" [value]="option.value"
                       [disabled]="option.value === 'int8' && isRocmGpu()">
                       {{ option.label }}{{ option.value === 'int8' && isRocmGpu() ? '（ROCm 未検証）' : '' }}
                     </mat-option>
@@ -711,7 +711,7 @@
                   </mat-form-field>
                 </div>
                 <div class="setup-component-list voice-input-pack-list">
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? cpuVoiceInputBuild">
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? runtimeCpuVoiceInputBuild()">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.cpuBackend"
                       [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.cpuBackend"
@@ -724,7 +724,7 @@
                       [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'skipped'"
                       *ngIf="editorVoiceInputPackComponentProgress('voice_cpu_backend') as p">{{ p.message }}</span>
                   </div>
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? cpuVoiceInputBuild">
+                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? runtimeCpuVoiceInputBuild()">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
                       [class.setup-comp-ok]="editorVoiceInputPackStatus()?.ffmpeg"
                       [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.ffmpeg"
@@ -775,7 +775,7 @@
                 <p class="reader-hint voice-input-pack-note">
                   音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
-                <p *ngIf="cpuVoiceInputBuild && editorVoiceInputMemoryWarning() as memoryWarning"
+                <p *ngIf="runtimeCpuVoiceInputBuild() && editorVoiceInputMemoryWarning() as memoryWarning"
                   class="reader-hint voice-input-pack-note voice-input-memory-warning"
                   [class.voice-input-memory-warning-low]="editorVoiceInputMemoryTier() === 'low'">
                   {{ memoryWarning }}
@@ -813,7 +813,7 @@
                     <mat-icon class="material-symbols-outlined">download</mat-icon>
                     {{ editorVoiceInputPackStatus()?.installed ? '導入済み' : (editorVoiceInputPackInstalling() ? '導入中...' : '音声入力パックをダウンロード') }}
                   </button>
-                  <button *ngIf="cpuVoiceInputBuild && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
+                  <button *ngIf="runtimeCpuVoiceInputBuild() && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
                     mat-flat-button color="warn" (click)="enableEditorVoiceInputForLowMemory()">
                     <mat-icon class="material-symbols-outlined">warning</mat-icon>
                     非推奨環境で音声入力を有効にする
@@ -827,14 +827,14 @@
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="devDeleteEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">delete</mat-icon>
-                    {{ cpuVoiceInputBuild ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
+                    {{ runtimeCpuVoiceInputBuild() ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
               </div>
             </ng-container>
 
-            <ng-container *ngIf="aiProofreadBuild">
+            <ng-container *ngIf="runtimeAiProofreadBuild()">
               <div class="section-separator"><span>校正用AIモデル</span></div>
               <div class="actions-row settings-llm-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
@@ -1193,7 +1193,7 @@
         発言の統合
       </button>
       <span class="copy-status" *ngIf="mergeStatus()">{{ mergeStatus() }}</span>
-      <div class="merge-overall-center" *ngIf="aiProofreadBuild">
+      <div class="merge-overall-center" *ngIf="runtimeAiProofreadBuild()">
         <button *ngIf="overallProofreadHasPendingItems(); else overallProofreadRunButtons"
           mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
           (click)="openOrRunOverallProofread(proofreadDialogMode)">

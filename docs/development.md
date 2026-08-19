@@ -23,6 +23,21 @@ scripts\setup-dev.bat
 scripts\run-dev.bat
 ```
 
+CPU版の開発確認:
+
+```bat
+scripts\setup-dev.bat --cpu-torch
+scripts\run-dev-cpu.bat
+```
+
+`--cpu-torch` ではCPU版の文字起こし・話者分離に不要なGemma 4の自動取得を
+既定でスキップします。音声入力・LLM校正も確認する場合だけ、次のように
+`--with-gemma`を追加してください。
+
+```bat
+scripts\setup-dev.bat --cpu-torch --with-gemma
+```
+
 `setup-dev.bat` の実行内容（概要）:
 
 - npm install（ルート / frontend）
@@ -39,6 +54,16 @@ scripts\run-dev.bat
 bash scripts/setup-dev.sh
 bash scripts/run-dev.sh
 ```
+
+Linux CPU版の開発確認:
+
+```sh
+bash scripts/setup-dev.sh --cpu-torch -y
+bash scripts/run-dev-cpu.sh
+```
+
+LinuxでもCPUバックエンドではGemma 4の自動取得を既定でスキップします。
+必要な場合は`--with-gemma`を追加してください。
 
 - `setup-dev.sh` は Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存の準備を担います。
 - Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先してください。

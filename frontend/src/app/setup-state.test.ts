@@ -60,6 +60,13 @@ test('setup requirements preserve build-specific dependencies', () => {
   assert.equal(needsFullSetup({
     ...input, buildVariant: 'rocm', status: { ...status, gemmaMtpGguf: false }
   }), false);
+  // CPU版は後付けGemma/llama.cppを文字起こしの必須条件にしない。
+  assert.equal(needsFullSetup({
+    ...input,
+    aiProofreadBuild: false,
+    buildVariant: 'cpu',
+    status: { ...status, gemmaGguf: false, gemmaMtpGguf: false, llmBackend: false }
+  }), false);
 });
 
 test('setup status projections provide success, unavailable, and browser defaults', () => {

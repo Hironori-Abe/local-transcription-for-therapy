@@ -86,6 +86,7 @@ import {
   resolveLlmDeviceVramMibValue,
   resolveLlmInstallableGpuEntryValue,
   resolveLlmTargetBackendKeyValue,
+  resolveRuntimeBuildFlagsValue,
   resolveStepForStageValue,
   secondsToEstimatedMinutesValue,
   selectedFileNameValue,
@@ -1082,4 +1083,32 @@ test('saved selection settings normalize invalid and CPU-only values safely', ()
   assert.equal(normalizeTranscriptionDeviceValue('cpu', false), 'cpu');
   assert.equal(normalizeTranscriptionDeviceValue('unknown', false), 'cuda');
   assert.equal(normalizeTranscriptionDeviceValue('cuda', true), 'cpu');
+});
+
+test('runtime build flags trust the Rust CPU variant even when the frontend default leaked into a package', () => {
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, false, 'cpu'), {
+    cpuOnlyBuild: true,
+    aiProofreadBuild: false,
+    cpuVoiceInputBuild: true
+  });
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, 'cuda'), {
+    cpuOnlyBuild: false,
+    aiProofreadBuild: true,
+    cpuVoiceInputBuild: false
+  });
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, false, 'cuda'), {
+    cpuOnlyBuild: false,
+    aiProofreadBuild: true,
+    cpuVoiceInputBuild: false
+  });
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, null), {
+    cpuOnlyBuild: true,
+    aiProofreadBuild: false,
+    cpuVoiceInputBuild: true
+  });
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(true, false, 'cpu'), {
+    cpuOnlyBuild: true,
+    aiProofreadBuild: false,
+    cpuVoiceInputBuild: true
+  });
 });

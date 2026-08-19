@@ -7,6 +7,8 @@ cd /d "%~dp0\.."
 set "FRONTEND_URL=http://127.0.0.1:4202"
 set "CPU_TAURI_CONFIG=tauri.cpu.windows.override.json"
 set "CPU_TAURI_DEV_CONFIG=tauri.cpu.dev.windows.override.json"
+set "LOTT_TORCH_BACKEND=cpu"
+if "%PYTHON_BIN%"=="" if exist "%cd%\.venv312\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312\Scripts\python.exe"
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
 
 where npm >nul 2>&1
@@ -42,6 +44,8 @@ echo [OK] Angular CPU dev server is ready: %FRONTEND_URL%
 echo Starting Tauri dev for CPU...
 echo FRONTEND_URL=%FRONTEND_URL%
 echo Tauri configs=%CPU_TAURI_CONFIG%, %CPU_TAURI_DEV_CONFIG%
+echo LOTT_TORCH_BACKEND=%LOTT_TORCH_BACKEND%
+echo PYTHON_BIN=%PYTHON_BIN%
 call npm run tauri:dev -- --config "%CPU_TAURI_CONFIG%" --config "%CPU_TAURI_DEV_CONFIG%"
 if errorlevel 1 goto :err_tauri
 exit /b 0

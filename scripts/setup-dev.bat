@@ -5,6 +5,8 @@ set "PYTHON_BIN=py"
 set "PYTHON_BOOTSTRAP=py"
 set "PYTHON_BOOTSTRAP_ARGS=-3.12"
 set "ASSUME_YES=0"
+set "GEMMA_OPTION_EXPLICIT=0"
+set "SKIP_GEMMA=0"
 
 REM GPU backend: cuda (default, stable) / rocm (experimental) / cpu
 set "TORCH_BACKEND=%LOTT_TORCH_BACKEND%"
@@ -26,6 +28,18 @@ if /I "%~1"=="--torch-backend" (
 )
 if /I "%~1"=="--cpu-torch" (
   set "TORCH_BACKEND=cpu"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--skip-gemma" (
+  set "SKIP_GEMMA=1"
+  set "GEMMA_OPTION_EXPLICIT=1"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--with-gemma" (
+  set "SKIP_GEMMA=0"
+  set "GEMMA_OPTION_EXPLICIT=1"
   shift
   goto parse_args
 )
@@ -81,6 +95,7 @@ if /I not "%TORCH_BACKEND%"=="cuda" if /I not "%TORCH_BACKEND%"=="rocm" if /I no
   echo [ERROR] Invalid GPU backend: %TORCH_BACKEND%. Use cuda, rocm, or cpu.
   goto :hold_error
 )
+if /I "%TORCH_BACKEND%"=="cpu" if "%GEMMA_OPTION_EXPLICIT%"=="0" set "SKIP_GEMMA=1"
 
 REM Keep the experimental AMD/ROCm Python packages isolated from the stable
 REM NVIDIA/CUDA development environment. AMD deliberately ignores the generic
@@ -228,6 +243,11 @@ if exist "src-tauri\resources\ffmpeg\ffmpeg.exe" (
 )
 echo.
 
+if "%SKIP_GEMMA%"=="1" (
+  echo [3b/6] Skipping Gemma4 E4B GGUF model download.
+  echo        CPU development does not require Gemma unless --with-gemma is specified.
+  goto :gemma_done
+)
 echo [3b/6] Downloading Gemma4 E4B GGUF model (for LLM proofreading)...
 set "GEMMA_DIR=python_sidecar\models\llm\gemma-4-e4b-it"
 set "GEMMA_FILE=%GEMMA_DIR%\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
@@ -262,6 +282,8 @@ if exist "%GEMMA_MTP_FILE%" (
     echo [OK] MTP model downloaded: %GEMMA_MTP_FILE%
   )
 )
+echo.
+:gemma_done
 echo.
 
 echo [3c/6] llama-server CUDA binary (for NVIDIA GPU LLM inference)...
@@ -484,6 +506,11 @@ if /I "%TORCH_BACKEND%"=="rocm" (
   echo        AMD:    %DEV_VENV_DIR_ABS%
   echo        NVIDIA: %cd%\.venv312
   echo Next: npm run tauri:dev:amd
+) else if /I "%TORCH_BACKEND%"=="cpu" (
+  echo [INFO] CPU development skips Gemma by default. Use --with-gemma to install it.
+  echo [INFO] To rebuild the venv from scratch:
+  echo        scripts\rebuild-runtime-venv.bat
+  echo Next: scripts\run-dev-cpu.bat
 ) else (
   echo [INFO] To rebuild the venv from scratch:
   echo        scripts\rebuild-runtime-venv.bat
@@ -498,6 +525,8 @@ echo Options:
 echo   --torch-backend VALUE   GPU backend: cuda, rocm, or cpu. Default: cuda.
 echo   --amd                   Shortcut for --torch-backend rocm (EXPERIMENTAL on Windows).
 echo   --cpu-torch             Shortcut for --torch-backend cpu.
+echo   --skip-gemma            Skip Gemma GGUF downloads.
+echo   --with-gemma            Install Gemma even for the CPU development setup.
 echo   -y, --yes               Non-interactive: use defaults.
 echo   -h, --help              Show this help.
 echo.

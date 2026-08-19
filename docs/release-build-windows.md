@@ -22,6 +22,10 @@ scripts\setup-build-tools.bat
 ```
 
 - フロントエンドビルドと `cargo tauri build --bundles nsis` を一括実行します。
+- 引数なしは従来どおりNVIDIA CUDA版です。CPU / AMD / Editor版はそれぞれ
+  `scripts\setup-build-tools.bat --cpu`、`--amd`、`--editor`でビルドします。
+- 選択内容だけを確認する場合は、実際のダウンロード・ビルドを行わない
+  `scripts\setup-build-tools.bat --cpu --dry-run --no-hold`を使えます。
 - 初回は Rust のコンパイルがあるため数十分かかります。
 - エラー調査でログを残したい場合は、入力待ちを無効化してリダイレクトします。
 
@@ -83,7 +87,7 @@ src-tauri\resources\python312\python.exe scripts\collect_licenses.py --venv .ven
 
 `.venv312` がない環境では自動収集をスキップし、既存の `licenses\THIRD_PARTY_FULL.txt` を同梱します。リリース前は配布相当の Python 環境で必ず再生成してください。
 
-`setup-build-tools.bat` は `--config tauri.nvidia.windows.override.json` を自動で指定するため、**手動で `cargo tauri build` を実行する場合も必ずこのオプションを付ける**こと。
+`setup-build-tools.bat` は選択した配布ラインに対応する `--config tauri.*.windows.override.json` を自動で指定します。手動で `cargo tauri build` を実行する場合も、同じ配布ラインのoverrideを必ず指定してください。
 
 `setup-build-tools.bat` はビルド前に `src-tauri\target\release\_up_` を削除します。これは過去の dev / portable build で混入した `.venv312` や PyAV 系ファイルが staging に残る事故を避けるためです。
 
@@ -197,10 +201,11 @@ AMD版はGPU処理に失敗した場合にCPUへフォールバックせず、�
 
 | override | 用途 |
 | --- | --- |
-| `tauri.nvidia.windows.override.json` | 安定版 / NVIDIA RTX 主軸 / Windows NSIS（`setup-build-tools.bat` が使用） |
+| `tauri.nvidia.windows.override.json` | 安定版 / NVIDIA RTX 主軸 / Windows NSIS（`setup-build-tools.bat` の既定） |
 | `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムを同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入。LLM ランタイム未同梱 |
 | `tauri.amd.windows.override.json` | AMD / Windows NSIS ビルド用（詳細調整予定） |
 | `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux。自己完結Python 3.12基本ランタイムを同梱（詳細調整予定） |
+| `tauri.cpu.windows.override.json` | CPU 版 / Windows NSIS（`setup-build-tools.bat --cpu`） |
 | `tauri.editor.windows.override.json` | 軽量 Editor 版 / Windows NSIS（LLM 校正ランタイム非搭載のため `nsis/editor-hooks.nsh` を使用） |
 | `tauri.cpu.linux.override.json` | CPU 版 / Linux（deb + AppImage） |
 | `tauri.editor.linux.override.json` | 軽量 Editor 版 / Linux（deb + AppImage） |
@@ -235,4 +240,16 @@ cargo tauri build --bundles nsis --config tauri.editor.windows.override.json
 ```sh
 # Linux (deb + AppImage)
 cargo tauri build --bundles deb appimage --config tauri.editor.linux.override.json
+```
+
+CPU版をスクリプトからビルドする場合:
+
+```bat
+scripts\setup-build-tools.bat --cpu --no-hold
+```
+
+AMD版はexperimentalのため、必要なWindows ROCm環境を用意したうえで次を指定します。
+
+```bat
+scripts\setup-build-tools.bat --amd --no-hold
 ```

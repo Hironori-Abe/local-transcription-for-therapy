@@ -6,7 +6,10 @@ cd "$ROOT_DIR"
 
 FRONTEND_PID=""
 FRONTEND_STARTED=0
-FRONTEND_URL="${LOTT_FRONTEND_URL:-http://127.0.0.1:4200}"
+FRONTEND_HOST="${LOTT_FRONTEND_HOST:-127.0.0.1}"
+FRONTEND_PORT="${LOTT_FRONTEND_PORT:-4200}"
+FRONTEND_URL="${LOTT_FRONTEND_URL:-http://${FRONTEND_HOST}:${FRONTEND_PORT}}"
+FRONTEND_BUILD_TARGET="${LOTT_FRONTEND_BUILD_TARGET:-}"
 TAURI_CONFIG="${LOTT_TAURI_DEV_CONFIG:-tauri.dev.linux.override.json}"
 EMULATION_MODE="${OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE:-${RUN_DEV_EMULATION_MODE:-none}}"
 EMULATION_STATE_FILE="$ROOT_DIR/.dev-runtime-emulation.env"
@@ -215,7 +218,14 @@ if frontend_ready; then
   ok "Angular dev server is already running: $FRONTEND_URL"
 else
   info "Starting Angular dev server..."
-  npm --prefix frontend run start &
+  if [[ -n "$FRONTEND_BUILD_TARGET" ]]; then
+    npm --prefix frontend run start -- \
+      --host "$FRONTEND_HOST" \
+      --port "$FRONTEND_PORT" \
+      --build-target "$FRONTEND_BUILD_TARGET" &
+  else
+    npm --prefix frontend run start &
+  fi
   FRONTEND_PID="$!"
   FRONTEND_STARTED=1
 

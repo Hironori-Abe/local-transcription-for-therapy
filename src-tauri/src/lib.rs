@@ -7151,6 +7151,20 @@ fn is_amd_gpu_build(app: &AppHandle) -> bool {
     app.config().identifier.contains("amd")
 }
 
+/// Return the packaged GPU/CPU flavor from the Tauri identifier.
+///
+/// This is kept separate from `check_gpu_availability_blocking` so the CPU
+/// early-return path can be tested without constructing a Tauri `AppHandle`.
+fn build_variant_for_identifier(identifier: &str) -> &'static str {
+    if identifier.contains("lott-cpu") {
+        "cpu"
+    } else if identifier.contains("amd") {
+        "rocm"
+    } else {
+        "cuda"
+    }
+}
+
 /// Select the Python dependency variant from the packaged application ID.
 ///
 /// Keep this independent of Tauri/OS cfgs so both the Linux and Windows setup
@@ -8444,6 +8458,22 @@ async fn check_gpu_availability(app: AppHandle) -> serde_json::Value {
 }
 
 fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
+    let build_variant = build_variant_for_identifier(app.config().identifier.as_str());
+
+    // CPU版ではホストの nvidia-smi / rocm-smi を確認する必要がない。
+    // CPU版を NVIDIA/AMD 機で起動しても、これらの外部コマンドが見つからない
+    // ことによる待ち時間やログノイズを発生させず、実行時 buildVariant を
+    // 直ちに確定する。フロントエンドの起動ゲートはこの値を単一の真実とする。
+    if build_variant == "cpu" {
+        return serde_json::json!({
+            "cudaAvailable": false,
+            "rocmAvailable": false,
+            "buildVariant": build_variant,
+            "runtimePlatform": std::env::consts::OS,
+            "localLlmAppsEnabled": local_llm_apps_enabled(&app),
+        });
+    }
+
     let mut nvidia_cmd = Command::new("nvidia-smi");
     apply_windows_no_window(&mut nvidia_cmd);
     apply_host_command_env(&mut nvidia_cmd);
@@ -8463,14 +8493,6 @@ fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
         .map(|o| o.status.success())
         .unwrap_or(false);
     let rocm_available = rocm_kfd || rocm_smi_ok;
-
-    let build_variant = if is_cpu_only_build(&app) {
-        "cpu"
-    } else if app.config().identifier.contains("amd") {
-        "rocm"
-    } else {
-        "cuda"
-    };
 
     serde_json::json!({
         "cudaAvailable": cuda_available,
@@ -10193,6 +10215,23 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_variant_matches_packaged_identifier_and_prioritizes_cpu() {
+        assert_eq!(
+            build_variant_for_identifier("net.gakkousya.lott-cpu"),
+            "cpu"
+        );
+        assert_eq!(
+            build_variant_for_identifier("net.gakkousya.lott-amd"),
+            "rocm"
+        );
+        assert_eq!(build_variant_for_identifier("net.gakkousya.lott"), "cuda");
+        assert_eq!(
+            build_variant_for_identifier("net.gakkousya.lott-cpu-amd"),
+            "cpu"
+        );
+    }
 
     #[test]
     fn python_setup_variant_matches_packaged_gpu_flavor() {

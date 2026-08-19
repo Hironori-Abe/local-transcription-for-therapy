@@ -5,6 +5,7 @@ HAS_WARN=0
 NEEDS_NPU_REBOOT=0
 SKIP_APT=0
 SKIP_GEMMA=0
+GEMMA_OPTION_EXPLICIT=0
 SKIP_LLAMA_CPP=0
 SKIP_RUST=0
 ONLY_RUST=0
@@ -31,6 +32,7 @@ Options:
   -y, --yes              Install packages without prompting (apt / pacman).
   --skip-apt             Skip system package installation (apt on Ubuntu, pacman on CachyOS/Arch).
   --skip-gemma           Skip Gemma GGUF model download.
+  --with-gemma           Install Gemma even for the CPU development setup.
   --skip-llama-cpp       Skip optional llama-cpp-python installation.
   --skip-rust            Skip Rustup/Cargo installation and check.
   --only-rust            Only install/check Rustup/Cargo, then exit.
@@ -74,6 +76,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-gemma)
       SKIP_GEMMA=1
+      GEMMA_OPTION_EXPLICIT=1
+      shift
+      ;;
+    --with-gemma)
+      SKIP_GEMMA=0
+      GEMMA_OPTION_EXPLICIT=1
       shift
       ;;
     --skip-llama-cpp)
@@ -200,6 +208,14 @@ esac
 
 if [[ "$TORCH_BACKEND" == "rocm" || "$LLAMA_CPP_BACKEND" == "hipblas" || "$LLAMA_CPP_BACKEND" == "vulkan" || "$INSTALL_ROCM" == "1" || "$INSTALL_AMD_NPU" == "1" ]]; then
   AMD_PACKAGES=1
+fi
+
+# CPU development does not use the built-in proofreading LLM.  Keep the
+# existing --skip-gemma switch explicit for every other backend, but make CPU
+# setup cheap by default; --with-gemma remains available for voice-input/LLM
+# development on a CPU machine.
+if [[ "$TORCH_BACKEND" == "cpu" && "$GEMMA_OPTION_EXPLICIT" == "0" ]]; then
+  SKIP_GEMMA=1
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -1053,9 +1069,9 @@ write_linux_env_file() {
     if [[ -f /opt/xilinx/xrt/setup.sh ]]; then
       printf '[ -f /opt/xilinx/xrt/setup.sh ] && source /opt/xilinx/xrt/setup.sh\n'
     fi
-    if [[ "$TORCH_BACKEND" == "rocm" ]]; then
-      printf 'export LOTT_TORCH_BACKEND=rocm\n'
-    fi
+    # Keep the selected backend explicit so switching from an AMD setup to a
+    # CPU setup cannot leave a stale ROCm value in .dev-linux.env.
+    printf 'export LOTT_TORCH_BACKEND=%q\n' "$TORCH_BACKEND"
   } > "$env_file"
 
   ok "Wrote Linux dev env file: $env_file"

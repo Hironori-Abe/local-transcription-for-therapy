@@ -24,6 +24,12 @@ import { BestEffortBrowserStorage, loadAudioMetadataDuration, waitForAudioSeek }
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
 import {
+  DELAYED_GPU_RECHECK_DELAY_MS,
+  isGpuRuntimeResolved,
+  shouldScheduleDelayedGpuRecheck,
+  type DelayedGpuRecheckState
+} from './gpu-runtime-recheck';
+import {
   buildPlaybackQueue,
   clampPlaybackTarget,
   clampTargetToRange,
@@ -1191,6 +1197,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly proofreadTicker = new RepeatingTimer();
   private readonly diarizationTicker = new RepeatingTimer();
   private readonly llmProofreadTicker = new RepeatingTimer();
+  /** セットアップ直後だけ使う、Linux NVIDIA向けの遅延GPU再確認。 */
+  private readonly delayedGpuRecheckTimer = new OneShotTimer();
   private llmProgressOffset = 0;
   private llmTotalProcessedCount = 0;
   private overallProofreadProgressCurrent = 0;
@@ -1925,6 +1933,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.findReplaceFocusTimer.cancel();
     this.segmentCursorFocusTimer.cancel();
     this.timeEditFocusTimer.cancel();
+    this.delayedGpuRecheckTimer.cancel();
   }
 
   /**
@@ -4232,7 +4241,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * eventCoalescing 構成で描画が遅延し、CUDA 導入済みでもバナーが古いまま残るケースを、
    * アプリ再起動なしにその場で解消できる。
    */
-  async recheckGpuRuntime(): Promise<void> {
+  async recheckGpuRuntime(notify = true): Promise<void> {
     if (!this.isTauriRuntime() || this.gpuRechecking()) return;
     this.gpuRechecking.set(true);
     try {
@@ -4242,9 +4251,58 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       );
     } finally {
       this.gpuRechecking.set(false);
+      this.cancelDelayedGpuRecheckIfResolved();
+      const unresolvedLinuxNvidia = shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState());
+      if (notify && unresolvedLinuxNvidia) {
+        // 手動確認でまだ初期化中の場合だけ、次の自動確認があることを伝える。
+        // 自動確認自身からは通知せず、短い再試行を連続表示しない。
+        this.scheduleDelayedGpuRecheckAfterSetup();
+        this.snackBar.open(
+          'まだCUDAを確認できません。セットアップ直後は約1分後に自動再確認します。',
+          undefined,
+          { duration: 5000 }
+        );
+      }
       // 確定値を即座に描画へ反映させる（フレーム単位の遅延を回避）
       this.appRef.tick();
     }
+  }
+
+  private delayedGpuRecheckState(): DelayedGpuRecheckState {
+    return {
+      platform: this.runtimePlatform(),
+      buildVariant: this.runtimeBuildVariant(),
+      cudaAvailable: this.cudaAvailable(),
+      transcriptionRuntimeAvailable: this.transcriptionRuntimeAvailable(),
+      noCudaEmulation: this.isNoCudaEmulation(),
+    };
+  }
+
+  private cancelDelayedGpuRecheckIfResolved(): void {
+    if (isGpuRuntimeResolved(this.delayedGpuRecheckState())) {
+      this.delayedGpuRecheckTimer.cancel();
+    }
+  }
+
+  /**
+   * セットアップ完了直後のCUDA初期化遅延を吸収するための安全網。
+   * 起動時には予約せず、Linux NVIDIAで未解決の場合だけ一度だけ実行する。
+   */
+  private scheduleDelayedGpuRecheckAfterSetup(): void {
+    const state = this.delayedGpuRecheckState();
+    if (!shouldScheduleDelayedGpuRecheck(state)) {
+      this.delayedGpuRecheckTimer.cancel();
+      return;
+    }
+
+    this.delayedGpuRecheckTimer.schedule(() => {
+      if (!shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState())) {
+        return;
+      }
+      void this.recheckGpuRuntime(false).catch(() => {
+        // 手動再確認と同じく、失敗時は現在の状態を保ち、UIを固めない。
+      });
+    }, DELAYED_GPU_RECHECK_DELAY_MS);
   }
 
   private async checkGpuAvailability(retry = false): Promise<void> {
@@ -4282,6 +4340,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
         this.applyBackendModeFromSettings();
       });
+      this.cancelDelayedGpuRecheckIfResolved();
     } catch {
       // GPU確認失敗時は既存の設定値を維持する
     }
@@ -5416,6 +5475,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     this.setupRunning.set(true);
     this.setupProgressMap.set({});
+    let setupTaskSucceeded = false;
     try {
       const setupTask = invoke<boolean>('run_full_setup', {
         hfToken: tokenForValidation || null,
@@ -5425,6 +5485,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.diarizationInstallTokenVisible.set(false);
       tokenForValidation = '';
       const setupOk = await setupTask;
+      setupTaskSucceeded = setupOk;
       // Python/package/model setup must finish before attempting the optional
       // proofreading backend.  Rust returns false for a classified download
       // failure; continuing here used to hide the root cause behind a second
@@ -5520,6 +5581,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.checkTranscriptionRuntimeSupport(
         this.cudaAvailable() === true
       );
+      if (setupTaskSucceeded) {
+        this.scheduleDelayedGpuRecheckAfterSetup();
+      }
       this.ngZone.run(() => {
         this.activeTabIndex.set(0);
       });
@@ -5578,6 +5642,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.runtimeCpuOnlyBuild()
         ));
       });
+      this.cancelDelayedGpuRecheckIfResolved();
     } catch (error) {
       this.ngZone.run(() => {
         this.transcriptionTabVisible.set(true);

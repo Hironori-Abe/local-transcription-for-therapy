@@ -155,6 +155,7 @@ linuxdeploy が生成する `apprun-hooks/linuxdeploy-plugin-gtk.sh` は、ビ�
 - Wayland では `GTK_IM_MODULE` が未設定、または AppDir cache に存在しない場合に、cache にある `im-wayland` へ救済する。cache に存在する指定は尊重する。X11 の未設定・不明な指定は `XMODIFIERS` がある場合だけ `im-xim` へ救済する。`GTK_IM_MODULE_FILE` は AppDir 同梱 GTK 用 cache を使い、ホスト GTK module との ABI 混在を避ける
 - 従来の X11 経路を試す場合は `LOTT_GDK_BACKEND=x11 /path/to/Local\ Transcription\ for\ Therapy.AppImage` とする。ユーザーが明示した `GDK_BACKEND` / `GTK_IM_MODULE` / `XMODIFIERS` は通常の起動では上書きしない
 - テキスト欄クリックで固まる場合は、まず `pgrep -af offline-transcriber` で PID を確認し、`tr '\0' '\n' < /proc/<pid>/environ | rg 'GDK_BACKEND|GTK_IM_MODULE|GTK_IM_MODULE_FILE|XMODIFIERS'` で実効値を記録する。Wayland と X11 の両方を `LOTT_GDK_BACKEND` で比較し、`journalctl --user` の `webkit` / `gtk` / `ime` / `wayland` 関連ログを採取する。合成クリック・キー注入を検証手順に使わず、物理操作で再現した場合だけ必要に応じてメインプロセスと WebKit 子プロセスを gdb attach する
+- AppImageとは異なり、CachyOS / ArchのホストGTK/WebKitGTKパッケージは `GDK_BACKEND` / `GTK_IM_MODULE` / `WEBKIT_DISABLE_DMABUF_RENDERER` をランチャーから既定設定しない。旧X11/DMA-BUF無効経路の比較が必要な場合だけ、起動時に環境変数を明示する
 
 ### AppImage とホストコマンドの分離（LD_LIBRARY_PATH 漏れ）
 

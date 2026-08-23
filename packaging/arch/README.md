@@ -71,16 +71,23 @@ pacmanの標準フックがデスクトップ情報キャッシュを更新し�
 アイコンはhicolorテーマの標準サイズ一式と実ウィンドウの両方へ設定します。
 インストール・更新時はpacmanのフックがアイコンテーマキャッシュを更新します。
 
-NVIDIAとWebKitGTKのGBM問題を避けるため、ランチャーは既定で
-`GDK_BACKEND=x11`と`WEBKIT_DISABLE_DMABUF_RENDERER=1`を設定します。
-明示した環境変数は尊重されます。診断目的でWaylandへ戻す場合は次のようにします。
+ランチャーはホストのデスクトップ環境、`GDK_BACKEND`、`GTK_IM_MODULE`、
+`WEBKIT_DISABLE_DMABUF_RENDERER`などの既定値を変更しません。これにより、KDE/GNOMEなど
+実行中のデスクトップ環境が選んだWayland/X11とWebKitGTKの描画経路をそのまま使います。
+
+表示の切り分けでX11/XWaylandを明示する場合は、次のように起動します。
 
 ```sh
-LOTT_GDK_BACKEND=wayland lott
+LOTT_GDK_BACKEND=x11 lott
 ```
 
-DMA-BUF無効化を外すと、確認済みのNVIDIA環境では
-`Failed to create GBM buffer`が発生するため、通常起動では維持します。
+以前のNVIDIA向け回避策を比較する場合だけ、DMA-BUF rendererの無効化も明示します。
+
+```sh
+LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+```
+
+これは診断用の組み合わせであり、通常起動時にはランチャーが設定しません。
 
 ## アンインストール
 
@@ -143,6 +150,6 @@ dist/cachyos/experimental/v0.9.8/
 静的検査でもZMM・mask・AVX-512 broadcast命令を拒否します。未対応CPU向けには
 `scripts/build-arch-package.sh`で生成する汎用`x86-64`版を使用してください。
 
-表示バックエンドは検証結果に合わせてX11、DMA-BUF renderer無効を既定とします。
-Waylandではカクつきが増え、DMA-BUF rendererを有効にするとGBM buffer作成エラーが
-再現したため、experimental版でもこの安全側の起動設定は変更しません。
+表示バックエンドとDMA-BUF rendererは、experimental版でもホストのデスクトップ環境と
+WebKitGTKの既定値を使用します。以前のX11/DMA-BUF無効構成を比較する場合は、上記の
+診断用環境変数を明示してください。

@@ -1,27 +1,12 @@
 #!/bin/sh
 set -eu
 
-# NVIDIA + WebKitGTKのGBM/Wayland問題を避ける既定値。
-# 利用者が明示した環境変数は尊重し、LOTT_GDK_BACKENDを最優先する。
+# Archパッケージはホストのデスクトップ環境とGTK/WebKitGTKの既定値を使う。
+# X11/XWaylandを比較する場合だけ、診断用にLOTT_GDK_BACKENDを明示する。
+# GDK_BACKENDやWEBKIT_DISABLE_DMABUF_RENDERERなど、利用者が明示した環境変数は
+# そのまま尊重し、未設定時にランチャーから既定値を追加しない。
 if [ -n "${LOTT_GDK_BACKEND:-}" ]; then
   export GDK_BACKEND="$LOTT_GDK_BACKEND"
-elif [ -z "${GDK_BACKEND:-}" ]; then
-  export GDK_BACKEND=x11
-fi
-
-# The Arch package uses the host GTK/WebKitGTK stack.  On the X11/XWayland
-# path GTK otherwise may not create an input context for Fcitx, which makes
-# WebKit text inputs appear permanently unfocusable.  Preserve an explicit
-# user choice, and only select Fcitx when the GTK module is installed.
-_lott_gdk_backend="${GDK_BACKEND%%,*}"
-if [ "$_lott_gdk_backend" = x11 ] && [ -z "${GTK_IM_MODULE:-}" ]; then
-  if [ -r /usr/lib/gtk-3.0/3.0.0/immodules/im-fcitx5.so ]; then
-    export GTK_IM_MODULE=fcitx
-  fi
-fi
-
-if [ "${WEBKIT_DISABLE_DMABUF_RENDERER+x}" != x ]; then
-  export WEBKIT_DISABLE_DMABUF_RENDERER=1
 fi
 
 exec '/usr/lib/Local Transcription for Therapy/lott-bin' "$@"

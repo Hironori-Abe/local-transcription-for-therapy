@@ -120,6 +120,42 @@ fn llm_server_port_open(port: u16) -> bool {
     .is_ok()
 }
 
+/// Linux では llama.cpp のモデルロードまで含めて OpenAI 互換サーバーが利用可能か確認する。
+///
+/// llama-server はソケットを先に listen し、モデルロード中は `/health` に 503
+/// (`loading`) を返す。そのため TCP ポートの開放だけを起動完了と判定すると、呼び出し
+/// 側が `/v1/models` を短い間隔で繰り返し問い合わせることになる。b10075 以降の
+/// `/health` を優先し、古いビルドや互換サーバーでは 404 の場合だけ `/v1/models` に
+/// フォールバックする。
+fn llm_server_ready(port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    // Windows/macOS は従来のポート判定を維持する。Linux実機で確認された
+    // モデルロード中の高頻度リトライだけを、このreadiness判定の対象にする。
+    #[cfg(not(target_os = "linux"))]
+    return llm_server_port_open(port);
+
+    #[cfg(target_os = "linux")]
+    {
+        // `/health` へのHTTP接続自体がlisten確認を兼ねる。先にTCP接続を別途行うと、
+        // モデルロード待ちの各pollで接続を2回発生させるため、ここでは1リクエストだけ送る。
+        let target = LocalOpenAiHttpTarget {
+            host: "127.0.0.1".to_string(),
+            authority: format!("127.0.0.1:{port}"),
+            port,
+            path_prefix: String::new(),
+        };
+        match local_openai_http_get_status_body(&target, "/health", Duration::from_secs(2)) {
+            Ok((code, _, _)) if (200..300).contains(&code) => true,
+            Ok((404, _, _)) => {
+                local_openai_http_get_json(&target, "/v1/models", Duration::from_secs(2)).is_ok()
+            }
+            Ok(_) | Err(_) => false,
+        }
+    }
+}
+
 /// アプリ固有 lemond に割り当てるポートを決定する。
 /// 優先順: 既存 config.json のポート（空きなら再利用）→ OS が割り当てた空きポート。
 fn resolve_llm_server_port(cache_dir: &Path) -> u16 {
@@ -2097,9 +2133,9 @@ fn start_amd_12b_blocking(
             }
             // 12B はロード+warmup に時間がかかるため最大 120 秒待つ。
             let mut started = false;
-            for _ in 0..240 {
-                thread::sleep(Duration::from_millis(500));
-                if llm_server_port_open(resolved_port) {
+            for _ in 0..120 {
+                thread::sleep(Duration::from_secs(1));
+                if llm_server_ready(resolved_port) {
                     started = true;
                     break;
                 }
@@ -2144,9 +2180,9 @@ fn start_amd_12b_blocking(
         if let Ok(mut g) = child_arc.lock() {
             *g = Some(child);
         }
-        for _ in 0..240 {
-            thread::sleep(Duration::from_millis(500));
-            if llm_server_port_open(resolved_port) {
+        for _ in 0..120 {
+            thread::sleep(Duration::from_secs(1));
+            if llm_server_ready(resolved_port) {
                 return Ok(success_msg.to_string());
             }
             if oom_flag.load(Ordering::Relaxed) {
@@ -2221,9 +2257,9 @@ fn try_start_amd_e4b_rocm_direct(
         *g = Some(child);
     }
     // E4B はロードが速い（実測 ~3秒）が、warmup 込みで余裕を見て最大 120 秒待つ。
-    for _ in 0..240 {
-        thread::sleep(Duration::from_millis(500));
-        if llm_server_port_open(resolved_port) {
+    for _ in 0..120 {
+        thread::sleep(Duration::from_secs(1));
+        if llm_server_ready(resolved_port) {
             return true;
         }
         let child_dead = child_arc
@@ -2295,9 +2331,9 @@ fn try_start_amd_e4b_vulkan_direct(
     if let Ok(mut g) = child_arc.lock() {
         *g = Some(child);
     }
-    for _ in 0..240 {
-        thread::sleep(Duration::from_millis(500));
-        if llm_server_port_open(resolved_port) {
+    for _ in 0..120 {
+        thread::sleep(Duration::from_secs(1));
+        if llm_server_ready(resolved_port) {
             return true;
         }
         let child_dead = child_arc
@@ -2464,7 +2500,7 @@ fn get_llm_loaded_device(state: tauri::State<'_, LlmServer>) -> Result<String, S
     Ok("gpu".to_string())
 }
 
-/// CUDA llama-server を起動し、ポートが開く（=応答可能になる）まで待つ。OOM 検出付き。
+/// CUDA llama-server を起動し、モデルロード完了後の `/health` ready まで待つ。OOM 検出付き。
 /// `autofit` が true（12B）なら `--fit on` で起動し、本体・MTP ドラフトの GPU/CPU 配置を
 /// llama.cpp の auto-fit に委ねる（VRAM に収まる分だけ GPU、残りは CPU）。これにより
 /// gemma4-assistant ドラフトを GPU に載せても落ちず、収まる環境では GPU に載って高速化する。
@@ -2515,10 +2551,12 @@ fn start_cuda_llama_blocking(
     *guard = Some(child);
     drop(guard);
 
-    // llama-server はモデルをロードしてから応答可能になるため、最大 60 秒待機する。
-    for _ in 0..120 {
-        thread::sleep(Duration::from_millis(500));
-        if llm_server_port_open(port) {
+    // llama-server はソケットを先に開くが、初回のモデルロード/CUDAカーネル準備が終わる
+    // まで /health は 503 を返す。Pythonサイドカーと二重に待たないよう、ここで readiness
+    // まで待ってから成功を返す。初回ロードが遅い環境にも余裕を持たせて最大180秒とする。
+    for _ in 0..180 {
+        thread::sleep(Duration::from_secs(1));
+        if llm_server_ready(port) {
             return Ok(());
         }
         // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
@@ -2561,7 +2599,7 @@ fn start_cuda_llama_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
-    Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
+    Err("AI校正エンジン (CUDA) の起動タイムアウト（180秒）".to_string())
 }
 
 #[tauri::command]
@@ -2823,19 +2861,7 @@ fn try_start_llama_server_cpu_audio(
 }
 
 fn editor_voice_input_server_ready(port: u16) -> bool {
-    let target = LocalOpenAiHttpTarget {
-        host: "127.0.0.1".to_string(),
-        authority: format!("127.0.0.1:{port}"),
-        port,
-        path_prefix: String::new(),
-    };
-    match local_openai_http_get_status_body(&target, "/health", Duration::from_secs(2)) {
-        Ok((code, _, _)) if (200..300).contains(&code) => true,
-        Ok((404, _, _)) => {
-            local_openai_http_get_json(&target, "/v1/models", Duration::from_secs(2)).is_ok()
-        }
-        Ok(_) | Err(_) => false,
-    }
+    llm_server_ready(port)
 }
 
 fn local_openai_http_post_json_with_loading_retry(
@@ -2918,8 +2944,8 @@ fn start_editor_voice_input_server_blocking(
     let child = try_start_llama_server_cpu_audio(&bin, &model_path, &mmproj_path, resolved_port)?;
     *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
 
-    for _ in 0..240 {
-        thread::sleep(Duration::from_millis(500));
+    for _ in 0..120 {
+        thread::sleep(Duration::from_secs(1));
         if editor_voice_input_server_ready(resolved_port) {
             purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
             return Ok(resolved_port);

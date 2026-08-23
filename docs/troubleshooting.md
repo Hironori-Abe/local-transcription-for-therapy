@@ -236,9 +236,9 @@ LOTT_GDK_BACKEND=x11 "/path/to/Local Transcription for Therapy_0.9.8_amd64.AppIm
 tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
 ```
 
-## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（暫定調査）
+## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（履歴・暫定調査）
 
-> **暫定結果（2026-08-14）:** 以下は Ryzen 7 3700X / RTX 2070 Super / CachyOS / KDE Plasma Wayland の1環境を中心に行った比較結果です。現時点で最も良かった条件と、可能性が低くなった原因候補を記録したものであり、根本原因を確定した最終結論ではありません。`x86-64-v3`での改善も利用者による体感比較で、フレーム時間を計測した定量結果ではありません。
+> **暫定結果（2026-08-14の履歴）:** 以下は Ryzen 7 3700X / RTX 2070 Super / CachyOS / KDE Plasma Wayland の1環境を中心に行った比較結果です。当時その実機で最も良かった条件と、可能性が低くなった原因候補を記録したもので、現在の通常起動設定を示すものではありません。根本原因を確定した最終結論でもなく、`x86-64-v3`での改善も利用者による体感比較で、フレーム時間を計測した定量結果ではありません。
 
 ### 症状と切り分け条件
 
@@ -249,7 +249,7 @@ tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACK
 
 ### 比較結果
 
-| 比較内容 | 結果 | 現時点での解釈 |
+| 比較内容 | 結果 | 当時の解釈 |
 | --- | --- | --- |
 | `cdkTextareaAutosize`だけを外す | 変化なし | autosize単独が主因とは考えにくい |
 | 固定高さvirtual scrollへ変更 | 変化なし | 可変行高や通常の行描画だけでは説明できない |
@@ -263,9 +263,10 @@ tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACK
 
 JSONの大きさ、GPU負荷、校正後のVRAM残留、表示行数、および上記のAngular実装3点は、少なくともこの再現条件における主因としては可能性が低くなりました。一方、ホストWebKitGTK、NVIDIAドライバー、KDE Plasma Wayland/XWayland、DMA-BUFを無効にした共有メモリ描画、CPU最適化レベルの組み合わせには未分離の要因が残っています。
 
-### 現時点で最も良かった構成
+### 当時の単一実機で最も良かった構成（履歴）
 
-次の組み合わせが、この実機で確認できた範囲では最も良好でした。
+次の組み合わせが、2026-08-14時点のこの実機で確認できた範囲では最も良好でした。
+これは後述する2026-08-23更新前の比較結果です。
 
 - ホストWebKitGTKを使うCachyOS向けpacmanパッケージ
 - CPUターゲット: `x86-64-v3`（AVX-512は不使用）
@@ -284,7 +285,8 @@ bash scripts/build-cachyos-experimental-package.sh
 dist/cachyos/experimental/v0.9.8/LoTT-v0.9.8-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst
 ```
 
-インストール後は通常どおり起動します。パッケージのランチャーがX11とDMA-BUF無効を既定値として設定します。
+インストール後は通常どおり起動します。パッケージのランチャーはホストのデスクトップ環境の
+既定値を使用し、X11やDMA-BUF無効化を自動設定しません。
 
 ```sh
 lott
@@ -305,4 +307,21 @@ lott
 - フレーム時間、main/WebKitプロセス別CPU時間、描画イベントの長時間タスクを計測していないため、残るカクつきのボトルネックは未確定。
 - 別のNVIDIA機、別CPU、ネイティブX11セッションで同じA/B比較を行い、再現性を確認するまでは一般化しない。
 
-したがって、現時点の運用上の回答は「対象のCachyOS / NVIDIA機では、ホストWebKitGTK + X11 + DMA-BUF無効 + `x86-64-v3`が最も良かった」です。ただし、これは**暫定的な回避構成であり、カクつきの根本原因や恒久対策を確定したものではありません**。
+当時の運用上の暫定回答は「対象のCachyOS / NVIDIA機では、ホストWebKitGTK + X11 + DMA-BUF無効 + `x86-64-v3`が最も良かった」でした。ただし、これは**単一実機での暫定的な回避構成であり、カクつきの根本原因や恒久対策を確定したものではありません**。現在の通常運用は、次の更新に記載したOS・デスクトップ環境の既定値です。
+
+### Archパッケージの通常起動設定（2026-08-23更新）
+
+その後の実機確認で、NVIDIA向けにランチャーが設定していたファイルや環境変数が
+カクつきの一因になり得ることが分かりました。Arch/CachyOSパッケージのランチャーは現在、
+`GDK_BACKEND`、`GTK_IM_MODULE`、`WEBKIT_DISABLE_DMABUF_RENDERER`を未設定時に追加せず、
+OS・デスクトップ環境・ホストWebKitGTKの既定値を使用します。ユーザーが既に設定している
+環境変数も上書きしません。
+
+旧構成との比較が必要な場合だけ、次の診断用起動を使ってください。
+
+```sh
+LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+```
+
+この変更はCachyOS/ArchのホストGTK/WebKitGTKパッケージのランチャーだけが対象です。
+AppImageのGTKフック、Windows版、CUDAの検出・推論経路は変更しません。

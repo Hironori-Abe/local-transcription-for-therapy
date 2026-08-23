@@ -22,6 +22,9 @@ _SYSTEM_PROMPT_OVERRIDE_FILE: Optional[Path] = None
 # 同時送信数（継続バッチング）。内蔵 llama-server 経路（backend 名は後方互換で lemonade）のみ。
 # OpenAI互換は別プロセスのローカルサーバー負荷回避で 1 固定。
 _OVERALL_PARALLEL: int = 1
+# Rust側の内蔵 llama-server 起動は `/health` が ready になるまで待つ。ここは既存サーバーを
+# 再利用する場合や旧ビルドでの保険であり、モデルロード中の短い間隔の問い合わせを避ける。
+_LLAMA_LOADING_RETRY_MAX_DELAY_SECONDS = 8.0
 # emit の stderr 書き込みをワーカースレッド間で直列化し、行の混線を防ぐ。
 _EMIT_LOCK = threading.Lock()
 
@@ -63,6 +66,14 @@ _DEFAULT_SYSTEM_INSTRUCTION = (
     "番号付きのすべてのテキストを校正し、以下のJSON配列形式のみで返答してください。説明・前置き・マークダウン形式は不要です。\n"
     '[{"id": <番号>, "revised": "校正後テキスト", "note": "変更内容（変更なしは空文字）"}]'
 )
+
+
+def _llama_loading_retry_delay(attempt: int) -> float:
+    """Return a bounded exponential delay for an internal llama-server retry."""
+    if sys.platform == "win32":
+        return 2.0
+    exponent = min(max(attempt - 1, 0), 2)
+    return min(_LLAMA_LOADING_RETRY_MAX_DELAY_SECONDS, 2.0 * (2**exponent))
 
 
 def _fixed_suffix() -> str:
@@ -625,12 +636,12 @@ def _run_openai_chat_batches(
             except _requests.exceptions.ConnectionError:
                 if require_model_list and time.monotonic() < deadline:
                     emit_progress("llm_loading", f"{provider_label} の起動を待っています... (接続再試行 {attempt})")
-                    time.sleep(2.0)
+                    time.sleep(_llama_loading_retry_delay(attempt))
                     continue
                 raise
             if r.status_code in (502, 503, 504) and require_model_list and time.monotonic() < deadline:
                 emit_progress("llm_loading", f"{provider_label} がモデルをロード中です... (再試行 {attempt})")
-                time.sleep(2.0)
+                time.sleep(_llama_loading_retry_delay(attempt))
                 continue
             r.raise_for_status()
             return r.json()

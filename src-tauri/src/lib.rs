@@ -6942,6 +6942,90 @@ enum NvidiaSmiProbe {
     Failed,
 }
 
+/// Linux の NVIDIA カーネル側で、CUDA 初期化を妨げる状態を表す。
+///
+/// `nvidia-smi` は nvidia コアモジュールだけでも動作する場合がある一方、
+/// CTranslate2/PyTorch の CUDA コンテキストには UVM (`nvidia_uvm`) と
+/// `/dev/nvidia-uvm` が必要になる。そのため nvidia-smi の結果だけでは、
+/// NVIDIA モジュールの部分的なロード失敗を利用者へ説明できない。
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NvidiaKernelRuntimeIssue {
+    NouveauActive,
+    NvidiaModuleMissing,
+    NvidiaUvmModuleMissing,
+    NvidiaUvmDeviceMissing,
+}
+
+#[cfg(target_os = "linux")]
+fn diagnose_nvidia_kernel_runtime(
+    nvidia_module_loaded: bool,
+    nouveau_module_loaded: bool,
+    nvidia_uvm_module_loaded: bool,
+    nvidia_uvm_device_present: bool,
+) -> Option<NvidiaKernelRuntimeIssue> {
+    if !nvidia_module_loaded {
+        return Some(if nouveau_module_loaded {
+            NvidiaKernelRuntimeIssue::NouveauActive
+        } else {
+            NvidiaKernelRuntimeIssue::NvidiaModuleMissing
+        });
+    }
+    if !nvidia_uvm_module_loaded {
+        return Some(NvidiaKernelRuntimeIssue::NvidiaUvmModuleMissing);
+    }
+    if !nvidia_uvm_device_present {
+        return Some(NvidiaKernelRuntimeIssue::NvidiaUvmDeviceMissing);
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn nvidia_kernel_runtime_issue_reason(issue: NvidiaKernelRuntimeIssue) -> &'static str {
+    match issue {
+        NvidiaKernelRuntimeIssue::NouveauActive => {
+            "NVIDIAカーネルモジュールではなくnouveauが読み込まれています。NVIDIAドライバーを確認してから「GPUを再確認」してください"
+        }
+        NvidiaKernelRuntimeIssue::NvidiaModuleMissing => {
+            "NVIDIAカーネルモジュールが読み込まれていません。NVIDIAドライバーとカーネルの組み合わせを確認してから「GPUを再確認」してください"
+        }
+        NvidiaKernelRuntimeIssue::NvidiaUvmModuleMissing => {
+            "NVIDIA UVMカーネルモジュール（nvidia_uvm）が読み込まれていません。CUDAの統合メモリ初期化に必要なため、NVIDIAドライバーを確認してから「GPUを再確認」してください"
+        }
+        NvidiaKernelRuntimeIssue::NvidiaUvmDeviceMissing => {
+            "NVIDIA UVMデバイスノード（/dev/nvidia-uvm）がありません。CUDAのデバイス初期化に必要なため、NVIDIAドライバーを確認してから「GPUを再確認」してください"
+        }
+    }
+}
+
+/// NVIDIA の標準補助ツールに UVM のロードとデバイスノード作成を委ねる。
+///
+/// `nvidia-modprobe -u` は NVIDIA が提供する setuid ヘルパーで、一般ユーザーから
+/// でも必要な UVM 初期化を行える。sudo/pkexec は起動せず、固定引数だけを渡し、
+/// 出力も捨てる。
+/// ツールがない、sandbox で拒否された、またはドライバー側で失敗した場合は、
+/// 後続の状態検査で非機密な理由を返す。Windows と AMD/ROCm では呼び出さない。
+#[cfg(target_os = "linux")]
+fn try_initialize_nvidia_uvm() {
+    let mut cmd = Command::new("/usr/bin/nvidia-modprobe");
+    apply_host_command_env(&mut cmd);
+    let _ = cmd
+        .arg("-u")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(target_os = "linux")]
+fn current_nvidia_kernel_runtime_issue() -> Option<NvidiaKernelRuntimeIssue> {
+    diagnose_nvidia_kernel_runtime(
+        Path::new("/sys/module/nvidia").exists(),
+        Path::new("/sys/module/nouveau").exists(),
+        Path::new("/sys/module/nvidia_uvm").exists(),
+        Path::new("/dev/nvidia-uvm").exists(),
+    )
+}
+
 /// NVIDIA のユーザー空間診断コマンドを確認する。stderr や実行パスは返さない。
 fn probe_nvidia_smi() -> NvidiaSmiProbe {
     let mut cmd = Command::new("nvidia-smi");
@@ -7133,6 +7217,36 @@ fn check_transcription_runtime_support_once(
                 format!("CPU 推論ランタイムの確認でエラーが発生しました: {stderr}")
             },
         });
+    }
+
+    // Linux NVIDIA の一部環境では nvidia コアだけが先にロードされ、CUDA が使う
+    // UVM モジュール/デバイスノードが後続の modprobe で作られないことがある。
+    // nvidia-smi はその状態でも成功し得るため、Python の汎用例外へ丸める前に、
+    // NVIDIA 標準ヘルパーで安全に初期化を一度試し、残った欠落を明示する。
+    // Windows と AMD/ROCm は既存の判定経路を変更しない。
+    #[cfg(target_os = "linux")]
+    if !is_amd_gpu_build(&app) {
+        // 健全なGPU確認のたびにsetuid helperを起動しない。nouveauがGPUを
+        // 所有している場合も、アプリからドライバーを切り替えようとしない。
+        if matches!(
+            current_nvidia_kernel_runtime_issue(),
+            Some(
+                NvidiaKernelRuntimeIssue::NvidiaModuleMissing
+                    | NvidiaKernelRuntimeIssue::NvidiaUvmModuleMissing
+                    | NvidiaKernelRuntimeIssue::NvidiaUvmDeviceMissing
+            )
+        ) {
+            try_initialize_nvidia_uvm();
+        }
+        if let Some(issue) = current_nvidia_kernel_runtime_issue() {
+            return Ok(TranscriptionRuntimeStatusResponse {
+                available: false,
+                reason: format!(
+                    "NVIDIA GPU（CUDA）のカーネル初期化を完了できません。{}。",
+                    nvidia_kernel_runtime_issue_reason(issue)
+                ),
+            });
+        }
     }
 
     // 文字起こし（CTranslate2）と話者分離（PyTorch）は別の GPU ランタイムを使う。
@@ -11166,6 +11280,47 @@ mod tests {
         assert_eq!(gpu_runtime_probe_backoff(1), Duration::from_millis(750));
         assert_eq!(gpu_runtime_probe_backoff(2), Duration::from_millis(1_500));
         assert_eq!(gpu_runtime_probe_backoff(99), Duration::from_millis(1_500));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nvidia_kernel_runtime_diagnosis_distinguishes_nouveau_and_partial_cuda_loads() {
+        assert_eq!(
+            diagnose_nvidia_kernel_runtime(false, true, false, false),
+            Some(NvidiaKernelRuntimeIssue::NouveauActive)
+        );
+        assert_eq!(
+            diagnose_nvidia_kernel_runtime(false, false, false, false),
+            Some(NvidiaKernelRuntimeIssue::NvidiaModuleMissing)
+        );
+        assert_eq!(
+            diagnose_nvidia_kernel_runtime(true, false, false, false),
+            Some(NvidiaKernelRuntimeIssue::NvidiaUvmModuleMissing)
+        );
+        assert_eq!(
+            diagnose_nvidia_kernel_runtime(true, false, true, false),
+            Some(NvidiaKernelRuntimeIssue::NvidiaUvmDeviceMissing)
+        );
+        assert_eq!(
+            diagnose_nvidia_kernel_runtime(true, false, true, true),
+            None
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nvidia_kernel_runtime_reasons_are_non_sensitive_and_actionable() {
+        for issue in [
+            NvidiaKernelRuntimeIssue::NouveauActive,
+            NvidiaKernelRuntimeIssue::NvidiaModuleMissing,
+            NvidiaKernelRuntimeIssue::NvidiaUvmModuleMissing,
+            NvidiaKernelRuntimeIssue::NvidiaUvmDeviceMissing,
+        ] {
+            let reason = nvidia_kernel_runtime_issue_reason(issue);
+            assert!(!reason.is_empty());
+            assert!(!reason.contains("/home/"));
+            assert!(reason.contains("GPUを再確認"));
+        }
     }
 
     #[test]

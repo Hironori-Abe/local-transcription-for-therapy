@@ -343,7 +343,10 @@ _install_pacman_system_packages() {
     unzip
     webkit2gtk-4.1
     wget
+    xdg-desktop-portal
+    xdg-desktop-portal-gtk
     xdotool
+    zenity
   )
 
   if [[ "$AMD_PACKAGES" == "1" ]]; then
@@ -424,6 +427,9 @@ install_system_packages() {
     librsvg2-dev
     unzip
     wget
+    xdg-desktop-portal
+    xdg-desktop-portal-gtk
+    zenity
   )
 
   if [[ "$AMD_PACKAGES" == "1" ]]; then

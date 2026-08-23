@@ -80,6 +80,11 @@ required at runtime. After installation, confirm that the GPU is listed:
 nvidia-smi -L
 ```
 
+On Linux, the audio-file picker uses the host locale and localized `xdg-user-dirs` through
+the XDG Desktop Portal. For an AppImage, install `xdg-desktop-portal` with a matching
+backend (for a standard GTK environment, `xdg-desktop-portal-gtk`) and `zenity` on the
+host. The CachyOS / Arch package declares these as required dependencies.
+
 On this Linux edition, transcription, speaker diarization, and LLM proofreading use CUDA.
 Because ggml-org does not publish a Linux CUDA `llama-server` archive, the distribution
 builds llama.cpp b10075 from its pinned official source and bundles the resulting server

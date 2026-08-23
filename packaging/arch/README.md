@@ -3,6 +3,12 @@
 このパッケージはAppImageへGUIライブラリを同梱せず、CachyOS / Archホストの
 WebKitGTK、GTK、GLib、GStreamerを使用します。
 
+ファイル選択ダイアログは、ホストの日本語ロケールと `xdg-user-dirs`（`~/デスクトップ`
+など）をそのまま利用する XDG Desktop Portal 経由で開きます。`xdg-desktop-portal`、
+`xdg-desktop-portal-gtk`、`zenity` はパッケージの必須依存です。KDE環境では
+`xdg-desktop-portal-kde` がインストール済みなら、ポータルの標準選択によりKDE側の
+ファイル選択UIが優先されます。
+
 ## NVIDIAランタイム（必須）
 
 このパッケージはNVIDIA GPU向けです。実行時に次のホストパッケージを使用するため、

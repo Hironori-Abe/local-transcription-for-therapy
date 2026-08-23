@@ -39,6 +39,13 @@
       "resources/ffmpeg"
     ],
     "linux": {
+      "deb": {
+        "depends": [
+          "xdg-desktop-portal",
+          "xdg-desktop-portal-gtk",
+          "zenity"
+        ]
+      },
       "appimage": {
         "bundleMediaFramework": true
       }

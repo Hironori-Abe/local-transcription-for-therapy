@@ -4236,8 +4236,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!this.isTauriRuntime() || this.gpuRechecking()) return;
     this.gpuRechecking.set(true);
     try {
-      await this.checkGpuAvailability();
-      await this.checkTranscriptionRuntimeSupport();
+      await this.checkGpuAvailability(true);
+      await this.checkTranscriptionRuntimeSupport(
+        this.cudaAvailable() === true
+      );
     } finally {
       this.gpuRechecking.set(false);
       // 確定値を即座に描画へ反映させる（フレーム単位の遅延を回避）
@@ -4245,7 +4247,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private async checkGpuAvailability(): Promise<void> {
+  private async checkGpuAvailability(retry = false): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
       const result = await invoke<{
@@ -4254,7 +4256,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         buildVariant?: string;
         runtimePlatform?: string;
         localLlmAppsEnabled?: boolean;
-      }>('check_gpu_availability');
+      }>('check_gpu_availability', { retry });
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
         this.cudaAvailable.set(result.cudaAvailable);
@@ -5374,10 +5376,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async onRecheckAllSetupStatus(): Promise<void> {
     // 統合セットアップ表示中は上部のGPU再確認ボタンが隠れるため、
-    // この再チェックでもドライバー導入後のCUDA/ROCm状態を更新する。
-    await this.checkGpuAvailability();
+    // この再チェックでもセットアップ完了直後のCUDA/ROCm状態を更新する。
+    await this.checkGpuAvailability(true);
     await this.checkAllSetupStatus();
-    await this.checkTranscriptionRuntimeSupport();
+    await this.checkTranscriptionRuntimeSupport(
+      this.cudaAvailable() === true
+    );
     this.ngZone.run(() => this.activeTabIndex.set(0));
     // Tauri の invoke 完了は Angular のイベントループ外で解決することがある。
     // 状態値は更新済みでも、eventCoalescing 中にGPU警告やセットアップ行だけが
@@ -5432,9 +5436,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
       // 関係なくGPUバックエンドを準備する。
       if (this.runtimeAiProofreadBuild() && !this.allSetupStatus()?.llmBackend) {
-        // セットアップ開始後にGPUドライバーが導入された場合も、古い起動時
-        // 判定のままバックエンドを選ばないように再確認してから計画を作る。
-        await this.checkGpuAvailability();
+        // セットアップ完了直後も、古い起動時判定のままバックエンドを選ばない
+        // ように再確認してから計画を作る。
+        await this.checkGpuAvailability(true);
         // GPU 種別に応じてバックエンドを選択。NVIDIA/CUDA はアプリ同梱、AMD は ROCm を
         // 主経路、Vulkan を ROCm 不可時（Windows AMD・system ROCm 無し Linux AMD 等）の
         // フォールバックとして取得する。
@@ -5508,12 +5512,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.diarizationInstallToken.set('');
         this.setupRunning.set(false);
       });
-      // モデル／バックエンドの導入後にドライバー状態も再確認する。
-      // これにより、セットアップ中にCUDA/ROCmを導入した場合は警告と
-      // バックエンド選択がその場で更新され、再起動を必須にしない。
-      await this.checkGpuAvailability();
+      // モデル／バックエンドの導入後にCUDA/ROCm状態も再確認する。
+      // セットアップ直後の一時的なCUDA初期化失敗はRust側で限定的に再試行し、
+      // 警告とバックエンド選択を再起動なしで更新する。
+      await this.checkGpuAvailability(true);
       await this.checkAllSetupStatus();
-      await this.checkTranscriptionRuntimeSupport();
+      await this.checkTranscriptionRuntimeSupport(
+        this.cudaAvailable() === true
+      );
       this.ngZone.run(() => {
         this.activeTabIndex.set(0);
       });
@@ -5539,7 +5545,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.setupProgressMap.update((current) => updateSetupProgress(current, progress));
   }
 
-  async checkTranscriptionRuntimeSupport(): Promise<void> {
+  async checkTranscriptionRuntimeSupport(retry = false): Promise<void> {
     if (this.editorOnlyBuild) {
       this.transcriptionTabVisible.set(false);
       this.transcriptionRuntimeAvailable.set(false);
@@ -5561,7 +5567,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     try {
-      const status = await invoke<TranscriptionRuntimeStatusResponse>('check_transcription_runtime_support');
+      const status = await invoke<TranscriptionRuntimeStatusResponse>('check_transcription_runtime_support', { retry });
       this.ngZone.run(() => {
         this.transcriptionTabVisible.set(true);
         this.transcriptionRuntimeAvailable.set(status.available === true);

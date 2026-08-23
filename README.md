@@ -76,6 +76,11 @@ NVIDIAドライバーも別途導入してください。CUDA Toolkitは実行�
 nvidia-smi -L
 ```
 
+Linux版の音声ファイル選択は、ホストのロケールと日本語の`xdg-user-dirs`を利用する
+XDG Desktop Portal経由です。AppImageを使う場合も、`xdg-desktop-portal`と対応する
+バックエンド（標準のGTK環境では`xdg-desktop-portal-gtk`）、および`zenity`をホストへ
+導入してください。CachyOS / Archパッケージではこれらが必須依存として導入されます。
+
 このLinux版の文字起こし・話者分離・LLM校正はCUDAで実行します。Linux用のCUDA `llama-server`は
 公式Linux CUDAアーカイブが存在しないため、配布ビルド時に公式のllama.cpp b10075ソースから再現ビルドし、
 CUDA再頒布ランタイムとともにパッケージへ同梱します。実行時に必要なのはNVIDIAドライバーだけで、

@@ -16,7 +16,10 @@ depends=(
   'nvidia-utils'
   'webkit2gtk-4.1'
   'xdg-utils'
+  'xdg-desktop-portal'
+  'xdg-desktop-portal-gtk'
   'xorg-xwayland'
+  'zenity'
 )
 optdepends=(
   'cuda: NVIDIA CUDA Toolkit for rebuilding the bundled Linux llama-server or native CUDA development (not required at runtime)'

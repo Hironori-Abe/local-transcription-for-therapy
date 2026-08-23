@@ -6897,13 +6897,16 @@ fn open_external_url(url: String) -> Result<(), String> {
 #[tauri::command]
 async fn check_transcription_runtime_support(
     app: AppHandle,
+    retry: Option<bool>,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
     // CTranslate2/PyTorch の import + GPU 初期化を伴う Python サブプロセスは数秒かかる
     // ため、メインスレッド（UI スレッド）で実行すると UI が固まる。spawn_blocking で
     // ワーカースレッドへ逃がし、UI を止めずに再確認できるようにする。
-    tauri::async_runtime::spawn_blocking(move || check_transcription_runtime_support_blocking(app))
-        .await
-        .map_err(|e| format!("GPU ランタイム確認タスクの実行に失敗しました: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        check_transcription_runtime_support_blocking(app, retry.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| format!("GPU ランタイム確認タスクの実行に失敗しました: {e}"))?
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6933,6 +6936,41 @@ fn probe_nvidia_smi() -> NvidiaSmiProbe {
     }
 }
 
+/// Linux NVIDIA では、Pythonパッケージのセットアップ直後や最初のCUDAコンテキスト
+/// 生成時に `nvidia-smi` / CUDA の初期化が一時的に失敗することがある。判定を一度だけ
+/// で固定すると、アプリやPCの再起動を要求するUIになってしまうため、手動再確認・
+/// セットアップ完了時に限って短い bounded retry を行う。Windows と AMD/ROCm は
+/// 従来どおり1回だけ実行して挙動を変えない。
+const GPU_RUNTIME_PROBE_ATTEMPTS: usize = if cfg!(target_os = "linux") { 4 } else { 1 };
+
+fn gpu_runtime_probe_backoff(attempt: usize) -> Duration {
+    // 250ms -> 750ms -> 1500ms（合計2.5秒）。無期限ポーリングやUI待ちにはしない。
+    Duration::from_millis(match attempt {
+        0 => 250,
+        1 => 750,
+        _ => 1_500,
+    })
+}
+
+fn probe_nvidia_smi_with_retries() -> NvidiaSmiProbe {
+    let mut last = NvidiaSmiProbe::Failed;
+    for attempt in 0..GPU_RUNTIME_PROBE_ATTEMPTS {
+        last = probe_nvidia_smi();
+        if matches!(last, NvidiaSmiProbe::Available) {
+            return last;
+        }
+        // A missing executable is deterministic; do not spend 2.5 seconds
+        // retrying a package that cannot be found in PATH.
+        if matches!(last, NvidiaSmiProbe::NotFound) {
+            return last;
+        }
+        if attempt + 1 < GPU_RUNTIME_PROBE_ATTEMPTS {
+            thread::sleep(gpu_runtime_probe_backoff(attempt));
+        }
+    }
+    last
+}
+
 /// Python サブプロセスが警告を stdout に出した場合でも、JSON の行だけを拾う。
 /// stdout/stderr の生テキストはユーザー向けに表示しない（環境パスを漏らさない）。
 fn parse_gpu_runtime_probe(stdout: &str) -> Option<Value> {
@@ -6954,6 +6992,47 @@ fn runtime_component_failure_reason(value: Option<&Value>, label: &str) -> Strin
 }
 
 fn check_transcription_runtime_support_blocking(
+    app: AppHandle,
+    retry: bool,
+) -> Result<TranscriptionRuntimeStatusResponse, String> {
+    // A package/model install can finish while the first CUDA context
+    // initialization is still settling. Retry only on Linux, where this is a
+    // known condition for the native NVIDIA package; Windows keeps the
+    // previous single-probe behavior.
+    if retry
+        && cfg!(target_os = "linux")
+        && !is_cpu_only_build(&app)
+        && !is_amd_gpu_build(&app)
+        && !should_emulate_no_cuda()
+    {
+        // A missing/unfinished Linux Python setup is deterministic and should
+        // not spend the retry budget waiting for packages that are not there.
+        // Once the completion marker and required modules exist, transient
+        // CUDA initialization failures are retried below.
+        let (python_ready, _) = check_python_venv(&app);
+        if !python_ready {
+            return check_transcription_runtime_support_once(app);
+        }
+        let mut last = None;
+        for attempt in 0..GPU_RUNTIME_PROBE_ATTEMPTS {
+            let response = check_transcription_runtime_support_once(app.clone())?;
+            if response.available || attempt + 1 >= GPU_RUNTIME_PROBE_ATTEMPTS {
+                return Ok(response);
+            }
+            last = Some(response);
+            thread::sleep(gpu_runtime_probe_backoff(attempt));
+        }
+        // The loop always returns on its final iteration. Keep a defensive
+        // fallback in case the loop is changed later.
+        return Ok(last.unwrap_or(TranscriptionRuntimeStatusResponse {
+            available: false,
+            reason: "GPU ランタイムを確認できませんでした。".to_string(),
+        }));
+    }
+    check_transcription_runtime_support_once(app)
+}
+
+fn check_transcription_runtime_support_once(
     app: AppHandle,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
     if should_emulate_no_cuda() && !is_cpu_only_build(&app) {
@@ -8772,22 +8851,24 @@ fn get_dev_emulation_status() -> DevEmulationStatusResponse {
 }
 
 #[tauri::command]
-async fn check_gpu_availability(app: AppHandle) -> serde_json::Value {
+async fn check_gpu_availability(app: AppHandle, retry: Option<bool>) -> serde_json::Value {
     // nvidia-smi / rocm-smi の起動は数百ms〜秒オーダーになりうるため、メインスレッドを
     // 塞がないよう spawn_blocking でワーカースレッドへ逃がす。
-    tauri::async_runtime::spawn_blocking(move || check_gpu_availability_blocking(app))
-        .await
-        .unwrap_or_else(|_| {
-            serde_json::json!({
-                "cudaAvailable": false,
-                "rocmAvailable": false,
-                "buildVariant": "cuda",
-                "runtimePlatform": std::env::consts::OS,
-            })
+    tauri::async_runtime::spawn_blocking(move || {
+        check_gpu_availability_blocking(app, retry.unwrap_or(false))
+    })
+    .await
+    .unwrap_or_else(|_| {
+        serde_json::json!({
+            "cudaAvailable": false,
+            "rocmAvailable": false,
+            "buildVariant": "cuda",
+            "runtimePlatform": std::env::consts::OS,
         })
+    })
 }
 
-fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
+fn check_gpu_availability_blocking(app: AppHandle, retry: bool) -> serde_json::Value {
     let build_variant = build_variant_for_identifier(app.config().identifier.as_str());
 
     // CPU版ではホストの nvidia-smi / rocm-smi を確認する必要がない。
@@ -8804,14 +8885,25 @@ fn check_gpu_availability_blocking(app: AppHandle) -> serde_json::Value {
         });
     }
 
-    let mut nvidia_cmd = Command::new("nvidia-smi");
-    apply_windows_no_window(&mut nvidia_cmd);
-    apply_host_command_env(&mut nvidia_cmd);
-    let cuda_available = nvidia_cmd
-        .args(["--query-gpu=name", "--format=csv,noheader"])
-        .output()
-        .map(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
-        .unwrap_or(false);
+    // Keep the Windows and AMD/ROCm queries exactly as before. Linux NVIDIA
+    // gets the bounded retry because the native package can transiently
+    // observe CUDA as unavailable immediately after setup or session init.
+    let cuda_available = if cfg!(target_os = "windows") {
+        let mut nvidia_cmd = Command::new("nvidia-smi");
+        apply_windows_no_window(&mut nvidia_cmd);
+        apply_host_command_env(&mut nvidia_cmd);
+        nvidia_cmd
+            .args(["--query-gpu=name", "--format=csv,noheader"])
+            .output()
+            .map(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
+            .unwrap_or(false)
+    } else {
+        if retry && !is_amd_gpu_build(&app) {
+            matches!(probe_nvidia_smi_with_retries(), NvidiaSmiProbe::Available)
+        } else {
+            matches!(probe_nvidia_smi(), NvidiaSmiProbe::Available)
+        }
+    };
 
     let rocm_kfd = std::path::Path::new("/dev/kfd").exists();
     let mut rocm_cmd = Command::new("rocm-smi");
@@ -11039,6 +11131,15 @@ mod tests {
     #[test]
     fn gpu_runtime_probe_does_not_parse_arbitrary_stderr_as_status() {
         assert!(parse_gpu_runtime_probe("CUDA unavailable\nnot json\n").is_none());
+    }
+
+    #[test]
+    fn gpu_runtime_probe_retry_policy_is_bounded_and_backed_off() {
+        assert!((1..=4).contains(&GPU_RUNTIME_PROBE_ATTEMPTS));
+        assert_eq!(gpu_runtime_probe_backoff(0), Duration::from_millis(250));
+        assert_eq!(gpu_runtime_probe_backoff(1), Duration::from_millis(750));
+        assert_eq!(gpu_runtime_probe_backoff(2), Duration::from_millis(1_500));
+        assert_eq!(gpu_runtime_probe_backoff(99), Duration::from_millis(1_500));
     }
 
     #[test]

@@ -17,7 +17,10 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+# Linux の AppImage では、同梱 GTK3 の翻訳カタログや xdg-user-dirs の表示環境が
+# ホストのデスクトップ環境と一致しないことがある。XDG Desktop Portal を使うと、
+# ホスト側のファイル選択 UI と user-dirs 設定を利用できる。Windows/macOS では
+# 従来の既定バックエンドを維持する（下の target-specific dependency を参照）。
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 encoding_rs = "0.8"
 regex = "1"
@@ -33,7 +36,11 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri-plugin-dialog = "2"
 
 [features]
 default = ["custom-protocol"]

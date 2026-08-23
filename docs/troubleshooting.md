@@ -198,6 +198,28 @@ LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
   - `xdg-open` の子プロセスを回収し、ゾンビを残さない。
 - 補足: この症状は「外部リンク・フォルダオープンが効かない」ものです。音声ファイルを選んだ直後のフリーズは別原因（上の GStreamer の項目）です。
 
+## Linux: 音声ファイルの選択ダイアログが英語になる / 日本語の場所へ移動できない
+
+- 原因: Linux の `tauri-plugin-dialog` は既定では GTK3 のファイル選択を使います。AppImage
+  は GTK ランタイムを同梱しますが、ホストの GTK 翻訳カタログや `~/.config/user-dirs.dirs`
+  の表示環境とは別になります。`LANG` / `LC_MESSAGES` と日本語の `xdg-user-dirs` が一致しない
+  と、ダイアログが英語表示になったり、サイドバーの表示名と実パスが食い違ったりします。
+- 対策: Linux ビルドだけ `tauri-plugin-dialog` の `xdg-portal` feature を有効にし、ホストの
+  XDG Desktop Portal にファイル選択を委譲します。Windows/macOS の依存・ネイティブダイアログ
+  経路は変更していません。
+- AppImage の実行前提: ホストに `xdg-desktop-portal` と、デスクトップ環境に対応する
+  backend（標準のGTK環境では `xdg-desktop-portal-gtk`）を導入してください。ポータル呼び出し
+  が失敗した場合の rfd fallback に使う `zenity` も必要です。CachyOS / Arch パッケージおよび
+  開発セットアップではこれらを依存・導入対象にしています。KDE では `xdg-desktop-portal-kde`
+  があれば KDE のポータル backend が選ばれます。
+- 確認方法:
+
+```sh
+pacman -Q xdg-desktop-portal xdg-desktop-portal-gtk zenity  # Arch/CachyOS
+systemctl --user --no-pager status xdg-desktop-portal.service
+cat "${XDG_CONFIG_HOME:-$HOME/.config}/user-dirs.dirs"
+```
+
 ## Linux AppImage: テキスト欄をクリックすると固まる / 日本語入力ができない
 
 - 原因: AppImage のビルドツール（linuxdeploy）が生成する GTK フックは、Wayland セッションでも一律に `GDK_BACKEND=x11` を強制していました。さらに AppImage 同梱の GTK には fcitx 用モジュールが無いため、X11 に固定されると日本語入力の経路がありませんでした。

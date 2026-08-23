@@ -64,6 +64,23 @@ scripts\run-dev-amd.bat
 - **VRAM 8GB 以上（最低要件）**
 - インストーラー約 1GB 前後 + モデルダウンロード分の空き容量
 
+### Linux / CachyOS NVIDIA版
+
+CachyOS / Arch向けのNVIDIA版は、ホストのNVIDIAドライバーとVulkanランタイムを使用します。
+`nvidia-utils`（`nvidia-smi`・NVIDIAユーザー空間ランタイム）と
+`vulkan-icd-loader`を必須とし、使用中のカーネルに合うNVIDIAドライバーも別途導入してください。
+導入後、次でGPU名が表示されることを確認します。
+
+```sh
+nvidia-smi -L
+```
+
+このLinux版の文字起こし・話者分離はCUDAで実行します。一方、LLM校正は現行のLinux配布構成で
+CUDA版 `llama-server` を同梱していないため、セットアップタブからダウンロードするVulkan版
+`llama-server`を使用します（暫定経路）。Windows NVIDIA版のCUDA直起動や、プロジェクト方針である
+Linux NVIDIA LLMのCUDA直起動への移行は、今後の恒久対応課題です。詳しい導入手順は
+[CachyOS / Arch向け配布README](packaging/arch/README.md)を参照してください。
+
 ## CPU 版（お試し用）
 
 LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こしを試せるエディションです。文字起こしと話者分離の完了後、ローカルルールによる単純な句読点付与を自動的に行います。全体校正は搭載しません。音声入力パックを追加すると、CPU による音声入力と区間聞き直しも利用できます。
@@ -113,7 +130,7 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper（turbo 既定 / large-v3 高精度・後付けダウンロード） / Diarization: pyannote.audio / 音声デコード: LGPL 構成 ffmpeg CLI
 - 音声入力・区間聞き直し: Gemma 4 E4B + 音声 mmproj（llama.cpp llama-server、OpenAI 互換 `input_audio`、loopback 限定）
-- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
+- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。Windows NVIDIA=CUDA 直起動 / Linux NVIDIA=ダウンロードVulkan（暫定） / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
 
 ## ドキュメント
 

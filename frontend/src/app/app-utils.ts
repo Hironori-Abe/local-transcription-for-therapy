@@ -720,6 +720,34 @@ export function transcriptionTabLabelValue(
   return '文字起こし';
 }
 
+/**
+ * Keep the runtime explanation consistent with the packaged edition.
+ *
+ * Older Rust builds reported "CPU mode" when a Full CUDA build could not
+ * load CUDA.  Full GPU editions do not implement that fallback, so showing
+ * the old message made the setup screen promise a mode that could never run.
+ * Keep useful backend details when available, but replace that misleading
+ * legacy sentence with an explicit no-fallback explanation.
+ */
+export function transcriptionRuntimeReasonValue(
+  available: boolean,
+  reason: string | null | undefined,
+  cpuOnlyBuild: boolean
+): string {
+  if (available) return '';
+
+  const fallback = cpuOnlyBuild
+    ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
+    : 'GPU が確認できないため、文字起こし・話者分離は利用できません。';
+  const normalized = (reason ?? '').trim();
+  if (!normalized) return fallback;
+
+  if (!cpuOnlyBuild && /CPU\s*モードで動作します/.test(normalized)) {
+    return 'GPU が確認できませんでした。Full GPU版ではCPUへ切り替えず、文字起こし・話者分離は利用できません。GPUドライバーとランタイムを確認してください。';
+  }
+  return normalized;
+}
+
 export function processingStatusTextValue(input: ProcessingStatusTextValueInput): string {
   if (!input.visible) {
     return '';

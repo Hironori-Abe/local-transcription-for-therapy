@@ -205,7 +205,7 @@
                 [class.setup-comp-progress-done]="setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped'"
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
             </div>
-            <!-- LLM GPU バックエンド: バンドル済みバイナリがある場合は非表示 -->
+            <!-- AI校正実行エンジン: バンドル済みバイナリがある場合は非表示 -->
             <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
@@ -213,7 +213,8 @@
                 [class.setup-comp-downloading]="setupProgressMap()['llm_backend']?.status === 'downloading'">{{
                 setupProgressMap()['llm_backend']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.llmBackend || setupProgressMap()['llm_backend']?.status === 'done') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">LLM GPU バックエンド（{{ llmInstallableGpuEntry()?.installKey || llmTargetBackendKey() }}）</span>
+              <span class="setup-comp-name">AI校正実行エンジン（{{ llmBackendSetupLabel() }}）</span>
+              <span class="setup-comp-note">{{ llmBackendSetupNote() }}</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['llm_backend']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['llm_backend']?.status === 'done'"

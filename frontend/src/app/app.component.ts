@@ -179,6 +179,7 @@ import {
   themeToggleIconValue,
   transcriptionTabDisabledValue,
   transcriptionTabLabelValue,
+  transcriptionRuntimeReasonValue,
   updateLlmSelectionSettingsValue,
   updateStoredLlmInferenceParamsValue,
   updateStoredLlmPromptTypeValue,
@@ -627,6 +628,28 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.cudaAvailable() === true,
       this.rocmAvailable() === true
     );
+  });
+  /**
+   * Setup must distinguish "still probing" and "no GPU" from a valid backend.
+   * In particular, the latter is not a request to install llama.cpp CPU on a
+   * Full CUDA/ROCm build.
+   */
+  readonly llmBackendSetupPlan = computed(() => llmBackendInstallPlan(
+    this.cudaAvailable(),
+    this.rocmAvailable()
+  ));
+  readonly llmBackendSetupLabel = computed(() => {
+    const plan = this.llmBackendSetupPlan();
+    if (plan.status === 'checking') return '判定中';
+    if (plan.status === 'unavailable') return 'GPU未検出';
+    return llmBackendLabel(plan.primary);
+  });
+  readonly llmBackendSetupNote = computed(() => {
+    const plan = this.llmBackendSetupPlan();
+    if (plan.status === 'ready') {
+      return `${llmBackendLabel(plan.primary)}を使用します。`;
+    }
+    return plan.reason;
   });
   // インストール済みかどうかに関わらず、GPU モードから期待されるバックエンドキーを返す
   readonly llmTargetBackendKey = computed(() => {
@@ -5336,6 +5359,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async onRecheckAllSetupStatus(): Promise<void> {
+    // 統合セットアップ表示中は上部のGPU再確認ボタンが隠れるため、
+    // この再チェックでもドライバー導入後のCUDA/ROCm状態を更新する。
+    await this.checkGpuAvailability();
     await this.checkAllSetupStatus();
     await this.checkTranscriptionRuntimeSupport();
     this.activeTabIndex.set(0);
@@ -5387,13 +5413,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
       // 関係なくGPUバックエンドを準備する。
       if (this.runtimeAiProofreadBuild() && !this.allSetupStatus()?.llmBackend) {
+        // セットアップ開始後にGPUドライバーが導入された場合も、古い起動時
+        // 判定のままバックエンドを選ばないように再確認してから計画を作る。
+        await this.checkGpuAvailability();
         // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
         // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
         const backendPlan = llmBackendInstallPlan(
-          this.cudaAvailable() === true,
-          this.rocmAvailable() === true
+          this.cudaAvailable(),
+          this.rocmAvailable()
         );
+
+        // Full CUDA/ROCm版でGPUを検出できない場合、CPUバックエンドを
+        // 暗黙に選択してダウンロードすることは禁止する。GPUランタイムを
+        // 修復してから再実行できるよう、セットアップ欄に理由を残す。
+        if (backendPlan.status !== 'ready') {
+          this.setSetupProgress(setupErrorProgress('llm_backend', backendPlan.reason));
+          return;
+        }
 
         this.setSetupProgress({
           component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...'
@@ -5445,6 +5482,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.diarizationInstallToken.set('');
         this.setupRunning.set(false);
       });
+      // モデル／バックエンドの導入後にドライバー状態も再確認する。
+      // これにより、セットアップ中にCUDA/ROCmを導入した場合は警告と
+      // バックエンド選択がその場で更新され、再起動を必須にしない。
+      await this.checkGpuAvailability();
       await this.checkAllSetupStatus();
       await this.checkTranscriptionRuntimeSupport();
       this.ngZone.run(() => {
@@ -5482,7 +5523,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.transcriptionTabVisible.set(false);
       this.transcriptionRuntimeAvailable.set(false);
       this.activeTabIndex.set(0);
-      this.transcriptionRuntimeReason.set('GPU が確認できないため、文字起こし機能は利用できません。');
+      this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
+        false,
+        null,
+        this.runtimeCpuOnlyBuild()
+      ));
       return;
     }
 
@@ -5492,14 +5537,22 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.transcriptionTabVisible.set(true);
         this.transcriptionRuntimeAvailable.set(status.available === true);
         this.activeTabIndex.set(0);
-        this.transcriptionRuntimeReason.set(status.available ? '' : (status.reason ?? 'GPU が確認できないため、文字起こし機能は利用できません。'));
+        this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
+          status.available === true,
+          status.reason,
+          this.runtimeCpuOnlyBuild()
+        ));
       });
     } catch (error) {
       this.ngZone.run(() => {
         this.transcriptionTabVisible.set(true);
         this.transcriptionRuntimeAvailable.set(false);
         this.activeTabIndex.set(0);
-        this.transcriptionRuntimeReason.set('GPU 確認に失敗したため、文字起こし機能は利用できません。');
+        this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
+          false,
+          'GPU 確認に失敗したため、文字起こし機能は利用できません。',
+          this.runtimeCpuOnlyBuild()
+        ));
       });
     }
   }

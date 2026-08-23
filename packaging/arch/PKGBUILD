@@ -1,6 +1,6 @@
 pkgname=local-transcription-for-therapy-cuda
 pkgver=0.9.8
-pkgrel=8
+pkgrel=9
 pkgdesc='Local transcription and proofreading for therapy sessions (NVIDIA CUDA)'
 arch=('x86_64')
 url='https://github.com/Hironori-Abe/local-transcription-for-therapy'
@@ -13,14 +13,15 @@ depends=(
   'hicolor-icon-theme'
   'gst-plugins-base'
   'gst-plugins-good'
+  'nvidia-utils'
+  'vulkan-icd-loader'
   'webkit2gtk-4.1'
   'xdg-utils'
   'xorg-xwayland'
 )
 optdepends=(
-  'cuda: NVIDIA CUDA transcription runtime'
+  'cuda: NVIDIA CUDA toolkit for development (the app installs its Python CUDA runtime during setup)'
   'fcitx5-gtk: Japanese input through fcitx5'
-  'nvidia-utils: NVIDIA proprietary driver userspace libraries'
   'pipewire-pulse: audio playback through PipeWire/PulseAudio'
 )
 makedepends=(

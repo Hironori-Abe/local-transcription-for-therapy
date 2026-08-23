@@ -56,10 +56,35 @@ export interface SetupStatusProjection {
   diarizationSetupVisible: boolean;
 }
 
-export interface LlmBackendInstallPlan {
-  primary: string;
-  fallbacks: string[];
-}
+/**
+ * The backend that can be downloaded for the current GPU detection state.
+ *
+ * `unavailable` is deliberately represented in the type.  A GPU edition must
+ * never silently turn a failed CUDA/ROCm probe into a CPU backend download.
+ * `checking` is separate so the setup UI can explain why no download action
+ * is available while the initial probe is still in progress.
+ */
+export type LlmBackendInstallPlan =
+  | {
+      status: 'ready';
+      unavailable: false;
+      primary: string;
+      fallbacks: string[];
+    }
+  | {
+      status: 'checking';
+      unavailable: false;
+      primary: null;
+      fallbacks: [];
+      reason: string;
+    }
+  | {
+      status: 'unavailable';
+      unavailable: true;
+      primary: null;
+      fallbacks: [];
+      reason: string;
+    };
 
 export function downloadProgressPercent(progress: DownloadProgress | null | undefined): number {
   if (!progress?.downloadedBytes || !progress?.totalBytes) return 0;
@@ -154,14 +179,45 @@ export function browserVoiceInputPackStatus(cpuBackendRequired: boolean): Editor
   };
 }
 
-export function llmBackendInstallPlan(cudaAvailable: boolean, rocmAvailable: boolean): LlmBackendInstallPlan {
-  if (cudaAvailable) return { primary: 'llamacpp:vulkan', fallbacks: [] };
-  if (rocmAvailable) return { primary: 'llamacpp:rocm', fallbacks: ['llamacpp:vulkan'] };
-  return { primary: 'llamacpp:cpu', fallbacks: [] };
+export function llmBackendInstallPlan(
+  cudaAvailable: boolean | null | undefined,
+  rocmAvailable: boolean | null | undefined
+): LlmBackendInstallPlan {
+  // CUDA is sufficient to select the NVIDIA backend even if the optional
+  // ROCm probe has not completed yet.  Likewise ROCm is sufficient when its
+  // own probe succeeded and CUDA is still unknown.
+  if (cudaAvailable === true) {
+    return { status: 'ready', unavailable: false, primary: 'llamacpp:vulkan', fallbacks: [] };
+  }
+  if (rocmAvailable === true) {
+    return {
+      status: 'ready',
+      unavailable: false,
+      primary: 'llamacpp:rocm',
+      fallbacks: ['llamacpp:vulkan']
+    };
+  }
+  if (cudaAvailable == null || rocmAvailable == null) {
+    return {
+      status: 'checking',
+      unavailable: false,
+      primary: null,
+      fallbacks: [],
+      reason: 'CUDA / ROCm GPUランタイムを確認中です。判定が終わるまでダウンロードできません。'
+    };
+  }
+  return {
+    status: 'unavailable',
+    unavailable: true,
+    primary: null,
+    fallbacks: [],
+    reason: 'CUDA / ROCm GPUランタイムが検出されないため、AI校正実行エンジンをダウンロードできません。GPUドライバーを確認し、「GPUを再確認」してから再実行してください。'
+  };
 }
 
-export function llmBackendLabel(backend: string): string {
+export function llmBackendLabel(backend: string | null | undefined): string {
   if (backend === 'llamacpp:vulkan') return 'Vulkan';
   if (backend === 'llamacpp:rocm') return 'AMD GPU (ROCm)';
-  return 'CPU';
+  if (backend === 'llamacpp:cpu') return 'CPU';
+  return '未選択';
 }

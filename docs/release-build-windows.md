@@ -202,7 +202,7 @@ AMD版はGPU処理に失敗した場合にCPUへフォールバックせず、�
 | override | 用途 |
 | --- | --- |
 | `tauri.nvidia.windows.override.json` | 安定版 / NVIDIA RTX 主軸 / Windows NSIS（`setup-build-tools.bat` の既定） |
-| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムを同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入。LLM ランタイム未同梱 |
+| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムを同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入。LLMランタイムは同梱せず、Linux NVIDIAではセットアップタブから取得するVulkan版を暫定使用 |
 | `tauri.amd.windows.override.json` | AMD / Windows NSIS ビルド用（詳細調整予定） |
 | `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux。自己完結Python 3.12基本ランタイムを同梱（詳細調整予定） |
 | `tauri.cpu.windows.override.json` | CPU 版 / Windows NSIS（`setup-build-tools.bat --cpu`） |

@@ -866,11 +866,84 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     let exe = std::env::consts::EXE_SUFFIX;
     for dir in &search_dirs {
         let path = dir.join(format!("llama-server{exe}"));
-        if path.exists() {
+        if llama_server_binary_is_usable(&path) {
             return Some(path.to_string_lossy().into_owned());
         }
     }
     None
+}
+
+/// `llama-server` の候補が実際に実行可能なファイルかを判定する。
+///
+/// セットアップ状態はディレクトリ内に一時ファイルが残っているだけでも true になって
+/// いたため、既知のファイル名・非空ファイル・（Unix の場合）実行権限を確認する。
+/// バージョン起動までは行わない（GPU/共有ライブラリが無い環境でも設定画面を固めないため）。
+fn llama_server_binary_is_usable(path: &Path) -> bool {
+    if !path_is_nonempty_file(path, 1) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return path
+            .metadata()
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// ダウンロードした llama.cpp の実行時ライブラリを解決するための環境を設定する。
+///
+/// Linux の配布アーカイブは `llama-server` と共有ライブラリが同じ階層、または `lib/`
+/// 配下に置かれることがある。`--help` の実行（MTP 対応判定）にも同じ環境を渡さないと、
+/// ライブラリ不足を「MTP 非対応」と誤判定してしまう。
+fn configure_llama_server_runtime_env(cmd: &mut Command, bin_path: &str) {
+    let bin_path = PathBuf::from(bin_path);
+    let Some(bin_dir) = bin_path.parent() else {
+        return;
+    };
+    if !bin_dir.exists() {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    let separator = ";";
+    #[cfg(not(target_os = "windows"))]
+    let separator = ":";
+    let current_path = env::var("PATH").unwrap_or_default();
+    let rendered_path = if current_path.is_empty() {
+        bin_dir.display().to_string()
+    } else {
+        format!("{}{separator}{current_path}", bin_dir.display())
+    };
+    cmd.env("PATH", rendered_path);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut library_dirs = vec![bin_dir.to_path_buf()];
+        for name in ["lib", "lib64"] {
+            let dir = bin_dir.join(name);
+            if dir.is_dir() {
+                library_dirs.push(dir);
+            }
+        }
+        let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let prefix = library_dirs
+            .iter()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(separator);
+        let rendered_ld = if current_ld.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}{separator}{current_ld}")
+        };
+        cmd.env("LD_LIBRARY_PATH", rendered_ld);
+    }
 }
 
 /// セットアップから取得した Vulkan ビルドの
@@ -885,7 +958,7 @@ fn find_llm_vulkan_llama_server(app: &AppHandle) -> Option<String> {
         .join("llamacpp")
         .join("vulkan")
         .join(format!("llama-server{exe}"));
-    if path.exists() {
+    if llama_server_binary_is_usable(&path) {
         Some(path.to_string_lossy().into_owned())
     } else {
         None
@@ -902,7 +975,7 @@ fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
         .join("llamacpp")
         .join("rocm-stable")
         .join(format!("llama-server{exe}"));
-    if path.exists() {
+    if llama_server_binary_is_usable(&path) {
         Some(path.to_string_lossy().into_owned())
     } else {
         None
@@ -919,7 +992,7 @@ fn find_llm_cpu_llama_server(app: &AppHandle) -> Option<String> {
         .join("llamacpp")
         .join("cpu")
         .join(format!("llama-server{exe}"));
-    if path.exists() {
+    if llama_server_binary_is_usable(&path) {
         Some(path.to_string_lossy().into_owned())
     } else {
         None
@@ -951,6 +1024,7 @@ fn rocm_build_supports_gemma4_assistant(bin_path: &str) -> bool {
 fn llama_server_supports_mtp(bin_path: &str) -> bool {
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
+    configure_llama_server_runtime_env(&mut cmd, bin_path);
     match cmd
         .arg("--help")
         .stdout(Stdio::piped())
@@ -1204,26 +1278,10 @@ fn try_start_llama_server_vulkan(
     }
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
-    // 同梱共有ライブラリ（libggml-*.so / libllama.so 等）をバイナリと同じディレクトリから
-    // 解決できるよう、bin ディレクトリを PATH と LD_LIBRARY_PATH の先頭に追加する。
-    if let Some(bin_dir) = PathBuf::from(bin_path).parent() {
-        if bin_dir.exists() {
-            #[cfg(target_os = "windows")]
-            let sep = ";";
-            #[cfg(not(target_os = "windows"))]
-            let sep = ":";
-            let current_path = env::var("PATH").unwrap_or_default();
-            cmd.env("PATH", format!("{}{sep}{current_path}", bin_dir.display()));
-            #[cfg(not(target_os = "windows"))]
-            {
-                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
-                cmd.env(
-                    "LD_LIBRARY_PATH",
-                    format!("{}{sep}{current_ld}", bin_dir.display()),
-                );
-            }
-        }
-    }
+    // 同梱共有ライブラリ（libggml-*.so / libllama.so 等）をバイナリと同じ階層、または
+    // `lib/` 配下から解決する。MTP 判定時と同じ環境を渡し、判定だけ成功して実起動が
+    // 失敗する状態を避ける。
+    configure_llama_server_runtime_env(&mut cmd, bin_path);
     // Vulkan デバイス選択。指定（>=0）があればそのデバイスのみ見せる（iGPU 誤選択を避け dGPU を使う）。
     // 未指定（None/-1）は llama.cpp 既定（Vulkan0）。
     if let Some(idx) = vk_device_index.filter(|&i| i >= 0) {
@@ -1241,7 +1299,11 @@ fn try_start_llama_server_vulkan(
         .arg(model_path)
         .arg("--port")
         .arg(&port_s)
-        // -ngl は指定しない（auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置）
+        // -ngl は指定せず --fit on（auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置）
+        // を明示する。12B + MTP のドラフトを含む構成で、ビルド既定値に依存して OOM する
+        // ことを避ける。
+        .arg("--fit")
+        .arg("on")
         .arg("--ctx-size")
         .arg(&ctx_s)
         .arg("--flash-attn")
@@ -1315,17 +1377,7 @@ fn preferred_vulkan_device_index(_bin_path: &str) -> i32 {
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new(_bin_path);
-        if let Some(bin_dir) = PathBuf::from(_bin_path).parent() {
-            if bin_dir.exists() {
-                let current_path = env::var("PATH").unwrap_or_default();
-                cmd.env("PATH", format!("{}:{current_path}", bin_dir.display()));
-                let current_ld = env::var("LD_LIBRARY_PATH").unwrap_or_default();
-                cmd.env(
-                    "LD_LIBRARY_PATH",
-                    format!("{}:{current_ld}", bin_dir.display()),
-                );
-            }
-        }
+        configure_llama_server_runtime_env(&mut cmd, _bin_path);
         if let Ok(output) = cmd.arg("--list-devices").output() {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -1533,20 +1585,34 @@ fn get_llm_engine_cache_dir(app: &AppHandle) -> Option<PathBuf> {
 
 #[tauri::command]
 fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
-    // llama-server CUDA バイナリが存在する場合もバックエンドインストール済みと見なす
+    // 同梱 llama-server は CUDA/Windows の標準経路。ファイル名だけでなく、非空かつ
+    // 実行可能な実体であることを find_* 側で確認している。
     if find_bundled_llama_server_bin(&app).is_some() {
         return true;
     }
-    let Some(llm_dir) = get_llm_engine_cache_dir(&app) else {
-        return false;
-    };
-    let bin_dir = llm_dir.join("bin");
-    if !bin_dir.exists() {
-        return false;
+
+    // 配布バリアントごとに、実際に起動候補となる既知の llama-server を確認する。
+    // 以前は `bin/` に一時展開ディレクトリが一つでもあれば true になり、ダウンロード
+    // 中断後も「完了」と表示されていた。また NVIDIA Linux は CUDA バイナリを同梱せず、
+    // セットアップで取得した Vulkan を使うため、その経路も明示的に含める。
+    match build_variant_for_identifier(app.config().identifier.as_str()) {
+        "cpu" => find_llm_cpu_llama_server(&app).is_some(),
+        "rocm" => {
+            find_llm_rocm_llama_server(&app).is_some()
+                || find_llm_vulkan_llama_server(&app).is_some()
+        }
+        "cuda" => {
+            #[cfg(target_os = "linux")]
+            {
+                find_llm_vulkan_llama_server(&app).is_some()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        }
+        _ => false,
     }
-    std::fs::read_dir(&bin_dir)
-        .map(|mut d| d.next().is_some())
-        .unwrap_or(false)
 }
 
 /// アプリ固有キャッシュの config.json に解決済みポートを書き込む（次回起動での再利用用）。
@@ -2392,6 +2458,99 @@ fn start_cuda_llama_blocking(
     Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
 }
 
+/// ダウンロードした Vulkan llama-server を起動し、listen するまで待つ。
+///
+/// AMD の E4B/12B 経路にも使われている `try_start_llama_server_vulkan` を NVIDIA Linux
+/// の CUDA 非同梱版からも利用する。プロセス即死・OOM・タイムアウト時は必ず子プロセスを
+/// 回収して mode を停止へ戻す。
+fn start_vulkan_llama_blocking(
+    bin_path: &str,
+    model_path: &str,
+    mtp_model_path: Option<&str>,
+    mmproj_path: Option<&str>,
+    port: u16,
+    ctx_size: u32,
+    vk_device_index: i32,
+    child_arc: &Arc<Mutex<Option<Child>>>,
+    mode_arc: &Arc<AtomicU8>,
+) -> Result<(), String> {
+    let (mut child, oom_flag) = match try_start_llama_server_vulkan(
+        bin_path,
+        model_path,
+        mtp_model_path,
+        mmproj_path,
+        port,
+        ctx_size,
+        Some(vk_device_index),
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            mode_arc.store(0, Ordering::Relaxed);
+            return Err(error);
+        }
+    };
+    let mut guard = match child_arc.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            mode_arc.store(0, Ordering::Relaxed);
+            return Err("AI校正エンジン (Vulkan) の状態管理に失敗しました。".to_string());
+        }
+    };
+    *guard = Some(child);
+    drop(guard);
+
+    for _ in 0..240 {
+        thread::sleep(Duration::from_millis(500));
+        if llm_server_port_open(port) {
+            return Ok(());
+        }
+        if oom_flag.load(Ordering::Relaxed) {
+            if let Ok(mut guard) = child_arc.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = kill_process_tree_by_pid(child.id());
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            mode_arc.store(0, Ordering::Relaxed);
+            return Err(format!(
+                "{VRAM_OOM_MARKER} AI校正エンジン (Vulkan) の起動時にGPUメモリ(VRAM)が不足しました。"
+            ));
+        }
+        let child_dead = child_arc
+            .lock()
+            .ok()
+            .and_then(|mut guard| {
+                guard.as_mut().map(|child| {
+                    child
+                        .try_wait()
+                        .map(|status| status.is_some())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if child_dead {
+            break;
+        }
+    }
+
+    if let Ok(mut guard) = child_arc.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = kill_process_tree_by_pid(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    mode_arc.store(0, Ordering::Relaxed);
+    Err(
+        "AI校正エンジン (Vulkan) の起動に失敗しました（120秒以内に応答しませんでした）。"
+            .to_string(),
+    )
+}
+
 #[tauri::command]
 async fn start_llm_server(
     app: AppHandle,
@@ -2412,9 +2571,16 @@ async fn start_llm_server(
         }
     }
 
-    // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接 CUDA 起動する
+    // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接起動する。
+    // Linux の配布版では CUDA llama-server を同梱せず、セットアップで取得した Vulkan
+    // バックエンドを使うため、CUDA と Vulkan を別候補として解決する。
     let nvidia_list = nvidia_gpu_priority_list();
     let llama_server_bin = find_bundled_llama_server_bin(&app);
+    let nvidia_vulkan_bin = if cfg!(target_os = "linux") && !is_amd_gpu_build(&app) {
+        find_llm_vulkan_llama_server(&app)
+    } else {
+        None
+    };
     let effective_tier = proofread_tier
         .as_deref()
         .map(GemmaTier::from_marker)
@@ -2423,6 +2589,13 @@ async fn start_llm_server(
     let model_path = resolve_gemma_main_path_for_tier(&app, effective_tier);
     let mtp_model_path = match (
         &llama_server_bin,
+        resolve_gemma_mtp_path_for_tier(&app, effective_tier),
+    ) {
+        (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
+        _ => None,
+    };
+    let nvidia_vulkan_mtp_model_path = match (
+        &nvidia_vulkan_bin,
         resolve_gemma_mtp_path_for_tier(&app, effective_tier),
     ) {
         (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
@@ -2446,7 +2619,7 @@ async fn start_llm_server(
 
     if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
         let bin = llama_server_bin.unwrap();
-        let mpath = model_path.unwrap();
+        let mpath = model_path.clone().unwrap();
         let mtp_path = mtp_model_path;
         // 選択された GPU（llmHipDeviceIndex / nvidia-smi index）の VRAM（MiB）を使う。
         // 未指定(-1/None)や該当なしのときは最良 GPU（VRAM 降順の先頭）にフォールバック。
@@ -2480,6 +2653,46 @@ async fn start_llm_server(
                 ctx_size,
                 sel_idx,
                 is_12b,
+                &child_arc,
+                &mode_arc,
+            )?;
+            purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
+            Ok("started".to_string())
+        })
+        .await
+        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
+    } else if !nvidia_list.is_empty() && nvidia_vulkan_bin.is_some() && model_path.is_some() {
+        // Linux NVIDIA 配布版: CUDA llama-server が同梱されていない場合は、セットアップで
+        // 取得した Vulkan 版を直接起動する。E4B/12B ともに同じ local GGUF を渡し、MTP 対応
+        // ビルドであればドラフトも有効にする。iGPU が Vulkan0 になる構成では、列挙結果から
+        // NVIDIA デバイスを選択して誤起動・ハングを避ける。
+        let bin = nvidia_vulkan_bin.unwrap();
+        let mpath = model_path.unwrap();
+        let mtp_path = nvidia_vulkan_mtp_model_path;
+        let is_12b = matches!(effective_tier, GemmaTier::B12);
+        // Vulkan 起動関数は -np を渡さず単一スロットで動作する。sidecar へも常に
+        // parallel=1 を伝え、llama-server とリクエスト並列数が食い違わないようにする。
+        let n_parallel = 1u32;
+        let ctx_size = if is_12b {
+            AMD_12B_CTX_SIZE
+        } else {
+            llm_ctx
+                .filter(|ctx| *ctx >= 4096)
+                .map(|ctx| ctx.min(131072))
+                .unwrap_or(AMD_E4B_CTX_SIZE)
+        };
+        let vk_device_index = preferred_vulkan_device_index(&bin);
+        tauri::async_runtime::spawn_blocking(move || {
+            mode_arc.store(1, Ordering::Relaxed);
+            parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
+            start_vulkan_llama_blocking(
+                &bin,
+                &mpath,
+                mtp_path.as_deref(),
+                None, // 校正は mmproj 無し
+                resolved_port,
+                ctx_size,
+                vk_device_index,
                 &child_arc,
                 &mode_arc,
             )?;
@@ -6710,12 +6923,59 @@ fn open_external_url(url: String) -> Result<(), String> {
 async fn check_transcription_runtime_support(
     app: AppHandle,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
-    // torch インポート + CUDA 初期化を伴う Python サブプロセスは数秒かかるため、
-    // メインスレッド（UI スレッド）で実行すると UI が固まる。spawn_blocking で
+    // CTranslate2/PyTorch の import + GPU 初期化を伴う Python サブプロセスは数秒かかる
+    // ため、メインスレッド（UI スレッド）で実行すると UI が固まる。spawn_blocking で
     // ワーカースレッドへ逃がし、UI を止めずに再確認できるようにする。
     tauri::async_runtime::spawn_blocking(move || check_transcription_runtime_support_blocking(app))
         .await
         .map_err(|e| format!("GPU ランタイム確認タスクの実行に失敗しました: {e}"))?
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NvidiaSmiProbe {
+    Available,
+    NotFound,
+    Failed,
+}
+
+/// NVIDIA のユーザー空間診断コマンドを確認する。stderr や実行パスは返さない。
+fn probe_nvidia_smi() -> NvidiaSmiProbe {
+    let mut cmd = Command::new("nvidia-smi");
+    apply_windows_no_window(&mut cmd);
+    apply_host_command_env(&mut cmd);
+    match cmd
+        .arg("-L")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        Ok(output) if output.status.success() && !output.stdout.trim_ascii().is_empty() => {
+            NvidiaSmiProbe::Available
+        }
+        Ok(_) => NvidiaSmiProbe::Failed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => NvidiaSmiProbe::NotFound,
+        Err(_) => NvidiaSmiProbe::Failed,
+    }
+}
+
+/// Python サブプロセスが警告を stdout に出した場合でも、JSON の行だけを拾う。
+/// stdout/stderr の生テキストはユーザー向けに表示しない（環境パスを漏らさない）。
+fn parse_gpu_runtime_probe(stdout: &str) -> Option<Value> {
+    stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+}
+
+fn runtime_component_failure_reason(value: Option<&Value>, label: &str) -> String {
+    match value
+        .and_then(|component| component.get("error"))
+        .and_then(Value::as_str)
+    {
+        Some("not_installed") => format!("{label}が未インストールです"),
+        Some("runtime_error") => format!("{label}のGPU初期化に失敗しました"),
+        _ => format!("{label}でGPUデバイスを確認できませんでした"),
+    }
 }
 
 fn check_transcription_runtime_support_blocking(
@@ -6795,83 +7055,161 @@ fn check_transcription_runtime_support_blocking(
         });
     }
 
+    // 文字起こし（CTranslate2）と話者分離（PyTorch）は別の GPU ランタイムを使う。
+    // 片方の import/初期化失敗だけで全体を「torch の CUDA が無い」と誤診しないよう、
+    // 各コンポーネントを独立して検査する。例外本文はJSONへ入れず、状態コードだけ返す。
+    const GPU_RUNTIME_PROBE_SCRIPT: &str = r#"
+import json
+
+result = {
+    "ctranslate2": {"available": False, "error": "not_installed"},
+    "torch": {"available": False, "error": "not_installed", "hip": False},
+}
+
+try:
+    import ctranslate2 as ct
+    try:
+        device_count = int(ct.get_cuda_device_count())
+        compute_types = sorted(str(value) for value in ct.get_supported_compute_types("cuda"))
+        result["ctranslate2"] = {
+            "available": device_count > 0 and bool(compute_types),
+            "deviceCount": device_count,
+            "computeTypes": compute_types,
+            "error": None if device_count > 0 and bool(compute_types) else "no_device",
+        }
+    except Exception:
+        result["ctranslate2"] = {"available": False, "error": "runtime_error"}
+except ModuleNotFoundError:
+    result["ctranslate2"] = {"available": False, "error": "not_installed"}
+except Exception:
+    result["ctranslate2"] = {"available": False, "error": "runtime_error"}
+
+try:
+    import torch
+    hip = bool(getattr(torch.version, "hip", None))
+    try:
+        torch_available = bool(torch.cuda.is_available())
+        device_count = int(torch.cuda.device_count()) if torch_available else 0
+        result["torch"] = {
+            "available": torch_available and device_count > 0,
+            "deviceCount": device_count,
+            "hip": hip,
+            "error": None if torch_available and device_count > 0 else "no_device",
+        }
+    except Exception:
+        result["torch"] = {"available": False, "error": "runtime_error", "hip": hip}
+except ModuleNotFoundError:
+    result["torch"] = {"available": False, "error": "not_installed", "hip": False}
+except Exception:
+    result["torch"] = {"available": False, "error": "runtime_error", "hip": False}
+
+print(json.dumps(result, ensure_ascii=False))
+"#;
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
     configure_python_command(&app, &python_bin, &mut cmd);
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg("-c")
-        .arg(
-            "import json, torch; available=bool(torch.cuda.is_available()) and int(torch.cuda.device_count())>0; hip=bool(getattr(torch.version,'hip',None)); print(json.dumps({'available': available, 'hip': hip}))",
-        )
+        .arg(GPU_RUNTIME_PROBE_SCRIPT)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     apply_child_runtime_env(&mut cmd, "cuda", None);
 
     let output = cmd.output().map_err(|e| {
-        format!(
-            "GPU ランタイム確認の実行に失敗しました (python={}): {e}",
-            python_bin
-        )
+        let _ = e;
+        "GPU ランタイム確認のためのPythonを起動できませんでした。".to_string()
     })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !output.status.success() {
-        let detail = if !stderr.is_empty() {
-            &stderr
-        } else if !stdout.is_empty() {
-            &stdout
-        } else {
-            ""
-        };
-        let reason = if detail.is_empty() {
-            "GPU ランタイム確認の実行に失敗しました。".to_string()
-        } else {
-            format!("GPU ランタイム確認でエラーが発生しました: {detail}")
-        };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(parsed) = parse_gpu_runtime_probe(&stdout) else {
         return Ok(TranscriptionRuntimeStatusResponse {
             available: false,
-            reason,
-        });
-    }
-
-    let parsed = serde_json::from_str::<Value>(&stdout).unwrap_or(Value::Null);
-    let available = parsed
-        .get("available")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if available {
-        let is_rocm = parsed.get("hip").and_then(Value::as_bool).unwrap_or(false);
-        let reason = if is_rocm {
-            "AMD GPU（ROCm / HIP）で GPU 推論が利用可能です。".to_string()
-        } else {
-            "CUDA が利用可能です。".to_string()
-        };
-        return Ok(TranscriptionRuntimeStatusResponse {
-            available: true,
-            reason,
-        });
-    }
-
-    let reason = parsed
-        .get("error")
-        .and_then(Value::as_str)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if is_amd_gpu_build(&app) {
-                "AMD GPU ランタイムを確認できませんでした。AMD GPU版は CPU へフォールバックしません。"
+            reason: if output.status.success() {
+                "GPU ランタイム確認の結果を取得できませんでした。セットアップを再実行してください。"
                     .to_string()
             } else {
-                "GPU が確認できませんでした。CPU モードで動作します。".to_string()
-            }
+                "GPU ランタイム確認の実行に失敗しました。アプリ専用Python環境を確認してください。"
+                    .to_string()
+            },
         });
-    Ok(TranscriptionRuntimeStatusResponse {
-        available: false,
-        reason,
-    })
+    };
+
+    let asr = parsed.get("ctranslate2");
+    let diarization = parsed.get("torch");
+    let asr_available = asr
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let diarization_available = diarization
+        .and_then(|value| value.get("available"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let is_amd = is_amd_gpu_build(&app)
+        || diarization
+            .and_then(|value| value.get("hip"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let nvidia_smi = if is_amd {
+        None
+    } else {
+        Some(probe_nvidia_smi())
+    };
+    // CUDA 版では nvidia-smi が GPU 列挙と LLM 起動にも必要になるため、PyTorch/CT2 が
+    // 偶然初期化できても診断を成功扱いにしない。AMD 版では nvidia-smi を要求しない。
+    let nvidia_driver_ok = !matches!(
+        nvidia_smi,
+        Some(NvidiaSmiProbe::NotFound | NvidiaSmiProbe::Failed)
+    );
+    let available = asr_available && diarization_available && nvidia_driver_ok;
+
+    let mut failures = Vec::new();
+    if !asr_available {
+        failures.push(runtime_component_failure_reason(
+            asr,
+            "文字起こし用 CTranslate2",
+        ));
+    }
+    if !diarization_available {
+        failures.push(runtime_component_failure_reason(
+            diarization,
+            "話者分離用 PyTorch",
+        ));
+    }
+    if let Some(smi) = nvidia_smi {
+        match smi {
+            NvidiaSmiProbe::NotFound => failures.push(
+                "nvidia-smi が見つかりません（NVIDIA ユーザー空間ドライバーを確認してください）"
+                    .to_string(),
+            ),
+            NvidiaSmiProbe::Failed => failures.push(
+                "nvidia-smi の実行に失敗しました（NVIDIA ドライバーを確認してください）"
+                    .to_string(),
+            ),
+            NvidiaSmiProbe::Available => {}
+        }
+    }
+
+    let reason = if available {
+        if is_amd {
+            "文字起こし用 CTranslate2 と話者分離用 PyTorch が AMD GPU（ROCm / HIP）で利用可能です。"
+                .to_string()
+        } else {
+            "文字起こし用 CTranslate2 と話者分離用 PyTorch が NVIDIA GPU（CUDA）で利用可能です。"
+                .to_string()
+        }
+    } else {
+        let backend = if is_amd {
+            "AMD GPU（ROCm / HIP）"
+        } else {
+            "NVIDIA GPU（CUDA）"
+        };
+        format!(
+            "{backend} のGPUランタイムを利用できません。{}。CPUモードへは自動切替しません。",
+            failures.join("、")
+        )
+    };
+    Ok(TranscriptionRuntimeStatusResponse { available, reason })
 }
 
 fn xml_escape(input: &str) -> String {
@@ -10690,6 +11028,25 @@ mod tests {
         let devices = vec![(0, "AMD Radeon RX 7600M XT".to_string())];
         assert_eq!(choose_preferred_vulkan_device_index(&devices), 0);
         assert_eq!(choose_preferred_vulkan_device_index(&[]), 0);
+    }
+
+    #[test]
+    fn gpu_runtime_probe_parses_independent_ctranslate2_and_torch_states() {
+        let parsed = parse_gpu_runtime_probe(
+            "warning from an imported runtime\n{\"ctranslate2\":{\"available\":false,\"error\":\"runtime_error\"},\"torch\":{\"available\":true,\"hip\":false}}\n",
+        )
+        .expect("probe JSON should be parsed");
+        assert!(!parsed["ctranslate2"]["available"].as_bool().unwrap_or(true));
+        assert!(parsed["torch"]["available"].as_bool().unwrap_or(false));
+        assert_eq!(
+            runtime_component_failure_reason(parsed.get("ctranslate2"), "文字起こし用 CTranslate2"),
+            "文字起こし用 CTranslate2のGPU初期化に失敗しました"
+        );
+    }
+
+    #[test]
+    fn gpu_runtime_probe_does_not_parse_arbitrary_stderr_as_status() {
+        assert!(parse_gpu_runtime_probe("CUDA unavailable\nnot json\n").is_none());
     }
 
     #[test]

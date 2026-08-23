@@ -104,6 +104,7 @@ import {
   themeToggleIconValue,
   transcriptionTabDisabledValue,
   transcriptionTabLabelValue,
+  transcriptionRuntimeReasonValue,
   validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
   processingStatusTextValue
@@ -193,6 +194,22 @@ test('LLM backend selection preserves CPU, NVIDIA, AMD, and unavailable prioriti
   assert.equal(resolveLlmTargetBackendKeyValue('gpu', true, true), 'llamacpp:vulkan');
   assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, true), 'llamacpp:rocm');
   assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, false), '');
+});
+
+test('Full GPU runtime reasons never promise an unavailable CPU fallback', () => {
+  assert.equal(
+    transcriptionRuntimeReasonValue(false, 'GPU が確認できませんでした。CPU モードで動作します。', false),
+    'GPU が確認できませんでした。Full GPU版ではCPUへ切り替えず、文字起こし・話者分離は利用できません。GPUドライバーとランタイムを確認してください。'
+  );
+  assert.equal(
+    transcriptionRuntimeReasonValue(false, 'CPU モードで動作します。', true),
+    'CPU モードで動作します。'
+  );
+  assert.equal(
+    transcriptionRuntimeReasonValue(false, '', false),
+    'GPU が確認できないため、文字起こし・話者分離は利用できません。'
+  );
+  assert.equal(transcriptionRuntimeReasonValue(true, 'CUDA が利用可能です。', false), '');
 });
 
 test('LLM mode, VRAM, parallelism, and context hints preserve current UI rules', () => {

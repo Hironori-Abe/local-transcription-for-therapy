@@ -67,6 +67,12 @@ LinuxでもCPUバックエンドではGemma 4の自動取得を既定でスキ�
 
 - `setup-dev.sh` は Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存の準備を担います。
 - Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先してください。
+- CachyOS / ArchでNVIDIA版を開発する場合は、ホスト側にNVIDIAドライバーと
+  `nvidia-utils`、`vulkan-icd-loader`を先に導入し、`nvidia-smi -L`でGPUを確認してください。
+  `nvidia-utils`はカーネルドライバー本体を含まないため、使用中のカーネルに合う
+  `nvidia` / `nvidia-open` / `nvidia-dkms`なども必要です。
+- Linux NVIDIAのASR・話者分離はCUDA、LLM校正は現状セットアップタブから取得するVulkan版
+  `llama-server`を使います。Linux LLMのCUDA直起動への移行は恒久対応課題です。
 
 ### 実行環境エミュレーション
 
@@ -147,7 +153,7 @@ scripts\run-dev.bat
   - 追加: ローカル OpenAI 互換 API（`localhost` / `127.*` / `[::1]` の loopback 接続のみ）
 - 内蔵校正AIモデルの階層は「AI校正バックエンド」セレクタで選べます（E4B / 12B が同セレクタに並びます）。
   - 標準: Gemma 4 E4B QAT（既定。CUDA / AMD 共通）
-  - 高精度: Gemma 4 12B QAT + MTP（**NVIDIA / AMD 共通**、GPU 直起動経路。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック。large-v3 と同じく後からダウンロード（約7GB））
+  - 高精度: Gemma 4 12B QAT + MTP（**NVIDIA / AMD 共通**、GPU 直起動経路。Windows NVIDIA=CUDA 直起動 / Linux NVIDIA=ダウンロードVulkan（暫定） / AMD=ROCm 優先・Vulkan フォールバック。large-v3 と同じく後からダウンロード（約7GB））
   - 既定は常に E4B。12B はオプトインで、未ダウンロード時は自動で E4B にフォールバックして起動します。
   - 選択は `app_local_data_dir()/proofread-model-tier.txt`（`e4b` / `12b`）に保存。MTP（投機デコード）の適用範囲・FlashAttention の扱いは [AGENTS.md](../AGENTS.md) の「MTP（投機的デコード）の適用範囲」を参照してください。
 - 全体校正の分割ボタンは、上記の永続選択とは別に、ジョブ単位の `proofreadTier`（`e4b` / `12b`）を `start_llm_server` へ渡します。通常ボタンは常にE4B、メニューの「全体校正（with 12B）」は常に12Bを要求し、設定ファイルを変更しません。12B未導入時はフロント側で実行を止めて設定画面へ案内します。

@@ -3,6 +3,41 @@
 このパッケージはAppImageへGUIライブラリを同梱せず、CachyOS / Archホストの
 WebKitGTK、GTK、GLib、GStreamerを使用します。
 
+## NVIDIAランタイム（必須）
+
+このパッケージはNVIDIA GPU向けです。実行時に次のホストパッケージを使用するため、
+PKGBUILDでも必須依存として宣言しています。
+
+- `nvidia-utils`: `nvidia-smi` と NVIDIAユーザー空間ランタイム（`libcuda.so` など）
+- `vulkan-icd-loader`: セットアップタブから取得するLLM用Vulkan `llama-server` の実行基盤
+
+`nvidia-utils`だけではカーネル側のNVIDIAドライバーは入りません。CachyOSの使用カーネルに
+合う `nvidia` / `nvidia-open` / `nvidia-dkms` などを環境に合わせて導入し、再起動後に
+次がGPU名を表示することを確認してください。
+
+```sh
+command -v nvidia-smi
+nvidia-smi -L
+```
+
+既存の古いパッケージから更新する場合や、依存解決を省略して導入した場合は、次で補完できます。
+
+```sh
+sudo pacman -S --needed nvidia-utils vulkan-icd-loader
+```
+
+モデルのダウンロードはGPUドライバーが無くても完了することがあります。モデル取得完了は
+CUDA利用可能の判定ではないため、ドライバーを導入・再起動した後にアプリの「GPUを再確認」を
+実行してください。
+
+## Linux NVIDIA版のLLM実行経路（暫定）
+
+Linux NVIDIA版は、文字起こし・話者分離をCUDAで実行します。LLM校正は現行のLinux配布構成で
+CUDA版 `llama-server` を同梱していないため、セットアップタブからダウンロードしたVulkan版
+`llama-server`を使用します。これはLinux NVIDIAでの起動を成立させるための暫定経路です。
+Windows NVIDIA版のCUDA直起動、およびプロジェクト方針であるNVIDIA CUDA直起動へLinux LLMを
+移行することは、別の恒久対応課題です。AMD版のROCm優先・Vulkanフォールバックとは別の話です。
+
 ## インストール
 
 ```sh

@@ -88,12 +88,25 @@ test('setup status projections provide success, unavailable, and browser default
 });
 
 test('LLM backend install plan preserves primary and optional fallback ordering', () => {
-  assert.deepEqual(llmBackendInstallPlan(true, false), { primary: 'llamacpp:vulkan', fallbacks: [] });
+  assert.deepEqual(llmBackendInstallPlan(true, false), {
+    status: 'ready', unavailable: false, primary: 'llamacpp:vulkan', fallbacks: []
+  });
   assert.deepEqual(llmBackendInstallPlan(false, true), {
+    status: 'ready', unavailable: false,
     primary: 'llamacpp:rocm', fallbacks: ['llamacpp:vulkan']
   });
-  assert.deepEqual(llmBackendInstallPlan(false, false), { primary: 'llamacpp:cpu', fallbacks: [] });
+  assert.deepEqual(llmBackendInstallPlan(null, null), {
+    status: 'checking', unavailable: false, primary: null, fallbacks: [],
+    reason: 'CUDA / ROCm GPUランタイムを確認中です。判定が終わるまでダウンロードできません。'
+  });
+  const unavailable = llmBackendInstallPlan(false, false);
+  assert.equal(unavailable.status, 'unavailable');
+  assert.equal(unavailable.unavailable, true);
+  assert.equal(unavailable.primary, null);
+  assert.deepEqual(unavailable.fallbacks, []);
+  assert.match(unavailable.reason, /AI校正実行エンジン.*ダウンロード/);
   assert.equal(llmBackendLabel('llamacpp:vulkan'), 'Vulkan');
   assert.equal(llmBackendLabel('llamacpp:rocm'), 'AMD GPU (ROCm)');
   assert.equal(llmBackendLabel('llamacpp:cpu'), 'CPU');
+  assert.equal(llmBackendLabel(null), '未選択');
 });

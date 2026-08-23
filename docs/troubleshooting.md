@@ -27,6 +27,31 @@ where.exe cublas64_12.dll
 where.exe cudnn64_9.dll
 ```
 
+## Linux / CachyOS NVIDIA: `nvidia-smi` が無い / CUDAが検出されない
+
+- CachyOS / Arch向けNVIDIAパッケージでは、`nvidia-utils`（`nvidia-smi` とNVIDIAユーザー空間
+  ランタイム）と `vulkan-icd-loader` を必須依存にしています。古いパッケージを使用している場合は、
+  次で補完してからアプリを再起動してください。
+
+```sh
+sudo pacman -S --needed nvidia-utils vulkan-icd-loader
+```
+
+- `nvidia-utils`はカーネルモジュールを含みません。使用中のカーネルに合うCachyOSのNVIDIA
+  ドライバー（`nvidia` / `nvidia-open` / `nvidia-dkms`など）を導入し、再起動してください。
+- 次の2つが成功することを確認します。`nvidia-smi`が無い場合は、まずパッケージ導入状態を確認します。
+
+```sh
+command -v nvidia-smi
+nvidia-smi -L
+```
+
+- モデルのダウンロード完了はCUDA利用可能の判定ではありません。アプリの「GPUを再確認」を、
+  ドライバー導入・再起動後に実行してください。
+- このLinux NVIDIA版では、文字起こし・話者分離はCUDA、LLM校正はセットアップタブから取得する
+  Vulkan `llama-server`を使用します。Linux NVIDIAのLLMをCUDA直起動へ移行することは恒久対応の
+  検討課題です。Windows NVIDIAのCUDA経路、AMDのROCm優先・Vulkanフォールバックとは別の構成です。
+
 ## Linux AppImage: CUDA/cuDNN 混在による cuBLAS エラー
 
 - 原因: ユーザー導入の CUDA/cuDNN が `LD_LIBRARY_PATH` に混ざると、pip 版 `nvidia-*` と異なる版が解決されることがあります。新しい AppImage は pip 版を優先します。

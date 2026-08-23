@@ -87,6 +87,22 @@ test('setup status projections provide success, unavailable, and browser default
   });
 });
 
+test('setup status projection reflects the refreshed post-download state', () => {
+  const before = projectSetupStatus({
+    ...browserSetupStatus(),
+    llmBackend: false,
+    gemmaGguf: false,
+    diarization: false,
+    diarizationExpectedPath: '/models/diar'
+  });
+  assert.equal(before.llmBackendInstalled, false);
+  assert.equal(before.diarizationSetupVisible, true);
+
+  const after = projectSetupStatus(browserSetupStatus());
+  assert.equal(after.llmBackendInstalled, true);
+  assert.equal(after.diarizationSetupVisible, false);
+});
+
 test('LLM backend install plan preserves primary and optional fallback ordering', () => {
   assert.deepEqual(llmBackendInstallPlan(true, false), {
     status: 'bundled',

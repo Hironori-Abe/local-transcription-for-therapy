@@ -5378,7 +5378,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.checkGpuAvailability();
     await this.checkAllSetupStatus();
     await this.checkTranscriptionRuntimeSupport();
-    this.activeTabIndex.set(0);
+    this.ngZone.run(() => this.activeTabIndex.set(0));
+    // Tauri の invoke 完了は Angular のイベントループ外で解決することがある。
+    // 状態値は更新済みでも、eventCoalescing 中にGPU警告やセットアップ行だけが
+    // 古いまま残らないよう、再チェック完了時に確定描画する。
+    this.appRef.tick();
   }
 
   /**
@@ -5513,6 +5517,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.ngZone.run(() => {
         this.activeTabIndex.set(0);
       });
+      // モデル取得後の最終GPU/セットアップ判定は invoke の外側で signal を更新する
+      // ため、再起動やウィンドウ再フォーカスを待たずに画面へ反映する。
+      this.appRef.tick();
       if (this.allSetupStatus()?.gemmaGguf) {
         await this.initDefaultLlmModelPath();
       }

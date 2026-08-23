@@ -501,6 +501,21 @@ export function themeToggleIconValue(themeMode: NormalizedThemeMode): string {
   }
 }
 
+/** Return the input type used by a secret/token field with an explicit reveal toggle. */
+export function secretInputTypeValue(visible: boolean): 'text' | 'password' {
+  return visible ? 'text' : 'password';
+}
+
+/** Return the Material Symbols name for the current reveal state. */
+export function secretVisibilityIconValue(visible: boolean): 'visibility' | 'visibility_off' {
+  return visible ? 'visibility_off' : 'visibility';
+}
+
+/** Keep the accessible name and tooltip in sync with the reveal state. */
+export function secretVisibilityLabelValue(visible: boolean): string {
+  return visible ? 'トークンを隠す' : 'トークンを表示';
+}
+
 export function selectedLocationPrefectureTotalCountValue(
   prefecturesByArea: Readonly<Partial<Record<LocationAreaCode, string[]>>>,
   selectedPrefectures: ReadonlyArray<string>

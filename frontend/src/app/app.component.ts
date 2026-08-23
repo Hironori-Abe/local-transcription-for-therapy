@@ -165,6 +165,9 @@ import {
   resolveRuntimeBuildFlagsValue,
   resolveStepForStageValue,
   shouldShowVoiceInputShortCandidateHintValue,
+  secretInputTypeValue,
+  secretVisibilityIconValue,
+  secretVisibilityLabelValue,
   showProofreadSystemPromptEditorValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
@@ -487,6 +490,16 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
   readonly isSegmentTableInView = signal<boolean>(false);
   readonly diarizationInstallToken = signal<string>('');
+  readonly diarizationInstallTokenVisible = signal<boolean>(false);
+  readonly diarizationInstallTokenInputType = computed(() =>
+    secretInputTypeValue(this.diarizationInstallTokenVisible())
+  );
+  readonly diarizationInstallTokenVisibilityIcon = computed(() =>
+    secretVisibilityIconValue(this.diarizationInstallTokenVisible())
+  );
+  readonly diarizationInstallTokenVisibilityLabel = computed(() =>
+    secretVisibilityLabelValue(this.diarizationInstallTokenVisible())
+  );
   readonly selectedAudioPath = signal<string>('');
   readonly audioFileLoading = signal<boolean>(false);
   readonly importJsonReady = signal<boolean>(false);
@@ -5400,6 +5413,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       });
       // invokeへ渡した直後に入力欄から除去し、長時間のモデル取得中に保持しない。
       this.diarizationInstallToken.set('');
+      this.diarizationInstallTokenVisible.set(false);
       tokenForValidation = '';
       const setupOk = await setupTask;
       // Python/package/model setup must finish before attempting the optional

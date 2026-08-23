@@ -91,6 +91,9 @@ import {
   secondsToEstimatedMinutesValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
+  secretInputTypeValue,
+  secretVisibilityIconValue,
+  secretVisibilityLabelValue,
   segmentRetranscribeTooltipValue,
   segmentRetranscribeUnavailableReasonValue,
   selectedGpuAsrWarningValue,
@@ -445,6 +448,15 @@ test('Hugging Face token validation preserves accepted values and error categori
   assert.match(validateHfTokenFormatValue('hf_short') ?? '', /短すぎます/);
   assert.match(validateHfTokenFormatValue('hf_abcdefghijklmnop-') ?? '', /使用できない文字/);
   assert.match(validateHfTokenFormatValue('hf_あいうえおかきくけこさしすせそたちつてとなにぬねの') ?? '', /使用できない文字/);
+});
+
+test('secret field visibility helpers keep type, icon, and accessible label synchronized', () => {
+  assert.equal(secretInputTypeValue(false), 'password');
+  assert.equal(secretVisibilityIconValue(false), 'visibility');
+  assert.equal(secretVisibilityLabelValue(false), 'トークンを表示');
+  assert.equal(secretInputTypeValue(true), 'text');
+  assert.equal(secretVisibilityIconValue(true), 'visibility_off');
+  assert.equal(secretVisibilityLabelValue(true), 'トークンを隠す');
 });
 
 test('Levenshtein distance preserves empty, insertion, deletion, and replacement cases', () => {

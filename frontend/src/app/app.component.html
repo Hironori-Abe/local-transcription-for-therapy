@@ -285,9 +285,16 @@
             </div>
             <mat-form-field appearance="outline" class="token-input-field">
               <mat-label>Hugging Face アクセストークン</mat-label>
-              <input matInput type="password" autocomplete="off" [disabled]="setupRunning()"
+              <input matInput [type]="diarizationInstallTokenInputType()" autocomplete="off" [disabled]="setupRunning()"
                 [value]="diarizationInstallToken()" (input)="diarizationInstallToken.set($any($event.target).value)"
                 placeholder="hf_..." />
+              <button mat-icon-button matSuffix type="button" [disabled]="setupRunning()"
+                (click)="diarizationInstallTokenVisible.set(!diarizationInstallTokenVisible())"
+                [attr.aria-label]="diarizationInstallTokenVisibilityLabel()"
+                [attr.aria-pressed]="diarizationInstallTokenVisible()"
+                [attr.title]="diarizationInstallTokenVisibilityLabel()">
+                <mat-icon class="material-symbols-outlined" aria-hidden="true">{{ diarizationInstallTokenVisibilityIcon() }}</mat-icon>
+              </button>
             </mat-form-field>
           </ng-container>
 

@@ -63,27 +63,28 @@ scripts\run-dev-amd.bat
 
 ## Requirements (Full CUDA Edition)
 
-- Windows 10 / 11 64-bit
-- NVIDIA GPU, RTX recommended, with CUDA Toolkit 12.x (13 or later is not supported) and cuDNN 9.x
+- Windows 10 / 11 64-bit (Windows edition)
+- Windows edition: NVIDIA GPU, RTX recommended, with CUDA Toolkit 12.x (13 or later is not supported) and cuDNN 9.x
+- Linux edition: NVIDIA GPU with a compatible NVIDIA driver (CUDA Toolkit is not required at runtime)
 - **At least 8 GB VRAM**
 - About 1 GB for the installer, plus space for downloaded models
 
 ### Linux / CachyOS NVIDIA Edition
 
-The CachyOS / Arch NVIDIA package uses the host NVIDIA driver and Vulkan runtime.
-It requires `nvidia-utils` (`nvidia-smi` and the NVIDIA user-space runtime) and
-`vulkan-icd-loader`; install the NVIDIA driver variant that matches the running kernel
-separately. After installation, confirm that the GPU is listed:
+The CachyOS / Arch NVIDIA package uses the host NVIDIA driver and CUDA driver runtime.
+It requires `nvidia-utils` (`nvidia-smi` and the NVIDIA user-space runtime); install the
+NVIDIA driver variant that matches the running kernel separately. CUDA Toolkit is not
+required at runtime. After installation, confirm that the GPU is listed:
 
 ```sh
 nvidia-smi -L
 ```
 
-On this Linux edition, transcription and speaker diarization use CUDA. LLM proofreading
-currently uses a Vulkan `llama-server` downloaded from the Setup tab because the Linux
-distribution does not bundle a CUDA `llama-server` yet (temporary compatibility path).
-Windows NVIDIA keeps its direct CUDA path; moving Linux NVIDIA LLM execution to the
-project's intended direct-CUDA path is a follow-up task. See the
+On this Linux edition, transcription, speaker diarization, and LLM proofreading use CUDA.
+Because ggml-org does not publish a Linux CUDA `llama-server` archive, the distribution
+builds llama.cpp b10075 from its pinned official source and bundles the resulting server
+with the redistributable CUDA runtime libraries. The app does not fall back to Vulkan.
+See the
 [CachyOS / Arch distribution README](packaging/arch/README.md) for installation details.
 
 ## CPU Edition (Trial Use)
@@ -135,7 +136,7 @@ Use the button at the left of the tab row to cycle among System (default), Light
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper (turbo by default / optional higher-accuracy large-v3, downloaded later) / Diarization: pyannote.audio / Audio decoding: LGPL-configured ffmpeg CLI
 - Voice input & segment re-listen: Gemma 4 E4B with an audio mmproj (llama.cpp llama-server, OpenAI-compatible `input_audio`, loopback only)
-- LLM proofreading: Gemma 4 E4B by default / Gemma 4 12B QAT+MTP as the optional high-accuracy model, downloaded later. Windows NVIDIA uses direct CUDA launch; Linux NVIDIA currently uses a downloaded Vulkan backend as a temporary path; AMD prefers ROCm with Vulkan fallback. The engine uses bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
+- LLM proofreading: Gemma 4 E4B by default / Gemma 4 12B QAT+MTP as the optional high-accuracy model, downloaded later. Windows and Linux NVIDIA use direct CUDA launch; AMD prefers ROCm with Vulkan fallback. The engine uses bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
 
 ## Documentation
 
@@ -144,6 +145,7 @@ Use the button at the left of the tab row to cycle among System (default), Light
 - Offline verification steps (Japanese): [docs/offline-verification.md](docs/offline-verification.md)
 - Template for research ethics review (IRB) documents (Japanese): [docs/irb-template.md](docs/irb-template.md)
 - Development environment setup and internal notes: [docs/development.md](docs/development.md)
+- Linux NVIDIA CUDA distribution build: [docs/release-build-linux.md](docs/release-build-linux.md)
 - Troubleshooting, including CUDA and AMD ROCm: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Distribution builds, Windows NSIS: [docs/release-build-windows.md](docs/release-build-windows.md)
 - FFmpeg / PyAV licensing policy: [docs/lgpl-pyav-build.md](docs/lgpl-pyav-build.md)

@@ -89,7 +89,11 @@ test('setup status projections provide success, unavailable, and browser default
 
 test('LLM backend install plan preserves primary and optional fallback ordering', () => {
   assert.deepEqual(llmBackendInstallPlan(true, false), {
-    status: 'ready', unavailable: false, primary: 'llamacpp:vulkan', fallbacks: []
+    status: 'bundled',
+    unavailable: false,
+    primary: null,
+    fallbacks: [],
+    reason: 'CUDA版のllama-serverはアプリに同梱されています。見つからない場合はアプリを再インストールしてください。'
   });
   assert.deepEqual(llmBackendInstallPlan(false, true), {
     status: 'ready', unavailable: false,
@@ -105,6 +109,7 @@ test('LLM backend install plan preserves primary and optional fallback ordering'
   assert.equal(unavailable.primary, null);
   assert.deepEqual(unavailable.fallbacks, []);
   assert.match(unavailable.reason, /AI校正実行エンジン.*ダウンロード/);
+  assert.equal(llmBackendLabel('llamacpp:cuda'), 'CUDA (NVIDIA)');
   assert.equal(llmBackendLabel('llamacpp:vulkan'), 'Vulkan');
   assert.equal(llmBackendLabel('llamacpp:rocm'), 'AMD GPU (ROCm)');
   assert.equal(llmBackendLabel('llamacpp:cpu'), 'CPU');

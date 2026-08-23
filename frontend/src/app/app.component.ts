@@ -655,6 +655,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const plan = this.llmBackendSetupPlan();
     if (plan.status === 'checking') return '判定中';
     if (plan.status === 'unavailable') return 'GPU未検出';
+    if (plan.status === 'bundled') return 'CUDA（NVIDIA・同梱）';
     return llmBackendLabel(plan.primary);
   });
   readonly llmBackendSetupNote = computed(() => {
@@ -5430,13 +5431,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // セットアップ開始後にGPUドライバーが導入された場合も、古い起動時
         // 判定のままバックエンドを選ばないように再確認してから計画を作る。
         await this.checkGpuAvailability();
-        // GPU 種別に応じてバックエンドを選択。AMD は ROCm を主経路、Vulkan を ROCm 不可時
-        // （Windows AMD・system ROCm 無し Linux AMD 等）のフォールバックとして両方取得する。
+        // GPU 種別に応じてバックエンドを選択。NVIDIA/CUDA はアプリ同梱、AMD は ROCm を
+        // 主経路、Vulkan を ROCm 不可時（Windows AMD・system ROCm 無し Linux AMD 等）の
+        // フォールバックとして取得する。
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
         const backendPlan = llmBackendInstallPlan(
           this.cudaAvailable(),
           this.rocmAvailable()
         );
+
+        // NVIDIA/CUDA版は同梱バイナリが欠落している場合に修復用ダウンロードを行わず、
+        // 再インストールが必要なエラーとして表示する。
+        if (backendPlan.status === 'bundled') {
+          this.setSetupProgress(setupErrorProgress('llm_backend', backendPlan.reason));
+          return;
+        }
 
         // Full CUDA/ROCm版でGPUを検出できない場合、CPUバックエンドを
         // 暗黙に選択してダウンロードすることは禁止する。GPUランタイムを
@@ -5450,9 +5459,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...'
         });
 
-        // バックエンド未導入の段階では起動を試さない。特に Linux NVIDIA 開発環境は
-        // CUDA llama-server を同梱しておらず、Vulkan 取得前の起動は必ず失敗する。
-        // 校正エンジンは実際の校正実行時に遅延起動する。
+        // バックエンド未導入の段階では起動を試さない。CUDA同梱バイナリ、または
+        // AMD向けROCm/Vulkanの取得完了後、校正エンジンは実際の校正実行時に遅延起動する。
         const unlisten = await listen<{ message: string }>(
           'llm-backend-install-progress',
           (ev) => this.setSetupProgress({

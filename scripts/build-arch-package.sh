@@ -44,6 +44,11 @@ if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
   exit 1
 fi
 
+# ggml-org does not publish a Linux CUDA llama-server archive.  Build the
+# pinned b10075 server from source before makepkg so the package never falls
+# back to the Vulkan backend merely because a Linux archive is unavailable.
+"$ROOT_DIR/scripts/build-llama-server-cuda-linux.sh" --ensure
+
 echo "=== Build $BUILD_LABEL ==="
 echo "  version: $VERSION"
 echo "  CPU target: $CPU_TARGET"
@@ -95,6 +100,21 @@ fi
 if ! rg -q -x 'usr/share/applications/net.gakkousya.lott.desktop' \
   <<<"$PACKAGE_CONTENTS"; then
   echo '[ERROR] パッケージにデスクトップエントリがありません。' >&2
+  exit 1
+fi
+if ! rg -q -x 'usr/lib/Local Transcription for Therapy/resources/llama-server/cuda/llama-server' \
+  <<<"$PACKAGE_CONTENTS"; then
+  echo '[ERROR] パッケージにLinux CUDA llama-serverがありません。' >&2
+  exit 1
+fi
+if ! rg -q -x 'usr/lib/Local Transcription for Therapy/resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt' \
+  <<<"$PACKAGE_CONTENTS"; then
+  echo '[ERROR] パッケージにCUDAランタイムライセンス文書がありません。' >&2
+  exit 1
+fi
+if bsdtar -xOf "$PACKAGE_PATH" .PKGINFO \
+  | rg -q -x 'depend = vulkan-icd-loader'; then
+  echo '[ERROR] Linux NVIDIA CUDA版がVulkan依存を持っています。' >&2
   exit 1
 fi
 echo '[OK] デスクトップ登録・アイコン構成の検査に合格しました。'

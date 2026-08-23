@@ -186,15 +186,13 @@ test('LLM backend selection preserves CPU, NVIDIA, AMD, and unavailable prioriti
   assert.deepEqual(resolveLlmInstallableGpuEntryValue(true, false, false, 'cpu', true, true), {
     installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu'
   });
-  assert.deepEqual(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', true, true), {
-    installKey: 'llamacpp:vulkan', label: 'LlamaCPP - Vulkan (NVIDIA GPU)', state: 'installable', category: 'gpu'
-  });
+  assert.equal(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', true, true), null);
   assert.deepEqual(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', false, true), {
     installKey: 'llamacpp:rocm', label: 'LlamaCPP - ROCm (AMD GPU)', state: 'installable', category: 'gpu'
   });
   assert.equal(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', false, false), null);
   assert.equal(resolveLlmTargetBackendKeyValue('cpu', true, true), 'llamacpp:cpu');
-  assert.equal(resolveLlmTargetBackendKeyValue('gpu', true, true), 'llamacpp:vulkan');
+  assert.equal(resolveLlmTargetBackendKeyValue('gpu', true, true), 'llamacpp:cuda');
   assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, true), 'llamacpp:rocm');
   assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, false), '');
 });

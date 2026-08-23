@@ -106,6 +106,7 @@ bash scripts/run-dev.sh
 
 - `setup-dev.sh` は Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存の準備を担う
 - Ubuntu / Linux では Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先する
+- Linux NVIDIA版の実行時はCUDA Toolkitではなく、ホストNVIDIAドライバーと`nvidia-utils`を使う。Linux CUDA llama-serverは配布ビルド時に専用CUDA develコンテナで生成する
 - ROCm / AMD 検証は experimental。gfx1150（Radeon 890M）では文字起こし・話者分離ともに GPU 動作確認済み（50 分音声も完走）
 
 ## Diarization Model Policy
@@ -204,7 +205,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 - **既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
 - 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を `download_gemma_gguf_cli.py --model 12b` で取得する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。NVIDIA・AMD いずれも本体 + MTP ドラフトの両方を取得する。
 - **12B はどちらの GPU でも「llama-server 直起動」で動かす**（E4B も同様。lemond は撤去済みのため経由しない）。
-  - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda`、`-ngl 99` + MTP）。
+  - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda`、`-ngl 99` + MTP）。WindowsとLinuxで同じCUDA直起動経路を使う（Linux版はb10075ソースから配布ビルド時に生成）。
   - **AMD**: **ROCm 優先 → 失敗時 Vulkan フォールバック**（`amd_12b_launch_plan` → `start_amd_12b_blocking`）。どちらも `-ngl` 無し `--fit on`/auto-fit + MTP、ctx は `AMD_12B_CTX_SIZE`(=8192)。
     - **ROCm（高速・優先）**: Rust 側の `install_llm_backend` で取得した ROCm ビルド llama-server（`bin/llamacpp/rocm-stable/`、`find_llm_rocm_llama_server` / `try_start_llama_server_rocm`）。`gemma4-assistant`（MTPドラフト arch）対応の **b9585+** が条件で旧 b9247 は弾く。**rocBLAS は LD_LIBRARY_PATH に同梱 therock を載せず、システム ROCm（/opt/rocm。対象 GPU arch の Tensile を含む）から解決**する（DL ビルドに同梱されることのある therock は iGPU 専用 arch のことがあり dGPU で推論時に落ちるため）。warmup は無効化せず起動時 forward で arch 不整合を表面化させ Vulkan へ退避する。実測 RX 7600M XT(gfx1102,8GB)・ctx 8192・**約35〜37 tok/s**（Vulkan比 約25%高速、draft採択 0.7前後）。
     - **Vulkan（フォールバック）**: Rust 側の `install_llm_backend` で取得した Vulkan ビルド（`bin/llamacpp/vulkan/`、`find_llm_vulkan_llama_server` / `try_start_llama_server_vulkan`、b9585+）。ROCm 不可（旧ビルド / 対象 arch の system rocBLAS 無し / 起動失敗）のとき使う。約28〜29 tok/s。
@@ -216,10 +217,11 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ### LLM バックエンドバイナリの保存場所
 
-AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の CPU ビルドは、本体アプリとは別に Rust 側の `install_llm_backend` が**上流リリースから直接ダウンロード**する（`ggml-org/llama.cpp` の Releases）。AMD は `LLAMA_CPP_AMD_BUILD = b9631`、CPU は `LLAMA_CPP_CPU_BUILD = b10075`。lemond デーモン・lemonade CLI は撤去済みで、取得にも配信にも使わない。NVIDIA の CUDA llama-server も公式 Windows CUDA 12.4 **b10075** をインストーラー同梱する（`resources/llama-server/`）。CPU と NVIDIA は b10075、AMD の ROCm / Vulkan は b9631 として更新系統を分離する。
+AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の CPU ビルドは、本体アプリとは別に Rust 側の `install_llm_backend` が**上流リリースから直接ダウンロード**する（`ggml-org/llama.cpp` の Releases）。AMD は `LLAMA_CPP_AMD_BUILD = b9631`、CPU は `LLAMA_CPP_CPU_BUILD = b10075`。lemond デーモン・lemonade CLI は撤去済みで、取得にも配信にも使わない。NVIDIAのCUDA llama-serverはWindowsでは公式CUDA 12.4 **b10075**を同梱し、Linuxでは公式Linux CUDA archiveがないため、`scripts/build-llama-server-cuda-linux.sh`がb10075固定commit（`76f46ad29d61fd8c1401e8221842934bf62a6064`）から`resources/llama-server/cuda/`へ再現ビルドして同梱する。CPU と NVIDIA は b10075、AMD の ROCm / Vulkan は b9631 として更新系統を分離する。
 
 | パス | 内容 |
 | --- | --- |
+| `resources/llama-server/cuda/llama-server` | Linux配布用にb10075ソースからビルドしたNVIDIA CUDA版（CUDA再頒布ランタイムを同梱、`libcuda.so.1`はホストドライバー） |
 | `~/.cache/{app-id}/lemonade/bin/llamacpp/rocm-stable/llama-server` | DL した AMD ROCm ビルド（`--backend rocm` → `llama-{b}-bin-ubuntu-rocm-7.2-x64`） |
 | `~/.cache/{app-id}/lemonade/bin/llamacpp/vulkan/llama-server` | DL した Vulkan ビルド（`--backend vulkan`） |
 | `~/.cache/{app-id}/lemonade/bin/llamacpp/cpu/llama-server` | DL した CPU ビルド（`--backend cpu`） |
@@ -228,17 +230,17 @@ AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の C
 `{app-id}` は Tauri の `identifier`（CUDA 版: `net.gakkousya.lott`、AMD 版: `net.gakkousya.lott-amd`、CPU版: `net.gakkousya.lott-cpu`、Editor版: `net.gakkousya.lott-editor`）。Windows では `%LOCALAPPDATA%\{app-id}\lemonade\`。
 
 - **キャッシュ dir 名 `lemonade` は後方互換のため据え置き**（DL 済みバイナリを孤立させないため。`get_llm_engine_cache_dir` が `app_cache_dir()/lemonade` を返す）。
-- 取得は UI セットアップタブから Rust 側の `install_llm_backend` Tauri command を呼ぶ。`llamacpp:rocm`→`rocm-stable`、`llamacpp:vulkan`→`vulkan`、`llamacpp:cpu`→`cpu` のサブディレクトリへ、一時展開と検証を経て差し替える。進捗は `llm-backend-install-progress` イベントで通知。`find_llm_rocm_llama_server` / `find_llm_vulkan_llama_server` が起動時に解決する。
+- 取得はAMD/Editor/CPU用だけUIセットアップタブから Rust 側の `install_llm_backend` Tauri command を呼ぶ。`llamacpp:rocm`→`rocm-stable`、`llamacpp:vulkan`→`vulkan`、`llamacpp:cpu`→`cpu` のサブディレクトリへ、一時展開と検証を経て差し替える。Linux NVIDIAのCUDA版はUIダウンロードではなく配布物へ同梱する。進捗は `llm-backend-install-progress` イベントで通知。`find_llm_rocm_llama_server` / `find_llm_vulkan_llama_server` が起動時に解決する。
 - バックエンドバイナリは一度ダウンロードすれば以降はオフラインで動作する。
 - AMD GPU では `rocm` を優先取得する（Vulkan より高速なことが多い）。`gemma4-assistant`（MTPドラフト arch）対応の **b9585+** が必須（旧 b9247 は非対応）。ROCm ビルドは system ROCm（/opt/rocm）の rocBLAS を参照する。
 - `config.json` は `ensure_llm_server_port_config` が `port` のみ書き込む（lemond 用の `ctx_size` / `no_broadcast` / `prefer_system` などは廃止）。**`LEMONADE_*` 環境変数は使わない。**
-- **プライバシー**: 取得元は GitHub Releases のバイナリのみ。LAN ビーコンやクラウド offload の経路は持たず、会話/音声データを PC 外へ送信することは一切ない。
+- **プライバシー**: 初回セットアップのモデル・AMD/CPUバックエンド取得元はGitHub Releases、Linux CUDA版の配布ビルドは固定commitの公式ソースと公式NVIDIA CUDA devel imageを使う。LAN ビーコンやクラウド offload の経路は持たず、会話/音声データを PC 外へ送信することは一切ない。
 - NVIDIA同梱b10075とEditor版・CPU版のCPU b10075は、起動時に `--host 127.0.0.1 --cors-origins localhost` を指定する。Rust/Pythonからのloopback API呼び出しは維持しつつ、任意の外部Webページoriginからのアクセスを許可しない。AMDのb9631はこの更新対象外。
 
 ### MTP（投機的デコード）の適用範囲
 
 - MTP ドラフト（E4B: `mtp-gemma-4-E4B-it.gguf`、約60MB）は setup スクリプトが Gemma 本体と一緒に**無条件でダウンロード**する（CUDA/AMD 問わず）。「ダウンロードした記憶がないファイル」はこれで、正常。高精度階層の 12B ドラフト（`mtp-gemma-4-12B-it.gguf`、約242MB）は 12B 選択時に本体とまとめて後からダウンロードする（[内蔵校正AIモデルの階層選択](#内蔵校正aiモデルの階層選択標準--高精度)参照）
-- MTP を使うのは **GPU 直起動経路**（lemond は撤去済み）。E4B・12B の両階層で `--spec-type draft-mtp` / `--spec-draft-model` / `--spec-draft-n-max 3` を渡す。**NVIDIA同梱b10075はMTP併用時もFlashAttentionを`on`**にする。b9571で発生したCUDA FlashAttentionカーネル（`ggml-cuda/fattn.cu:110`）のクラッシュはupstream #25148で修正され、RTX 4060 Laptop 8GBでE4B・12Bとも実機完走を確認済み。AMDのダウンロード型ROCm/Vulkan版はb9631のままなので、従来どおりMTP配線時`off`・MTP非併用時`on`を維持する。
+- MTP を使うのは **GPU 直起動経路**（lemond は撤去済み）。E4B・12B の両階層で `--spec-type draft-mtp` / `--spec-draft-model` / `--spec-draft-n-max 3` を渡す。**NVIDIA同梱b10075（Windows公式 / Linux固定commit source build）はMTP併用時もFlashAttentionを`on`**にする。b9571で発生したCUDA FlashAttentionカーネル（`ggml-cuda/fattn.cu:110`）のクラッシュはupstream #25148で修正され、RTX 4060 Laptop 8GBでE4B・12Bとも実機完走を確認済み。AMDのダウンロード型ROCm/Vulkan版はb9631のままなので、従来どおりMTP配線時`off`・MTP非併用時`on`を維持する。
   - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda` / 制御は `start_cuda_llama_blocking`）。階層で起動方式を分ける（`autofit` 引数 = `resolve_effective_proofread_tier == B12`）。
     - **E4B**: `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。ctx/np は `choose_llm_parallelism` の自動値。b10075 + FlashAttention onのRTX 4060 Laptop長文実測では、b9571 + off比で総時間約32%短縮。
     - **12B**: **auto-fit 起動**（`--fit on`、`-ngl` も `--spec-draft-ngl` も指定しない）。本体・MTP ドラフトの GPU/CPU 配置を llama.cpp の auto-fit に委ね、VRAM に収まる分だけ GPU、残りは CPU へ自動配置する。AMD 経路と同方式。ctx/np は **AMD 12B と同じ単一スロット・`AMD_12B_CTX_SIZE`(=8192)** に固定する。b10075 + FlashAttention onのRTX 4060 Laptop 8GB・4101入力token/64生成token実測は、b9571 + off比で総時間9.57→6.00秒（約37%短縮）、生成36.7→41.2 tok/s、VRAM 6711→6491MiB。実アプリ形式の校正を3回連続実行して同一出力・正常完走も確認済み。
@@ -342,7 +344,7 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
    - 文字起こし〜話者分離〜校正をすべて含む
    - NVIDIA RTX / CUDA 主軸の安定版
    - **NSIS インストーラー配布**（`scripts/setup-build-tools.bat`）
-   - `faster-whisper` / `ctranslate2` CUDA、pyannote CUDA、AI校正は同梱 CUDA llama-server 直起動を想定
+   - `faster-whisper` / `ctranslate2` CUDA、pyannote CUDA、AI校正は同梱 CUDA llama-server 直起動を想定（Windowsは公式CUDA archive、Linuxはb10075固定commitから配布ビルド時に生成）
    - インストーラーに Python embeddable（`resources/python312/`）と `setup_venv_cli.py` を同梱。初回起動後にセットアップ UI からパッケージをインストールする（インターネット接続が必要）
    - または `PYTHON_BIN` 環境変数でカスタム venv を指定してもよい
 
@@ -368,7 +370,7 @@ Tauri build override 方針:
 
 - override ファイル名は `tauri.<variant>.<platform>.override.json`（リリース）/ `tauri.<variant>.dev.<platform>.override.json`（dev。全体 dev は variant 無しの `tauri.dev.<platform>`）で統一する。`variant` = `nvidia` / `amd` / `cpu` / `editor`、`platform` = `windows` / `linux`。旧 `tauri.build.*-ubuntu` 形式・`build.` 接頭辞・`ubuntu` トークンは廃止済み（`linux` は deb + AppImage 両対応で Ubuntu 限定ではない）
 - `tauri.nvidia.windows.override.json` は Full CUDA / Windows NSIS ビルド用（`scripts/setup-build-tools.bat` から使用）
-- `tauri.nvidia.linux.override.json` は Full CUDA / Linux（deb + AppImage）ビルド用。venv・`python312` embeddable を同梱せず、venv は初回起動後のセットアップで構築する（`scripts/setup-build-tools-linux.sh` から使用）。Linux CUDA 用 llama-server の同梱/DL 経路は未確立で、現状 LLM 校正ランタイムは含めない
+- `tauri.nvidia.linux.override.json` は Full CUDA / Linux（deb + AppImage）ビルド用。venv・`python312` embeddable を同梱せず、venv は初回起動後のセットアップで構築する（`scripts/setup-build-tools-linux.sh` から使用）。Linux用CUDA llama-serverは`resources/llama-server/cuda/`へb10075固定commitからビルドして同梱し、配布先のCUDA Toolkitは不要（ホストNVIDIAドライバーは必要）
 - `tauri.amd.windows.override.json` は AMD / Windows NSIS ビルド用（後日詳細調整予定）
 - `tauri.amd.linux.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する。話者分離モデルは同梱せず、インストール後に `app_local_data_dir()/models/` へ取得する
 - `tauri.cpu.linux.override.json` は CPU / Linux（deb + AppImage）ビルド用で、`requirements-runtime.txt` を使う
@@ -377,6 +379,7 @@ Tauri build override 方針:
 - CUDA版・ROCm版・CPU版・Editor版は `identifier` を分け、同一PCに併存できるようにする（CUDA: `net.gakkousya.lott`、AMD: `net.gakkousya.lott-amd`、CPU: `net.gakkousya.lott-cpu`、Editor: `net.gakkousya.lott-editor`）
 - Linux の配布ビルドは Ubuntu 24.04 Docker 経路（`scripts/build-appimage-docker.sh`）を使う。引数無しは NVIDIA、`--amd` / `--cpu` / `--editor` で配布ラインを選び、選択値を `scripts/setup-build-tools-linux.sh` へそのまま渡す。両スクリプトは不明なオプションをエラー終了する
 - Linux / Windows とも、規約名の成果物は `dist/v{version}/` に揃う。
+- Linux NVIDIA CUDAバイナリのsource buildは `scripts/build-llama-server-cuda-linux.sh` で行う。公式Linux CUDA archiveは存在しないため、固定commitのsource tarball SHA-256を検証し、digest固定のlinux/amd64 CUDA devel image内でビルドする。公式コンテナ内のEULA/LICENSE候補を `NVIDIA-CUDA-RUNTIME-LICENSE.txt` として生成resourceへコピーし、見つからなければビルドを失敗させる。`LLAMA_CPP_LICENSE.txt` と `LLAMA_CPP_BUILD_INFO.txt`、CUDA Toolkit EULA（`licenses/manual/`）も配布物へ残す。`libcuda.so.1`はホストドライバーから解決し、toolkit stubは配布しない。
 
 ### NSIS ビルド時の注意点
 

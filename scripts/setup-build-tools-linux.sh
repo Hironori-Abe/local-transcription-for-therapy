@@ -214,7 +214,17 @@ if [[ ! -f "licenses/THIRD_PARTY_FULL.txt" ]]; then
 fi
 echo ""
 
-echo "[INFO] LLM 校正は llama.cpp llama-server を直接起動します。Lemonade/lemond は同梱しません。"
+if [[ "$BUILD_VARIANT" == "nvidia" ]]; then
+  # Linux CUDA has no official llama.cpp release archive.  The host-side
+  # build-appimage-docker.sh / build-arch-package.sh prepares this resource
+  # from the pinned b10075 source before entering this build step.
+  if ! bash scripts/build-llama-server-cuda-linux.sh --check; then
+    echo '[ERROR] Linux NVIDIA CUDA llama-serverがありません。' >&2
+    echo '        先に bash scripts/build-llama-server-cuda-linux.sh --ensure を実行してください。' >&2
+    exit 1
+  fi
+fi
+echo "[INFO] LLM 校正は llama.cpp llama-server を直接起動します。NVIDIA Linuxは同梱CUDA、AMDはROCm/Vulkan、Lemonade/lemondは使いません。"
 echo ""
 
 # --- 同梱 Python から readline 拡張モジュールを外す ---

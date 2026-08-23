@@ -59,26 +59,27 @@ scripts\run-dev-amd.bat
 
 ## 動作環境（Full CUDA 版）
 
-- Windows 10 / 11 64bit
-- NVIDIA GPU（RTX 推奨）+ CUDA Toolkit 12.x（13以上は不可） + cuDNN 9.x
+- Windows 10 / 11 64bit（Windows版）
+- Windows版: NVIDIA GPU（RTX 推奨）+ CUDA Toolkit 12.x（13以上は不可） + cuDNN 9.x
+- Linux版: NVIDIA GPU + 対応するNVIDIAドライバー（CUDA Toolkitは実行時不要）
 - **VRAM 8GB 以上（最低要件）**
 - インストーラー約 1GB 前後 + モデルダウンロード分の空き容量
 
 ### Linux / CachyOS NVIDIA版
 
-CachyOS / Arch向けのNVIDIA版は、ホストのNVIDIAドライバーとVulkanランタイムを使用します。
-`nvidia-utils`（`nvidia-smi`・NVIDIAユーザー空間ランタイム）と
-`vulkan-icd-loader`を必須とし、使用中のカーネルに合うNVIDIAドライバーも別途導入してください。
+CachyOS / Arch向けのNVIDIA版は、ホストのNVIDIAドライバーとCUDAドライバーランタイムを使用します。
+`nvidia-utils`（`nvidia-smi`・NVIDIAユーザー空間ランタイム）を必須とし、使用中のカーネルに合う
+NVIDIAドライバーも別途導入してください。CUDA Toolkitは実行時には必要ありません。
 導入後、次でGPU名が表示されることを確認します。
 
 ```sh
 nvidia-smi -L
 ```
 
-このLinux版の文字起こし・話者分離はCUDAで実行します。一方、LLM校正は現行のLinux配布構成で
-CUDA版 `llama-server` を同梱していないため、セットアップタブからダウンロードするVulkan版
-`llama-server`を使用します（暫定経路）。Windows NVIDIA版のCUDA直起動や、プロジェクト方針である
-Linux NVIDIA LLMのCUDA直起動への移行は、今後の恒久対応課題です。詳しい導入手順は
+このLinux版の文字起こし・話者分離・LLM校正はCUDAで実行します。Linux用のCUDA `llama-server`は
+公式Linux CUDAアーカイブが存在しないため、配布ビルド時に公式のllama.cpp b10075ソースから再現ビルドし、
+CUDA再頒布ランタイムとともにパッケージへ同梱します。実行時に必要なのはNVIDIAドライバーだけで、
+Vulkanへのフォールバックは行いません。詳しい導入手順は
 [CachyOS / Arch向け配布README](packaging/arch/README.md)を参照してください。
 
 ## CPU 版（お試し用）
@@ -130,7 +131,7 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper（turbo 既定 / large-v3 高精度・後付けダウンロード） / Diarization: pyannote.audio / 音声デコード: LGPL 構成 ffmpeg CLI
 - 音声入力・区間聞き直し: Gemma 4 E4B + 音声 mmproj（llama.cpp llama-server、OpenAI 互換 `input_audio`、loopback 限定）
-- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。Windows NVIDIA=CUDA 直起動 / Linux NVIDIA=ダウンロードVulkan（暫定） / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
+- LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。Windows/Linux NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
 
 ## ドキュメント
 
@@ -139,6 +140,7 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 - オフライン動作の確認手順: [docs/offline-verification.md](docs/offline-verification.md)
 - 倫理審査向け資料テンプレート: [docs/irb-template.md](docs/irb-template.md)
 - 開発環境セットアップ・内部仕様: [docs/development.md](docs/development.md)
+- Linux NVIDIA CUDA配布ビルド: [docs/release-build-linux.md](docs/release-build-linux.md)
 - トラブルシューティング（CUDA / AMD ROCm 含む）: [docs/troubleshooting.md](docs/troubleshooting.md)
 - 配布ビルド（Windows NSIS）: [docs/release-build-windows.md](docs/release-build-windows.md)
 - FFmpeg / PyAV ライセンス方針: [docs/lgpl-pyav-build.md](docs/lgpl-pyav-build.md)

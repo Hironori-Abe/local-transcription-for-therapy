@@ -28,7 +28,12 @@ Thumbs.db
 .claude/
 .codex_write_test.txt
 tmp_test.wav
-# llama-server CUDA バイナリ（setup-dev.bat でダウンロード、gitに含めない）
+# llama-server CUDA バイナリ（Windowsはsetup-dev.bat、Linuxはsource-build scriptで生成、gitに含めない）
+src-tauri/resources/llama-server/cuda/llama-server
+src-tauri/resources/llama-server/cuda/*.so*
+src-tauri/resources/llama-server/cuda/LLAMA_CPP_BUILD_INFO.txt
+src-tauri/resources/llama-server/cuda/LLAMA_CPP_LICENSE.txt
+src-tauri/resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt
 src-tauri/resources/llama-server/*.exe
 src-tauri/resources/llama-server/*.dll
 # Python 3.12 Embeddable（setup-build-tools.bat でダウンロード、git に含めない）

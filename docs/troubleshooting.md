@@ -30,11 +30,11 @@ where.exe cudnn64_9.dll
 ## Linux / CachyOS NVIDIA: `nvidia-smi` が無い / CUDAが検出されない
 
 - CachyOS / Arch向けNVIDIAパッケージでは、`nvidia-utils`（`nvidia-smi` とNVIDIAユーザー空間
-  ランタイム）と `vulkan-icd-loader` を必須依存にしています。古いパッケージを使用している場合は、
-  次で補完してからアプリを再起動してください。
+  ランタイム）を必須依存にしています。古いパッケージを使用している場合は、次で補完してから
+  アプリを再起動してください。
 
 ```sh
-sudo pacman -S --needed nvidia-utils vulkan-icd-loader
+sudo pacman -S --needed nvidia-utils
 ```
 
 - `nvidia-utils`はカーネルモジュールを含みません。使用中のカーネルに合うCachyOSのNVIDIA
@@ -48,9 +48,11 @@ nvidia-smi -L
 
 - モデルのダウンロード完了はCUDA利用可能の判定ではありません。アプリの「GPUを再確認」を、
   ドライバー導入・再起動後に実行してください。
-- このLinux NVIDIA版では、文字起こし・話者分離はCUDA、LLM校正はセットアップタブから取得する
-  Vulkan `llama-server`を使用します。Linux NVIDIAのLLMをCUDA直起動へ移行することは恒久対応の
-  検討課題です。Windows NVIDIAのCUDA経路、AMDのROCm優先・Vulkanフォールバックとは別の構成です。
+- このLinux NVIDIA版では、文字起こし・話者分離・LLM校正すべてでCUDAを使用します。Linux用
+  CUDA `llama-server`は公式Linux archiveではなく、llama.cpp b10075ソースからビルドして
+  配布物へ同梱しています。CUDA Toolkitは実行時には不要で、Vulkan版の取得や設定も不要です。
+  `nvidia-smi -L`が成功するのに校正だけ失敗する場合は、アプリを更新し、同梱サーバーの
+  `resources/llama-server/cuda/LLAMA_CPP_BUILD_INFO.txt`が存在する配布物か確認してください。
 
 ## Linux AppImage: CUDA/cuDNN 混在による cuBLAS エラー
 

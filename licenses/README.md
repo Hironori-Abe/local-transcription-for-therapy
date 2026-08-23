@@ -40,6 +40,8 @@ python scripts/collect_licenses.py
 - **`NVIDIA-CUDA-Toolkit-EULA-12.4.txt`**: 同梱 CUDA ランタイム DLL（cudart / cublas / cublasLt、
   llama.cpp 公式ビルド同梱の CUDA 12.4 由来）の再頒布条件。Attachment A（再頒布可能ファイル一覧）と
   Attachment B（cuBLAS の第三者 BSD 帰属表示）を含む。CUDA バージョン更新時は対応するアーカイブ版へ差し替える。
+  Linux CUDA source buildでは、使用した公式コンテナ内のEULA/LICENSE候補も
+  `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt`へコピーする（候補が無い場合はビルド失敗）。
 - **`selectors-MPL-2.0.txt`**: Rust selectors 0.24.0 / 0.36.1（ツリー内唯一の弱コピーレフト）。
   未改変・ソースは crates.io から入手可能である旨をヘッダーに明記。
 - **`pywin32-LICENSE.txt`**: Windows リリース venv 用（Mark Hammond の BSD 系ライセンス）。

@@ -1,8 +1,8 @@
 # Third-Party Licenses / 第三者ライセンス表示（NOTICES）
 
 本ファイルは Local Transcription for Therapy (LoTT) が**同梱・依存・配布する第三者ソフトウェアおよびモデル**の
-ライセンス表示（attribution / NOTICE）をまとめたものです。配布物（NSIS インストーラー）に
-同梱し、アプリ内からも参照できるようにすることを想定しています。
+ライセンス表示（attribution / NOTICE）をまとめたものです。配布物（NSIS インストーラー、Linux
+パッケージ）に同梱し、アプリ内からも参照できるようにすることを想定しています。
 
 > 主要項目（F章の4点・手動補完ライセンス）は確認・対応済み（2026-06-12）。
 > 依存やバージョンを更新した場合は、該当行とチェックリストを再確認すること。
@@ -25,9 +25,9 @@
 | コンポーネント | 用途 | ライセンス | 義務 / 注意 |
 |---|---|---|---|
 | **Python 3.12 embeddable** (`resources/python312/`) | Python ランタイム | PSF License Agreement | ライセンス本文の同梱（`LICENSE.txt` 同梱済み） |
-| **llama.cpp** (`resources/llama-server/` の `llama-server.exe`, `ggml*.dll`, `llama*.dll` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | 著作権表示＋MIT本文の同梱 |
+| **llama.cpp** (`resources/llama-server/` の Windows DLL / Linux `cuda/llama-server` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | Windowsは公式CUDA archive、Linux CUDAは固定commit b10075 source build。著作権表示＋MIT本文の同梱。再ビルド手順は `scripts/build-llama-server-cuda-linux.sh` |
 | ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV 変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows NSIS で同梱確認済み。`--enable-gpl` / `--enable-nonfree` / GPL 系 encoder なし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt` を同梱 |
-| ✅ **NVIDIA CUDA 再頒布 DLL** (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll` — CUDA 12.4 / llama.cpp 公式ビルド由来) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3） |
+| ✅ **NVIDIA CUDA 再頒布ランタイム** (`cublas*`, `cudart*`, `nvrtc*` 等 — CUDA 12.4 devel imageからLinux source build時に抽出 / Windows公式ビルド由来DLL) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3）。Linux source buildは公式コンテナ内のEULA/LICENSE候補を `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt` にもコピーし、見つからなければビルド失敗。`libcuda.so.1`（NVIDIAドライバー）は同梱しない |
 
 > Lemonade SDK / lemond は現在の配布物には同梱しません。`%LOCALAPPDATA%\{app-id}\lemonade\` というディレクトリ名は後方互換のキャッシュ名として残る場合がありますが、中身はダウンロード済み llama.cpp バックエンドや設定ファイルです。
 
@@ -126,8 +126,11 @@
   - 他に Davide Barbieri、University of Tennessee、Jonathan Hogg（STFC）等の各 BSD 系表示。
 - **必須対応**:
   1. ✅ EULA 本文＋ Attachment A/B を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（2026-06-12 対応。出典: `docs.nvidia.com/cuda/archive/12.4.1/eula/`。同梱 DLL は llama.cpp 公式ビルド付属の CUDA 12.4 由来）。
-  2. ✅ NOTICE に「NVIDIA CUDA ランタイムライブラリを CUDA Toolkit EULA に基づき再頒布」「cuBLAS は UC Regents ほかの第三者 BSD 表示を含む」と記載（対応済み: NOTICE 更新）。
-  3. CUDA バージョン更新時（`scripts/setup-dev.bat` の `LLAMA_CUDA_ZIP` の CUDA 版数変更時）は、対応するアーカイブ版 EULA へ差し替え、Attachment A/B の収録・文言を再確認。
+  2. ✅ Linux CUDA source buildでは、固定digestの公式CUDA develコンテナ内にある
+     `/NGC-DL-CONTAINER-LICENSE` または `/usr/local/cuda` 配下のEULA/LICENSE候補を
+     `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt`へコピーする。候補が無い場合はビルドを失敗させる。
+  3. ✅ NOTICE に「NVIDIA CUDA ランタイムライブラリを CUDA Toolkit EULA に基づき再頒布」「cuBLAS は UC Regents ほかの第三者 BSD 表示を含む」と記載（対応済み: NOTICE 更新）。
+  4. CUDA バージョン更新時（`scripts/setup-dev.bat` の `LLAMA_CUDA_ZIP` の CUDA 版数変更時）は、対応するアーカイブ版 EULA へ差し替え、Attachment A/B の収録・文言を再確認。
 
 ### F-4. ffmpeg / PyAV 非依存化 — ✅ **Windows NSIS 検証済み（2026-06-02）**
 

@@ -26,7 +26,8 @@
       "../python_sidecar/setup_venv_cli.py",
       "../python_sidecar/requirements-runtime.txt",
       "resources/python312-linux",
-      "resources/ffmpeg"
+      "resources/ffmpeg",
+      "resources/llama-server"
     ],
     "linux": {
       "appimage": {

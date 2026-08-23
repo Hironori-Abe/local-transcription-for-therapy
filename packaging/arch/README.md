@@ -9,7 +9,11 @@ WebKitGTK、GTK、GLib、GStreamerを使用します。
 PKGBUILDでも必須依存として宣言しています。
 
 - `nvidia-utils`: `nvidia-smi` と NVIDIAユーザー空間ランタイム（`libcuda.so` など）
-- `vulkan-icd-loader`: セットアップタブから取得するLLM用Vulkan `llama-server` の実行基盤
+
+Linux CUDA版のLLM `llama-server` は、公式のLinux CUDA archiveが存在しないため、
+llama.cpp b10075ソースからビルドしたCUDA版をアプリへ同梱します。CUDA Toolkit本体は
+実行時には必要ありません。ホストのNVIDIAドライバー（`libcuda.so.1`）だけを使用し、
+CUDAの再頒布可能なランタイム・数学ライブラリはアプリ側へ同梱します。
 
 `nvidia-utils`だけではカーネル側のNVIDIAドライバーは入りません。CachyOSの使用カーネルに
 合う `nvidia` / `nvidia-open` / `nvidia-dkms` などを環境に合わせて導入し、再起動後に
@@ -23,20 +27,22 @@ nvidia-smi -L
 既存の古いパッケージから更新する場合や、依存解決を省略して導入した場合は、次で補完できます。
 
 ```sh
-sudo pacman -S --needed nvidia-utils vulkan-icd-loader
+sudo pacman -S --needed nvidia-utils
 ```
 
 モデルのダウンロードはGPUドライバーが無くても完了することがあります。モデル取得完了は
 CUDA利用可能の判定ではないため、ドライバーを導入・再起動した後にアプリの「GPUを再確認」を
 実行してください。
 
-## Linux NVIDIA版のLLM実行経路（暫定）
+## Linux NVIDIA版のLLM実行経路
 
-Linux NVIDIA版は、文字起こし・話者分離をCUDAで実行します。LLM校正は現行のLinux配布構成で
-CUDA版 `llama-server` を同梱していないため、セットアップタブからダウンロードしたVulkan版
-`llama-server`を使用します。これはLinux NVIDIAでの起動を成立させるための暫定経路です。
-Windows NVIDIA版のCUDA直起動、およびプロジェクト方針であるNVIDIA CUDA直起動へLinux LLMを
-移行することは、別の恒久対応課題です。AMD版のROCm優先・Vulkanフォールバックとは別の話です。
+Linux NVIDIA版は、文字起こし・話者分離・LLM校正をCUDAで実行します。Linux用CUDA版
+`llama-server`は公式リリースのバイナリarchiveではなく、ビルド時に公式llama.cppの
+commit `76f46ad29d61fd8c1401e8221842934bf62a6064`（b10075）から再現ビルドし、
+`resources/llama-server/cuda/`へ配置してパッケージへ同梱します。公式コンテナから取得した
+`NVIDIA-CUDA-RUNTIME-LICENSE.txt`も同じresourceへ同梱します。Vulkanは使用しません。
+ビルド方法とsource offerは `scripts/build-llama-server-cuda-linux.sh` と
+`docs/release-build-linux.md` に記載しています。
 
 ## インストール
 
@@ -85,6 +91,11 @@ sudo pacman -R local-transcription-for-therapy-cuda
 ```sh
 bash scripts/build-arch-package.sh
 ```
+
+このスクリプトは、パッケージ作成前にDocker上でllama.cpp b10075のLinux CUDA版を
+ソースからビルドします。初回はNVIDIA CUDA develイメージとソース取得のため、ビルド時だけ
+インターネット接続が必要です。Dockerを使わずに事前ビルド済みresourceを用意する場合は、
+`scripts/build-llama-server-cuda-linux.sh --check` が成功する状態にしてください。
 
 成果物は`dist/arch/vX.Y.Z/`へ配置されます。
 

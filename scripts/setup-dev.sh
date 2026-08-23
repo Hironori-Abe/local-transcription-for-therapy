@@ -357,6 +357,11 @@ _install_pacman_system_packages() {
       vulkan-icd-loader
       vulkan-tools
     )
+  elif [[ "$TORCH_BACKEND" == "cuda" ]]; then
+    # CachyOS/Arch needs the user-space driver package for both CUDA ASR and
+    # the bundled Linux CUDA llama-server.  The kernel driver remains a
+    # separate nvidia/nvidia-open/nvidia-dkms choice.
+    packages+=(nvidia-utils)
   fi
 
   info "Installing pacman packages..."
@@ -1459,7 +1464,7 @@ doctor_summary() {
   if [[ "$SKIP_LLAMA_CPP" == "1" || "$LLAMA_CPP_BACKEND" == "none" ]]; then
     info "llama_cpp check skipped by setup option."
   elif ! check_llama_cpp_import; then
-    warn "llama_cpp is not installed or import failed. LLM proofreading can still use the downloaded llama.cpp ROCm/Vulkan/CUDA llama-server."
+    warn "llama_cpp is not installed or import failed. LLM proofreading can still use the bundled/downloaded llama.cpp llama-server."
     if [[ "$LLAMA_CPP_BACKEND" == "hipblas" ]]; then
       warn "For AMD HIPBLAS, install ROCm compiler dependencies and rerun setup. Start with: sudo apt-get install -y libxml2 libxml2-dev"
       warn "If it still fails, check /tmp/lott-rocm-clang-check.log and the pip build output above."
@@ -1472,7 +1477,7 @@ print_development_reminders() {
   echo "開発時のリマインダー:"
   echo "- プライバシー最優先: 会話データ・音声データを PC 外の API に送信しない。"
   echo "- ネット接続は初回セットアップ、依存導入、モデル取得時のみ許可する。"
-  echo "- LLM 校正は同梱 llama-server（CUDA）/ ダウンロードした llama.cpp ROCm・Vulkan（AMD）を使う。"
+  echo "- LLM 校正は NVIDIA Linux/Windows の CUDA llama-server、AMD のダウンロード型 ROCm・Vulkan llama-serverを使う。"
   echo "- AMD GPU: ctranslate2 ROCm ホイール (GitHub Releases) + ROCm PyTorch で faster-whisper が動作する。"
   echo "- AMD GPU ASR: ROCm 7.2 以降なら HSA_OVERRIDE_GFX_VERSION 不要。"
   echo "- AMD GPU でも --device cuda を渡す (HIP-CUDA 互換レイヤーのため)。"

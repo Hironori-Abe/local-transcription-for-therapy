@@ -111,6 +111,13 @@ fi
 
 cd "$ROOT_DIR"
 
+if [[ "$BUILD_OPTION" == "" ]]; then
+  # ggml-org publishes CUDA llama-server archives for Windows, but not Linux.
+  # Prepare the pinned source build on the host before mounting the repository
+  # into the Ubuntu AppImage builder container.
+  bash scripts/build-llama-server-cuda-linux.sh --ensure
+fi
+
 echo "[INFO] Ubuntu 24.04 AppImageビルダーを準備します..."
 docker build \
   --file scripts/Dockerfile.appimage-ubuntu24 \

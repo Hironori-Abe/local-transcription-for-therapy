@@ -873,6 +873,84 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     None
 }
 
+/// NVIDIA Full版で使用する同梱 CUDA `llama-server` のパスを返す。
+///
+/// Linux の公式 llama.cpp リリースには CUDA 用の配布アセットがないため、Linux NVIDIA
+/// 版はパッケージのビルド工程で管理下の CUDA ビルドを `resources/llama-server` に同梱する。
+/// 将来、CUDA専用のサブディレクトリへ配置する場合にも対応できるよう `cuda/` を先に探し、
+/// 現行の Windows 配布レイアウト（直下）と開発用レイアウトは従来どおり維持する。
+///
+/// AMD/CPU版から同梱ファイルを誤ってCUDA候補として扱わないよう、ビルド識別子も確認する。
+fn find_bundled_cuda_llama_server_bin(app: &AppHandle) -> Option<String> {
+    if is_cpu_only_build(app) || is_amd_gpu_build(app) {
+        return None;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let path_api = app.path();
+        let mut search_dirs: Vec<PathBuf> = Vec::new();
+        if let Ok(rd) = path_api.resource_dir() {
+            search_dirs.push(rd.join("resources").join("llama-server").join("cuda"));
+            search_dirs.push(rd.join("llama-server").join("cuda"));
+        }
+        if let Ok(ed) = path_api.executable_dir() {
+            search_dirs.push(ed.join("resources").join("llama-server").join("cuda"));
+            search_dirs.push(ed.join("llama-server").join("cuda"));
+            search_dirs.push(
+                ed.join("_up_")
+                    .join("resources")
+                    .join("llama-server")
+                    .join("cuda"),
+            );
+            search_dirs.push(ed.join("_up_").join("llama-server").join("cuda"));
+        }
+        #[cfg(debug_assertions)]
+        search_dirs.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("llama-server")
+                .join("cuda"),
+        );
+
+        let exe = std::env::consts::EXE_SUFFIX;
+        for dir in &search_dirs {
+            let path = dir.join(format!("llama-server{exe}"));
+            if llama_server_binary_is_usable(&path) && linux_cuda_bundle_metadata_is_valid(&path) {
+                return Some(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    // Windowsの既存同梱レイアウト、およびLinuxの移行期間中に直下へ配置された
+    // 管理下CUDAビルドを維持する。Linux直下レイアウトも build-info を必須にし、
+    // Vulkan/CPUバイナリを誤ってCUDA版として採用しない。
+    let fallback = find_bundled_llama_server_bin(app)?;
+    #[cfg(target_os = "linux")]
+    if !linux_cuda_bundle_metadata_is_valid(Path::new(&fallback)) {
+        return None;
+    }
+    Some(fallback)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cuda_bundle_metadata_is_valid(bin_path: &Path) -> bool {
+    let Some(dir) = bin_path.parent() else {
+        return false;
+    };
+    let info = dir.join("LLAMA_CPP_BUILD_INFO.txt");
+    let Ok(contents) = fs::read_to_string(info) else {
+        return false;
+    };
+    let source_tag = format!("source_tag={LLAMA_CPP_LINUX_CUDA_BUILD_TAG}");
+    contents.lines().any(|line| line.trim() == source_tag) && contents.contains("GGML_CUDA=ON")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_cuda_bundle_metadata_is_valid(_bin_path: &Path) -> bool {
+    true
+}
+
 /// `llama-server` の候補が実際に実行可能なファイルかを判定する。
 ///
 /// セットアップ状態はディレクトリ内に一時ファイルが残っているだけでも true になって
@@ -1155,17 +1233,11 @@ fn try_start_llama_server_cuda(
     }
     let mut cmd = Command::new(bin_path);
     apply_windows_no_window(&mut cmd);
-    // 同梱 CUDA DLL を優先して読み込めるよう、バイナリのあるディレクトリを PATH 先頭に追加する
-    if let Some(bin_dir) = PathBuf::from(bin_path).parent() {
-        if bin_dir.exists() {
-            let current_path = env::var("PATH").unwrap_or_default();
-            #[cfg(target_os = "windows")]
-            let sep = ";";
-            #[cfg(not(target_os = "windows"))]
-            let sep = ":";
-            cmd.env("PATH", format!("{}{sep}{current_path}", bin_dir.display()));
-        }
-    }
+    // 同梱 CUDA の共有ライブラリ（Linux の libggml-cuda / libcublas / libcudart、
+    // Windows の DLL）をバイナリと同じ階層、または lib/・lib64/ から解決する。
+    // ここは同梱バイナリの境界なので、ホストコマンド用の apply_host_command_env は
+    // 適用しない（AppImage/パッケージ同梱のライブラリを剥がしてはいけない）。
+    configure_llama_server_runtime_env(&mut cmd, bin_path);
     // 選択された NVIDIA GPU（llmHipDeviceIndex / nvidia-smi index）のみを見せる。
     // PCI_BUS_ID 順で nvidia-smi の index と一致させる。明示選択(>=0)のときだけ限定し、
     // 未指定(None/-1)は llama.cpp 既定（複数 GPU 時はレイヤー分割）を保つ。
@@ -1585,32 +1657,17 @@ fn get_llm_engine_cache_dir(app: &AppHandle) -> Option<PathBuf> {
 
 #[tauri::command]
 fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
-    // 同梱 llama-server は CUDA/Windows の標準経路。ファイル名だけでなく、非空かつ
-    // 実行可能な実体であることを find_* 側で確認している。
-    if find_bundled_llama_server_bin(&app).is_some() {
-        return true;
-    }
-
     // 配布バリアントごとに、実際に起動候補となる既知の llama-server を確認する。
-    // 以前は `bin/` に一時展開ディレクトリが一つでもあれば true になり、ダウンロード
-    // 中断後も「完了」と表示されていた。また NVIDIA Linux は CUDA バイナリを同梱せず、
-    // セットアップで取得した Vulkan を使うため、その経路も明示的に含める。
+    // 以前は NVIDIA Linux がセットアップで取得した Vulkan を CUDA版のバックエンドと
+    // して扱っていた。Linux NVIDIA は管理下の同梱 CUDA ビルドだけを候補にし、Vulkan の
+    // 有無でインストール済みと判定しない。
     match build_variant_for_identifier(app.config().identifier.as_str()) {
         "cpu" => find_llm_cpu_llama_server(&app).is_some(),
         "rocm" => {
             find_llm_rocm_llama_server(&app).is_some()
                 || find_llm_vulkan_llama_server(&app).is_some()
         }
-        "cuda" => {
-            #[cfg(target_os = "linux")]
-            {
-                find_llm_vulkan_llama_server(&app).is_some()
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                false
-            }
-        }
+        "cuda" => find_bundled_cuda_llama_server_bin(&app).is_some(),
         _ => false,
     }
 }
@@ -1654,6 +1711,8 @@ const GEMMA_E4B_MMPROJ_APPROX_BYTES: u64 = 992_000_000;
 const LLAMA_CPP_AMD_BUILD: &str = "b9631";
 const LLAMA_CPP_CPU_BUILD: &str = "b10075";
 const LLAMA_CPP_CPU_BUILD_NUMBER: u32 = 10075;
+#[cfg(target_os = "linux")]
+const LLAMA_CPP_LINUX_CUDA_BUILD_TAG: &str = "b10075";
 const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 20_000_000;
 static LLM_BACKEND_INSTALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
@@ -2357,15 +2416,21 @@ fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> 
         "running".to_string()
     } else if has_process {
         "starting".to_string()
-    } else if find_bundled_llama_server_bin(&app).is_some()
-        || find_llm_rocm_llama_server(&app).is_some()
-        || find_llm_vulkan_llama_server(&app).is_some()
-        || find_llm_cpu_llama_server(&app).is_some()
-    {
-        // 起動可能な llama-server バイナリが存在すれば「インストール済み（停止中）」と見なす。
-        // NVIDIA=同梱 CUDA llama-server、AMD=取得済み ROCm/Vulkan バックエンド。
-        "stopped".to_string()
     } else {
+        let has_candidate = match build_variant_for_identifier(app.config().identifier.as_str()) {
+            "cuda" => find_bundled_cuda_llama_server_bin(&app).is_some(),
+            "rocm" => {
+                find_llm_rocm_llama_server(&app).is_some()
+                    || find_llm_vulkan_llama_server(&app).is_some()
+            }
+            "cpu" => find_llm_cpu_llama_server(&app).is_some(),
+            _ => false,
+        };
+        if has_candidate {
+            // 起動可能な llama-server バイナリが存在すれば「インストール済み（停止中）」と見なす。
+            // NVIDIA=管理下の同梱 CUDA llama-server、AMD=取得済み ROCm/Vulkan、CPU=CPU版。
+            return "stopped".to_string();
+        }
         "not_installed".to_string()
     }
 }
@@ -2420,7 +2485,7 @@ fn start_cuda_llama_blocking(
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
 ) -> Result<(), String> {
-    let (child, oom_flag) = try_start_llama_server_cuda(
+    let (mut child, oom_flag) = match try_start_llama_server_cuda(
         bin,
         model_path,
         mtp_model_path,
@@ -2430,58 +2495,6 @@ fn start_cuda_llama_blocking(
         ctx_size,
         device_index,
         autofit,
-    )?;
-    *child_arc.lock().map_err(|_| "mutex poisoned".to_string())? = Some(child);
-
-    // llama-server はモデルをロードしてから応答可能になるため、最大 60 秒待機する。
-    for _ in 0..120 {
-        thread::sleep(Duration::from_millis(500));
-        if llm_server_port_open(port) {
-            return Ok(());
-        }
-        // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
-        // フロントが「並列処理数を下げて再試行」できるよう OOM マーカー付きで早期に失敗させる。
-        // （auto-fit は通常 CPU へ逃がして OOM を回避するため、主に E4B の -ngl 99 経路向け。）
-        if oom_flag.load(Ordering::Relaxed) {
-            if let Ok(mut g) = child_arc.lock() {
-                if let Some(mut c) = g.take() {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-            }
-            mode_arc.store(0, Ordering::Relaxed);
-            return Err(format!(
-                "{VRAM_OOM_MARKER} AI校正エンジンの起動時にGPUメモリ(VRAM)が不足しました。並列処理数を下げて再試行してください。"
-            ));
-        }
-    }
-    Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
-}
-
-/// ダウンロードした Vulkan llama-server を起動し、listen するまで待つ。
-///
-/// AMD の E4B/12B 経路にも使われている `try_start_llama_server_vulkan` を NVIDIA Linux
-/// の CUDA 非同梱版からも利用する。プロセス即死・OOM・タイムアウト時は必ず子プロセスを
-/// 回収して mode を停止へ戻す。
-fn start_vulkan_llama_blocking(
-    bin_path: &str,
-    model_path: &str,
-    mtp_model_path: Option<&str>,
-    mmproj_path: Option<&str>,
-    port: u16,
-    ctx_size: u32,
-    vk_device_index: i32,
-    child_arc: &Arc<Mutex<Option<Child>>>,
-    mode_arc: &Arc<AtomicU8>,
-) -> Result<(), String> {
-    let (mut child, oom_flag) = match try_start_llama_server_vulkan(
-        bin_path,
-        model_path,
-        mtp_model_path,
-        mmproj_path,
-        port,
-        ctx_size,
-        Some(vk_device_index),
     ) {
         Ok(result) => result,
         Err(error) => {
@@ -2496,28 +2509,32 @@ fn start_vulkan_llama_blocking(
             let _ = child.kill();
             let _ = child.wait();
             mode_arc.store(0, Ordering::Relaxed);
-            return Err("AI校正エンジン (Vulkan) の状態管理に失敗しました。".to_string());
+            return Err("AI校正エンジン (CUDA) の状態管理に失敗しました。".to_string());
         }
     };
     *guard = Some(child);
     drop(guard);
 
-    for _ in 0..240 {
+    // llama-server はモデルをロードしてから応答可能になるため、最大 60 秒待機する。
+    for _ in 0..120 {
         thread::sleep(Duration::from_millis(500));
         if llm_server_port_open(port) {
             return Ok(());
         }
+        // KV キャッシュ確保時の VRAM 不足を検出したら、残骸プロセスを kill して VRAM を解放し、
+        // フロントが「並列処理数を下げて再試行」できるよう OOM マーカー付きで早期に失敗させる。
+        // （auto-fit は通常 CPU へ逃がして OOM を回避するため、主に E4B の -ngl 99 経路向け。）
         if oom_flag.load(Ordering::Relaxed) {
-            if let Ok(mut guard) = child_arc.lock() {
-                if let Some(mut child) = guard.take() {
-                    let _ = kill_process_tree_by_pid(child.id());
-                    let _ = child.kill();
-                    let _ = child.wait();
+            if let Ok(mut g) = child_arc.lock() {
+                if let Some(mut c) = g.take() {
+                    let _ = kill_process_tree_by_pid(c.id());
+                    let _ = c.kill();
+                    let _ = c.wait();
                 }
             }
             mode_arc.store(0, Ordering::Relaxed);
             return Err(format!(
-                "{VRAM_OOM_MARKER} AI校正エンジン (Vulkan) の起動時にGPUメモリ(VRAM)が不足しました。"
+                "{VRAM_OOM_MARKER} AI校正エンジンの起動時にGPUメモリ(VRAM)が不足しました。並列処理数を下げて再試行してください。"
             ));
         }
         let child_dead = child_arc
@@ -2536,7 +2553,6 @@ fn start_vulkan_llama_blocking(
             break;
         }
     }
-
     if let Ok(mut guard) = child_arc.lock() {
         if let Some(mut child) = guard.take() {
             let _ = kill_process_tree_by_pid(child.id());
@@ -2545,10 +2561,7 @@ fn start_vulkan_llama_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
-    Err(
-        "AI校正エンジン (Vulkan) の起動に失敗しました（120秒以内に応答しませんでした）。"
-            .to_string(),
-    )
+    Err("AI校正エンジン (CUDA) の起動タイムアウト（60秒）".to_string())
 }
 
 #[tauri::command]
@@ -2571,16 +2584,11 @@ async fn start_llm_server(
         }
     }
 
-    // NVIDIA GPU + llama-server バイナリ + GGUF モデルが揃っている場合は直接起動する。
-    // Linux の配布版では CUDA llama-server を同梱せず、セットアップで取得した Vulkan
-    // バックエンドを使うため、CUDA と Vulkan を別候補として解決する。
+    // NVIDIA GPU + 管理下の同梱 CUDA llama-server + GGUF モデルが揃っている場合だけ
+    // 直接起動する。Linux NVIDIAでもVulkanを代替経路として選ばない。公式リリースに
+    // Linux CUDAアセットがないため、LinuxのCUDAビルドはパッケージの管理下で生成・同梱する。
     let nvidia_list = nvidia_gpu_priority_list();
-    let llama_server_bin = find_bundled_llama_server_bin(&app);
-    let nvidia_vulkan_bin = if cfg!(target_os = "linux") && !is_amd_gpu_build(&app) {
-        find_llm_vulkan_llama_server(&app)
-    } else {
-        None
-    };
+    let llama_server_bin = find_bundled_cuda_llama_server_bin(&app);
     let effective_tier = proofread_tier
         .as_deref()
         .map(GemmaTier::from_marker)
@@ -2594,14 +2602,6 @@ async fn start_llm_server(
         (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
         _ => None,
     };
-    let nvidia_vulkan_mtp_model_path = match (
-        &nvidia_vulkan_bin,
-        resolve_gemma_mtp_path_for_tier(&app, effective_tier),
-    ) {
-        (Some(bin), Some(mtp)) if llama_server_supports_mtp(bin) => Some(mtp),
-        _ => None,
-    };
-
     let resolved_port = match get_llm_engine_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
@@ -2661,46 +2661,20 @@ async fn start_llm_server(
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if !nvidia_list.is_empty() && nvidia_vulkan_bin.is_some() && model_path.is_some() {
-        // Linux NVIDIA 配布版: CUDA llama-server が同梱されていない場合は、セットアップで
-        // 取得した Vulkan 版を直接起動する。E4B/12B ともに同じ local GGUF を渡し、MTP 対応
-        // ビルドであればドラフトも有効にする。iGPU が Vulkan0 になる構成では、列挙結果から
-        // NVIDIA デバイスを選択して誤起動・ハングを避ける。
-        let bin = nvidia_vulkan_bin.unwrap();
-        let mpath = model_path.unwrap();
-        let mtp_path = nvidia_vulkan_mtp_model_path;
-        let is_12b = matches!(effective_tier, GemmaTier::B12);
-        // Vulkan 起動関数は -np を渡さず単一スロットで動作する。sidecar へも常に
-        // parallel=1 を伝え、llama-server とリクエスト並列数が食い違わないようにする。
-        let n_parallel = 1u32;
-        let ctx_size = if is_12b {
-            AMD_12B_CTX_SIZE
+    } else if !is_amd_gpu_build(&app) && !is_cpu_only_build(&app) {
+        // NVIDIA Full版はCUDA直起動だけを許可する。Vulkanへ暗黙に切り替えると、
+        // 「CUDA版なのにVulkanで動く」状態を設定画面から把握できず、性能・互換性の
+        // 調査も困難になるため、GPU/同梱エンジン/モデルの不足を明示的に返す。
+        let message = if nvidia_list.is_empty() {
+            "NVIDIA GPU を検出できませんでした。nvidia-smi が動作するNVIDIAドライバーを導入し、アプリを再起動してください。"
+        } else if llama_server_bin.is_none() {
+            "NVIDIA GPU は検出されましたが、CUDA版 llama-server が同梱されていません。CachyOS/CUDA版の完全なパッケージを再インストールしてください。Vulkanへはフォールバックしません。"
+        } else if model_path.is_none() {
+            "Gemma 4 校正モデルが見つかりません。設定タブでモデルの導入を完了してください。"
         } else {
-            llm_ctx
-                .filter(|ctx| *ctx >= 4096)
-                .map(|ctx| ctx.min(131072))
-                .unwrap_or(AMD_E4B_CTX_SIZE)
+            "NVIDIA CUDA版のAI校正エンジンを起動できる条件が揃っていません。設定タブの状態を確認してください。"
         };
-        let vk_device_index = preferred_vulkan_device_index(&bin);
-        tauri::async_runtime::spawn_blocking(move || {
-            mode_arc.store(1, Ordering::Relaxed);
-            parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
-            start_vulkan_llama_blocking(
-                &bin,
-                &mpath,
-                mtp_path.as_deref(),
-                None, // 校正は mmproj 無し
-                resolved_port,
-                ctx_size,
-                vk_device_index,
-                &child_arc,
-                &mode_arc,
-            )?;
-            purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
-            Ok("started".to_string())
-        })
-        .await
-        .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
+        Err(message.to_string())
     } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app, Some(effective_tier)) {
         // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
         // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。単一スロット運用。
@@ -2767,6 +2741,7 @@ async fn start_llm_server(
 /// llama.cpp バックエンドバイナリをダウンロード・インストールする
 /// （初回セットアップ時・要インターネット接続）。
 /// backend: "llamacpp:rocm" / "llamacpp:vulkan" / "llamacpp:cpu" のいずれか。
+/// NVIDIA CUDA版は管理下の同梱バイナリを使い、ここからVulkanを取得しない。
 #[tauri::command]
 async fn install_llm_backend(app: AppHandle, backend: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || install_llm_backend_blocking(&app, &backend))
@@ -3066,7 +3041,7 @@ fn start_full_voice_input_server_blocking(
     //    本体+mmprojが収まらない分は CPU へ自動配置され安全）。
     let nvidia_list = nvidia_gpu_priority_list();
     if !nvidia_list.is_empty() {
-        if let Some(bin) = find_bundled_llama_server_bin(app) {
+        if let Some(bin) = find_bundled_cuda_llama_server_bin(app) {
             mode_arc.store(1, Ordering::Relaxed);
             parallel_arc.store(1, Ordering::Relaxed);
             start_cuda_llama_blocking(
@@ -7781,6 +7756,23 @@ fn replace_backend_directory(staging: &Path, dest: &Path, backup: &Path) -> Resu
 }
 
 fn install_llm_backend_blocking(app: &AppHandle, backend: &str) -> Result<String, String> {
+    let build_variant = build_variant_for_identifier(app.config().identifier.as_str());
+    if build_variant == "cuda" && backend != "llamacpp:cuda" {
+        return Err(
+            "NVIDIA CUDA版ではVulkan/ROCm/CPUのllama.cppバックエンドを使用しません。管理下のCUDA llama-serverをアプリパッケージへ同梱してください。"
+                .to_string(),
+        );
+    }
+    if backend == "llamacpp:cuda" {
+        return if find_bundled_cuda_llama_server_bin(app).is_some() {
+            Ok("CUDA版 llama-server はアプリに同梱済みです。".to_string())
+        } else {
+            Err(
+                "CUDA版 llama-server がパッケージに見つかりません。CachyOS/CUDA版インストーラーを再生成してください。"
+                    .to_string(),
+            )
+        };
+    }
     let spec = llama_backend_download_spec(backend, std::env::consts::OS)?;
     let cache_dir = get_llm_engine_cache_dir(app)
         .ok_or_else(|| "アプリのキャッシュディレクトリを解決できませんでした。".to_string())?;

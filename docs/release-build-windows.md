@@ -194,6 +194,10 @@ v0.9.6 以降は、CPU版が試用向けである旨の注意書きを本文の�
 
 ## 3. 配布ラインと Tauri build override 一覧
 
+Linux NVIDIA CUDA版のソースビルドと再頒布ランタイムの扱いは、専用の
+[Linux配布ビルドガイド](release-build-linux.md)を参照してください。Linux用CUDA
+`llama-server`は公式archiveを取得せず、固定commitのllama.cppソースから生成します。
+
 Full 版は GPU ランタイム差分を同梱しやすくするため **CUDA 版** と **ROCm / AMD 版** を分けます。AMD版は現時点では一般配布せず、利用者が対象GPUに対応する環境を用意して自身でビルドするexperimental構成です。
 PyTorch は CUDA build と ROCm build を同一 Python 環境に共存させる運用が難しいため、配布パッケージも runtime ごとに分離し、1つのパッケージへ両 runtime を同梱しません。
 
@@ -202,7 +206,7 @@ AMD版はGPU処理に失敗した場合にCPUへフォールバックせず、�
 | override | 用途 |
 | --- | --- |
 | `tauri.nvidia.windows.override.json` | 安定版 / NVIDIA RTX 主軸 / Windows NSIS（`setup-build-tools.bat` の既定） |
-| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムを同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入。LLMランタイムは同梱せず、Linux NVIDIAではセットアップタブから取得するVulkan版を暫定使用 |
+| `tauri.nvidia.linux.override.json` | Full CUDA / Linux（deb + AppImage）。自己完結Python 3.12基本ランタイムと、b10075ソースからビルドしたCUDA `llama-server`を同梱し、Pythonパッケージは初回セットアップでアプリデータ領域へ導入 |
 | `tauri.amd.windows.override.json` | AMD / Windows NSIS ビルド用（詳細調整予定） |
 | `tauri.amd.linux.override.json` | AMD experimental / ROCm・Vulkan llama-server 直起動検証用 / Linux。自己完結Python 3.12基本ランタイムを同梱（詳細調整予定） |
 | `tauri.cpu.windows.override.json` | CPU 版 / Windows NSIS（`setup-build-tools.bat --cpu`） |

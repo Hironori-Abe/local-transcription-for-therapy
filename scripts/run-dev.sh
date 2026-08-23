@@ -197,7 +197,11 @@ if [[ "$EMULATION_MODE" == "missing_community1" ]]; then
 fi
 info "Emulation state saved: $EMULATION_STATE_FILE"
 
-info "LLM backend: bundled/downloaded llama.cpp llama-server direct launch (no Lemonade/lemond)."
+if [[ "${LOTT_TORCH_BACKEND:-cuda}" == "rocm" ]]; then
+  info "LLM backend: downloaded llama.cpp ROCm/Vulkan llama-server direct launch (no Lemonade/lemond)."
+else
+  info "LLM backend: bundled Linux CUDA llama-server direct launch (no Lemonade/lemond)."
+fi
 
 if [[ ! -d "$ROOT_DIR/python_sidecar/models/pyannote-speaker-diarization-community-1" ]]; then
   info "Diarization model directory not found."

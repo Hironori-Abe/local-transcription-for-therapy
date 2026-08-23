@@ -57,12 +57,15 @@ export interface SetupStatusProjection {
 }
 
 /**
- * The backend that can be downloaded for the current GPU detection state.
+ * The backend setup state for the current GPU detection state.
  *
  * `unavailable` is deliberately represented in the type.  A GPU edition must
  * never silently turn a failed CUDA/ROCm probe into a CPU backend download.
- * `checking` is separate so the setup UI can explain why no download action
- * is available while the initial probe is still in progress.
+ * NVIDIA/CUDA builds ship their CUDA llama-server in the application package,
+ * so CUDA is represented as `bundled` rather than as a downloadable install
+ * key. AMD builds download ROCm and may additionally download Vulkan as a
+ * fallback. `checking` is separate so the setup UI can explain why no
+ * download action is available while the initial probe is still in progress.
  */
 export type LlmBackendInstallPlan =
   | {
@@ -70,6 +73,13 @@ export type LlmBackendInstallPlan =
       unavailable: false;
       primary: string;
       fallbacks: string[];
+    }
+  | {
+      status: 'bundled';
+      unavailable: false;
+      primary: null;
+      fallbacks: [];
+      reason: string;
     }
   | {
       status: 'checking';
@@ -187,7 +197,13 @@ export function llmBackendInstallPlan(
   // ROCm probe has not completed yet.  Likewise ROCm is sufficient when its
   // own probe succeeded and CUDA is still unknown.
   if (cudaAvailable === true) {
-    return { status: 'ready', unavailable: false, primary: 'llamacpp:vulkan', fallbacks: [] };
+    return {
+      status: 'bundled',
+      unavailable: false,
+      primary: null,
+      fallbacks: [],
+      reason: 'CUDA版のllama-serverはアプリに同梱されています。見つからない場合はアプリを再インストールしてください。'
+    };
   }
   if (rocmAvailable === true) {
     return {
@@ -216,6 +232,7 @@ export function llmBackendInstallPlan(
 }
 
 export function llmBackendLabel(backend: string | null | undefined): string {
+  if (backend === 'llamacpp:cuda') return 'CUDA (NVIDIA)';
   if (backend === 'llamacpp:vulkan') return 'Vulkan';
   if (backend === 'llamacpp:rocm') return 'AMD GPU (ROCm)';
   if (backend === 'llamacpp:cpu') return 'CPU';

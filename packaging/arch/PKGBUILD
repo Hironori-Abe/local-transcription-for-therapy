@@ -14,13 +14,12 @@ depends=(
   'gst-plugins-base'
   'gst-plugins-good'
   'nvidia-utils'
-  'vulkan-icd-loader'
   'webkit2gtk-4.1'
   'xdg-utils'
   'xorg-xwayland'
 )
 optdepends=(
-  'cuda: NVIDIA CUDA toolkit for development (the app installs its Python CUDA runtime during setup)'
+  'cuda: NVIDIA CUDA Toolkit for rebuilding the bundled Linux llama-server or native CUDA development (not required at runtime)'
   'fcitx5-gtk: Japanese input through fcitx5'
   'pipewire-pulse: audio playback through PipeWire/PulseAudio'
 )
@@ -62,6 +61,8 @@ build() {
   test -x node_modules/.bin/tauri
   test -x src-tauri/resources/python312-linux/bin/python3.12
   test -x src-tauri/resources/ffmpeg/ffmpeg
+  test -x src-tauri/resources/llama-server/cuda/llama-server
+  test -s src-tauri/resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt
 
   # 配布物へビルド機固有の命令（CachyOSのtarget-cpu=native等）を混入させない。
   # 専用makepkg設定とここで二重に固定し、Cargo成果物もmakepkgのcleanbuild対象へ
@@ -158,6 +159,10 @@ package() {
   cp -a --no-preserve=ownership \
     "$_repo_root/src-tauri/resources/ffmpeg/." \
     "$app_dir/resources/ffmpeg/"
+  mkdir -p "$app_dir/resources/llama-server"
+  cp -a --no-preserve=ownership \
+    "$_repo_root/src-tauri/resources/llama-server/." \
+    "$app_dir/resources/llama-server/"
 
   # UbuntuのPython標準ライブラリに含まれるホスト絶対パスのsymlinkは、
   # Archパッケージへ持ち込まない。サイドカーとpipはどちらも使用しない。
@@ -167,6 +172,7 @@ package() {
 
   chmod 0755 "$app_dir/resources/python312-linux/bin/python3.12"
   chmod 0755 "$app_dir/resources/ffmpeg/ffmpeg"
+  chmod 0755 "$app_dir/resources/llama-server/cuda/llama-server"
 
   if find "$app_dir" -xtype l -print -quit | grep -q .; then
     echo 'Broken symbolic link found in packaged resources:' >&2

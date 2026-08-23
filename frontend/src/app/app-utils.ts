@@ -822,8 +822,11 @@ export function resolveLlmInstallableGpuEntryValue(
   if (gpuMode === 'cpu') {
     return { installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu' };
   }
+  // NVIDIA/CUDA builds ship llama-server with the application. There is no
+  // supported in-app CUDA download key; a missing bundled binary is a package
+  // installation error and must not be replaced with Vulkan silently.
   if (cudaAvailable) {
-    return { installKey: 'llamacpp:vulkan', label: 'LlamaCPP - Vulkan (NVIDIA GPU)', state: 'installable', category: 'gpu' };
+    return null;
   }
   if (rocmAvailable) {
     return { installKey: 'llamacpp:rocm', label: 'LlamaCPP - ROCm (AMD GPU)', state: 'installable', category: 'gpu' };
@@ -840,7 +843,9 @@ export function resolveLlmTargetBackendKeyValue(
     return 'llamacpp:cpu';
   }
   if (cudaAvailable) {
-    return 'llamacpp:vulkan';
+    // Internal selection marker only; this is never passed to the install
+    // command because CUDA is provided by the bundled binary.
+    return 'llamacpp:cuda';
   }
   if (rocmAvailable) {
     return 'llamacpp:rocm';

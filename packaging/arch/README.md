@@ -71,9 +71,10 @@ pacmanの標準フックがデスクトップ情報キャッシュを更新し�
 アイコンはhicolorテーマの標準サイズ一式と実ウィンドウの両方へ設定します。
 インストール・更新時はpacmanのフックがアイコンテーマキャッシュを更新します。
 
-ランチャーはホストのデスクトップ環境、`GDK_BACKEND`、`GTK_IM_MODULE`、
-`WEBKIT_DISABLE_DMABUF_RENDERER`などの既定値を変更しません。これにより、KDE/GNOMEなど
-実行中のデスクトップ環境が選んだWayland/X11とWebKitGTKの描画経路をそのまま使います。
+ランチャーは`GDK_BACKEND`と`GTK_IM_MODULE`を設定せず、KDE/GNOMEなど実行中の
+デスクトップ環境が選んだWayland/X11をそのまま使います。一方、CachyOS / NVIDIA実機では
+DMA-BUF rendererが有効だと起動できなかったため、通常起動では
+`WEBKIT_DISABLE_DMABUF_RENDERER=1`を設定します。
 
 表示の切り分けでX11/XWaylandを明示する場合は、次のように起動します。
 
@@ -81,13 +82,18 @@ pacmanの標準フックがデスクトップ情報キャッシュを更新し�
 LOTT_GDK_BACKEND=x11 lott
 ```
 
-以前のNVIDIA向け回避策を比較する場合だけ、DMA-BUF rendererの無効化も明示します。
+対象環境ではX11を明示するとGTK初期化に失敗するため、通常は`LOTT_GDK_BACKEND`を指定しません。
+X11/XWaylandが利用可能と確認できた環境で比較する場合だけ、次を使用します。
 
 ```sh
 LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
 ```
 
-これは診断用の組み合わせであり、通常起動時にはランチャーが設定しません。
+新しいWebKitGTK/NVIDIA環境でDMA-BUF rendererを再検証する場合だけ、次を使用します。
+
+```sh
+LOTT_ENABLE_DMABUF_RENDERER=1 lott
+```
 
 ## アンインストール
 
@@ -150,6 +156,6 @@ dist/cachyos/experimental/v0.9.8/
 静的検査でもZMM・mask・AVX-512 broadcast命令を拒否します。未対応CPU向けには
 `scripts/build-arch-package.sh`で生成する汎用`x86-64`版を使用してください。
 
-表示バックエンドとDMA-BUF rendererは、experimental版でもホストのデスクトップ環境と
-WebKitGTKの既定値を使用します。以前のX11/DMA-BUF無効構成を比較する場合は、上記の
-診断用環境変数を明示してください。
+表示バックエンドはexperimental版でもホストのデスクトップ環境の既定値を使い、
+DMA-BUF rendererは通常起動で無効化します。比較する場合は上記の診断用環境変数を
+明示してください。

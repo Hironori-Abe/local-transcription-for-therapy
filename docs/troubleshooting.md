@@ -285,8 +285,8 @@ bash scripts/build-cachyos-experimental-package.sh
 dist/cachyos/experimental/v0.9.8/LoTT-v0.9.8-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst
 ```
 
-インストール後は通常どおり起動します。パッケージのランチャーはホストのデスクトップ環境の
-既定値を使用し、X11やDMA-BUF無効化を自動設定しません。
+インストール後は通常どおり起動します。パッケージのランチャーは表示バックエンドに
+ホストのデスクトップ環境の既定値を使用し、DMA-BUF rendererだけを無効化します。
 
 ```sh
 lott
@@ -313,14 +313,21 @@ lott
 
 その後の実機確認で、NVIDIA向けにランチャーが設定していたファイルや環境変数が
 カクつきの一因になり得ることが分かりました。Arch/CachyOSパッケージのランチャーは現在、
-`GDK_BACKEND`、`GTK_IM_MODULE`、`WEBKIT_DISABLE_DMABUF_RENDERER`を未設定時に追加せず、
-OS・デスクトップ環境・ホストWebKitGTKの既定値を使用します。ユーザーが既に設定している
-環境変数も上書きしません。
+`GDK_BACKEND`と`GTK_IM_MODULE`を追加せず、OS・デスクトップ環境の既定値を使用します。
+その後の実機確認では、`WEBKIT_DISABLE_DMABUF_RENDERER=1 lott`だけなら起動する一方、
+DMA-BUF rendererが有効な通常起動は失敗し、`LOTT_GDK_BACKEND=x11`を加えるとGTK初期化に
+失敗しました。このため通常起動ではDMA-BUF rendererだけを無効化し、X11は強制しません。
 
-旧構成との比較が必要な場合だけ、次の診断用起動を使ってください。
+X11/XWaylandが利用可能な別環境で旧構成との比較が必要な場合だけ、次を使ってください。
 
 ```sh
 LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+```
+
+DMA-BUF rendererを再検証する場合だけ、次を使って通常の無効化を抑止できます。
+
+```sh
+LOTT_ENABLE_DMABUF_RENDERER=1 lott
 ```
 
 この変更はCachyOS/ArchのホストGTK/WebKitGTKパッケージのランチャーだけが対象です。

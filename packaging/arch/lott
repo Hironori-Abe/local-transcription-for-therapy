@@ -1,12 +1,18 @@
 #!/bin/sh
 set -eu
 
-# Archパッケージはホストのデスクトップ環境とGTK/WebKitGTKの既定値を使う。
+# GTK表示バックエンドはホストのデスクトップ環境の既定値を使う。
 # X11/XWaylandを比較する場合だけ、診断用にLOTT_GDK_BACKENDを明示する。
-# GDK_BACKENDやWEBKIT_DISABLE_DMABUF_RENDERERなど、利用者が明示した環境変数は
-# そのまま尊重し、未設定時にランチャーから既定値を追加しない。
 if [ -n "${LOTT_GDK_BACKEND:-}" ]; then
   export GDK_BACKEND="$LOTT_GDK_BACKEND"
+fi
+
+# CachyOS / NVIDIA実機ではDMA-BUF rendererを有効にするとGTK/WebKitGTKが起動しない。
+# 利用者がWEBKIT_DISABLE_DMABUF_RENDERERを明示していれば尊重し、通常起動では無効化する。
+# 新しいWebKitGTK/NVIDIA環境で再検証するときだけLOTT_ENABLE_DMABUF_RENDERER=1を指定する。
+if [ -z "${LOTT_ENABLE_DMABUF_RENDERER:-}" ] \
+  && [ "${WEBKIT_DISABLE_DMABUF_RENDERER+x}" != x ]; then
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
 fi
 
 exec '/usr/lib/Local Transcription for Therapy/lott-bin' "$@"

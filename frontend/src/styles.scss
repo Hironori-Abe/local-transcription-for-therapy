@@ -8,7 +8,10 @@ html {
   @include mat.theme(
     (
       color: mat.$azure-palette,
-      typography: Roboto,
+      // Roboto は同梱していないため、固定すると Linux でフォールバックが
+      // 既定の serif（明朝）へ落ちることがある。system-ui を先頭に置き、
+      // WebKit/GTK の OS 既定フォント（例: Noto Sans CJK）へ追従させる。
+      typography: 'system-ui, sans-serif',
       density: 0
     )
   );
@@ -32,7 +35,7 @@ html {
 
 body {
   margin: 0;
-  font-family: Roboto, 'Noto Sans JP', sans-serif;
+  font-family: system-ui, sans-serif;
   background: var(--lott-bg);
   color: var(--lott-text);
 }

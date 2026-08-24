@@ -19,7 +19,7 @@ BATCH_MAX_SEGMENTS = 20
 _PROMPT_TEMPLATES_DIR = Path(__file__).parent / "prompt_templates" / "proofread"
 _PROMPT_TYPE = "gemma4"
 _SYSTEM_PROMPT_OVERRIDE_FILE: Optional[Path] = None
-# 同時送信数（継続バッチング）。内蔵 llama-server 経路（backend 名は後方互換で lemonade）のみ。
+# 同時送信数（継続バッチング）。Rust 管理下の内蔵 llama-server 経路のみ。
 # OpenAI互換は別プロセスのローカルサーバー負荷回避で 1 固定。
 _OVERALL_PARALLEL: int = 1
 # Rust側の内蔵 llama-server 起動は `/health` が ready になるまで待つ。ここは既存サーバーを
@@ -234,10 +234,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-gpu-layers", type=int, default=-1)
     parser.add_argument(
         "--backend", default="llama_cpp",
-        choices=["llama_cpp", "llama_cpp_rocm", "lemonade", "openai_compatible"],
+        choices=["llama_cpp", "llama_cpp_rocm", "llama_server", "openai_compatible"],
     )
-    parser.add_argument("--llm-url", default="http://localhost:13305")
-    parser.add_argument("--llm-model", default="gemma-4-E4B-it-qat")
+    parser.add_argument("--server-url", default="http://127.0.0.1:0")
+    parser.add_argument("--server-model", default="gemma-4-E4B-it-qat")
     parser.add_argument("--openai-base-url", default="")
     parser.add_argument("--openai-model", default="")
     parser.add_argument("--n-ctx", type=int, default=16384)
@@ -736,15 +736,15 @@ def _run_openai_chat_batches(
     return results_map
 
 
-def overall_proofread_llm(
-    segments: List[Dict], llm_url: str, llm_model: str,
+def overall_proofread_llama_server(
+    segments: List[Dict], server_url: str, server_model: str,
 ) -> Dict[int, Dict]:
     return _run_openai_chat_batches(
         segments=segments,
-        base_url=llm_url,
-        model=llm_model,
+        base_url=server_url,
+        model=server_model,
         provider_label="AI校正エンジン",
-        backend_name="lemonade",
+        backend_name="llama_server",
         require_model_list=True,
         fallback_to_first_model=True,
         extra_payload={"chat_template_kwargs": {"enable_thinking": False}},
@@ -884,8 +884,10 @@ def main() -> int:
 
         emit_progress("overall_proofread", f"全体校正を開始します（セグメント数: {len(segments)}）")
 
-        if args.backend == "lemonade":
-            results_map = overall_proofread_llm(segments, args.llm_url, args.llm_model)
+        if args.backend == "llama_server":
+            results_map = overall_proofread_llama_server(
+                segments, args.server_url, args.server_model
+            )
         elif args.backend == "openai_compatible":
             results_map = overall_proofread_openai_compatible(segments, args.openai_base_url, args.openai_model)
         elif args.backend == "llama_cpp_rocm":

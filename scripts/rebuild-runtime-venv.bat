@@ -108,7 +108,7 @@ if exist "%GEMMA_MTP_FILE%" (
   )
 )
 
-echo [LLM] llama.cpp llama-server direct launch is used; Lemonade/lemond is not required.
+echo [LLM] llama.cpp llama-server direct launch is used.
 
 echo [9/9] Validating runtime imports ...
 call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, torch, torchaudio; print('torch=', torch.__version__); print('torchaudio=', torchaudio.__version__); print('cuda=', torch.cuda.is_available())"

@@ -71,7 +71,7 @@ setx PYTHON_BIN "C:\path\to\.venv312\Scripts\python.exe"
 | get-pip.py | `src-tauri/resources/python312/get-pip.py` | — |
 | LGPL ffmpeg | `src-tauri/resources/ffmpeg/ffmpeg.exe` | `scripts/setup_ffmpeg_lgpl.py`（BtbN `lgpl` build） |
 
-> NVIDIA 版は AI 校正に同梱 CUDA llama-server を直接起動するため、Lemonade（lemond / lemonade CLI）は同梱しません（撤去済み）。AMD 版は ROCm / Vulkan の llama-server をセットアップタブから後からダウンロードします。
+> NVIDIA版はAI校正用のCUDA llama-serverを直接起動します。AMD版はROCm / Vulkanのllama-serverをセットアップタブから取得します。外部のランタイム管理デーモンやCLIは配布しません。
 
 バージョンを更新する場合は `scripts/setup-build-tools.bat` の変数を書き換えてから、対応するリソースフォルダを削除して再実行してください。
 
@@ -93,7 +93,7 @@ src-tauri\resources\python312\python.exe scripts\collect_licenses.py --venv .ven
 
 ### NSIS フックについて
 
-`src-tauri/nsis/nvidia-hooks.nsh`（Full 版）/ `editor-hooks.nsh`（Editor 版）が Tauri の NSIS インストーラーフックです。Lemonade のインストール促し・プロセス管理を担っていた `lemonade-hooks.nsh` は撤去済みです。公式インストーラーはローカルAIアプリ（LM Studio / Ollama）連携の選択ダイアログを表示しません。
+`src-tauri/nsis/nvidia-hooks.nsh`（Full版）/ `editor-hooks.nsh`（Editor版）がTauriのNSISインストーラーフックです。公式インストーラーは外部LLMランタイムの導入や、ローカルAIアプリ（LM Studio / Ollama）連携の選択ダイアログを表示しません。
 
 `tauri.nvidia.windows.override.json` の `bundle.windows.nsis` ブロックは `tauri.conf.json` の同ブロックをシャロー上書きするため、`tauri.conf.json` 側の `installerHooks` 指定が失われる可能性があります。Windows 向け override の `nsis` ブロックを追加・変更する際は `installerHooks` を明示してください。
 

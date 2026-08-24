@@ -6,7 +6,6 @@ import type {
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
-export type LlmGpuMode = 'gpu' | 'cpu';
 export type LlmPromptType = 'gemma4' | 'original';
 export type LlmStringSettingsField =
   | 'systemPromptsByModelFileName'
@@ -48,9 +47,6 @@ export interface AppSettingsV1 {
   llm?: {
     modelPath?: string;
     backendMode?: LlmBackendMode;
-    lemonadeRatioPct?: number;
-    /** @deprecated 旧フィールド。lemonadeParallelEnabled に移行。 */
-    cpuLlmRatioPct?: number;
     systemPromptsByModelFileName?: Record<string, string>;
     /** @deprecated 旧フィールド。systemPromptsByBackend に移行。 */
     systemPromptsByLocalOpenAiProfileId?: Record<string, string>;
@@ -59,15 +55,8 @@ export interface AppSettingsV1 {
     overallSystemPromptsByBackend?: Record<string, string>;
     promptTypeByBackend?: Record<string, LlmPromptType>;
     inferenceParamsByKey?: Record<string, { nCtx?: number; maxBatch?: number }>;
-    lemonadeParallelEnabled?: boolean;
-    llmGpuMode?: LlmGpuMode;
-    /** @deprecated 旧フィールド。lemonadeParallelEnabled に移行。 */
-    backend?: string;
-    lemonadeUrl?: string;
-    lemonadeModel?: string;
     lmstudioModel?: string;
     ollamaModel?: string;
-    lemonadeBackendNotNeeded?: boolean;
     llmHipDeviceIndex?: number;
     llmPromptType?: LlmPromptType;
     llmParallel?: number;
@@ -100,12 +89,8 @@ export interface GeneralAppSettingsOptions {
 export interface ResolvedLlmAppSettingsValue {
   modelPath?: string;
   backendMode?: LlmBackendMode;
-  llmGpuMode: LlmGpuMode;
-  lemonadeUrl?: string;
-  lemonadeModel?: string;
   lmstudioModel?: string;
   ollamaModel?: string;
-  lemonadeBackendNotNeeded?: boolean;
   llmHipDeviceIndex?: number;
   llmPromptType?: LlmPromptType;
   llmParallel?: number;
@@ -120,12 +105,8 @@ export interface ResolveLlmAppSettingsOptions {
 export interface CurrentLlmSelectionSettingsValue {
   modelPath: string;
   backendMode: LlmBackendMode;
-  llmGpuMode: LlmGpuMode;
-  lemonadeUrl: string;
-  lemonadeModel: string;
   lmstudioModel: string;
   ollamaModel: string;
-  lemonadeBackendNotNeeded: boolean;
   llmHipDeviceIndex: number;
   llmPromptType: LlmPromptType;
   llmParallel: number;

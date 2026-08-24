@@ -224,7 +224,7 @@ if [[ "$BUILD_VARIANT" == "nvidia" ]]; then
     exit 1
   fi
 fi
-echo "[INFO] LLM 校正は llama.cpp llama-server を直接起動します。NVIDIA Linuxは同梱CUDA、AMDはROCm/Vulkan、Lemonade/lemondは使いません。"
+echo "[INFO] LLM校正: llama.cpp llama-serverを直接起動します（NVIDIA Linuxは同梱CUDA、AMDはROCm/Vulkan）。"
 echo ""
 
 # --- 同梱 Python から readline 拡張モジュールを外す ---

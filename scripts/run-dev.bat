@@ -95,7 +95,7 @@ if /I "%EMULATION_MODE%"=="missing_community1" (
 )
 echo [INFO] Emulation state saved: %EMULATION_STATE_FILE%
 
-echo [INFO] LLM backend: bundled/downloaded llama.cpp llama-server direct launch ^(no Lemonade/lemond^).
+echo [INFO] LLM backend: bundled/downloaded llama.cpp llama-server direct launch.
 
 if not exist "python_sidecar\models\pyannote-speaker-diarization-community-1" (
   echo [INFO] Diarization model directory not found.

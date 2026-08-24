@@ -1,9 +1,9 @@
 ; Editor 版インストーラーフック
-; LLM / Lemonade を含まない軽量 (校正・編集中心) 構成のためのフック。
-; Full 版の lemonade-hooks.nsh と異なり、Lemonade のインストール促しは行わない。
+; 外部LLMランタイムを含まない軽量（校正・編集中心）構成のためのフック。
+; インストーラーから追加ランタイムの導入を促すことはない。
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; Editor 版は追加ランタイム (Lemonade / Python パッケージ) を必要としないため、
+  ; Editor版は追加LLMランタイムやPythonパッケージを必要としないため、
   ; インストール時の追加処理は行わない。
 !macroend
 

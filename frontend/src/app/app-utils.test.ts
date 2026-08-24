@@ -84,8 +84,6 @@ import {
   resolveAudioPreprocessPresetValue,
   resolveAutoLlmParallelValue,
   resolveLlmDeviceVramMibValue,
-  resolveLlmInstallableGpuEntryValue,
-  resolveLlmTargetBackendKeyValue,
   resolveRuntimeBuildFlagsValue,
   resolveStepForStageValue,
   secondsToEstimatedMinutesValue,
@@ -177,24 +175,6 @@ test('GPU labels and setup hints preserve backend, recommendation, and warning t
   assert.match(gpuSetupHintValue(true, ''), /GPU内フォールバック/);
   assert.match(gpuSetupHintValue(false, 'GPU 文字起こしに失敗しました: test'), /GPU 実行に失敗/);
   assert.equal(gpuSetupHintValue(false, '別のエラー'), '');
-});
-
-test('LLM backend selection preserves CPU, NVIDIA, AMD, and unavailable priorities', () => {
-  assert.equal(resolveLlmInstallableGpuEntryValue(false, false, false, 'gpu', true, false), null);
-  assert.equal(resolveLlmInstallableGpuEntryValue(true, true, false, 'gpu', true, false), null);
-  assert.equal(resolveLlmInstallableGpuEntryValue(true, false, true, 'gpu', true, false), null);
-  assert.deepEqual(resolveLlmInstallableGpuEntryValue(true, false, false, 'cpu', true, true), {
-    installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu'
-  });
-  assert.equal(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', true, true), null);
-  assert.deepEqual(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', false, true), {
-    installKey: 'llamacpp:rocm', label: 'LlamaCPP - ROCm (AMD GPU)', state: 'installable', category: 'gpu'
-  });
-  assert.equal(resolveLlmInstallableGpuEntryValue(true, false, false, 'gpu', false, false), null);
-  assert.equal(resolveLlmTargetBackendKeyValue('cpu', true, true), 'llamacpp:cpu');
-  assert.equal(resolveLlmTargetBackendKeyValue('gpu', true, true), 'llamacpp:cuda');
-  assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, true), 'llamacpp:rocm');
-  assert.equal(resolveLlmTargetBackendKeyValue('gpu', false, false), '');
 });
 
 test('Full GPU runtime reasons never promise an unavailable CPU fallback', () => {

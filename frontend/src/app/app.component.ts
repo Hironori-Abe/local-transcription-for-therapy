@@ -54,7 +54,6 @@ import {
 import {
   type AppSettingsV1,
   type LlmBackendMode,
-  type LlmGpuMode,
   type LlmPromptType,
   type ThemeMode
 } from './app-settings';
@@ -166,8 +165,6 @@ import {
   resolveTimeInputRangeValue,
   resolveAudioPreprocessPresetValue,
   resolveLlmDeviceVramMibValue,
-  resolveLlmInstallableGpuEntryValue,
-  resolveLlmTargetBackendKeyValue,
   resolveRuntimeBuildFlagsValue,
   resolveStepForStageValue,
   shouldShowVoiceInputShortCandidateHintValue,
@@ -401,13 +398,6 @@ interface LlmModelEntry {
   path: string;
 }
 
-interface LlmBackendEntry {
-  label: string;
-  state: 'installed' | 'installable' | 'update_required';
-  category: 'gpu' | 'npu' | 'cpu';
-  installKey: string;
-}
-
 interface GpuDeviceInfo {
   index: number;
   name: string;
@@ -557,7 +547,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly llmProofreadStatus = signal<string>('');
   readonly llmProofreadRunningSeconds = signal<number>(0);
   readonly llmBackendMode = signal<LlmBackendMode>('local_gguf');
-  readonly llmGpuMode = signal<LlmGpuMode>('gpu');
   readonly cudaAvailable = signal<boolean | null>(null);
   readonly rocmAvailable = signal<boolean | null>(null);
   /** ROCm あり・CUDA なし = AMD GPU 環境と判定する。 */
@@ -606,16 +595,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedLlmHipDeviceIndex = signal<number>(-1);
   /** AI校正の並列スロット数。0=自動（VRAMで決定）、1/2/4/8/12/16/20/24=手動上書き。CUDA経路のみ有効。 */
   readonly selectedLlmParallel = signal<number>(0);
-  readonly lemonadeUrl = signal<string>('http://localhost:13306');
-  readonly lemonadeModel = signal<string>('gemma-4-E4B-it-qat');
   readonly llmServerStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'error'>('unknown');
   readonly llmLoadedDevice = signal<'unknown' | 'gpu' | 'cpu' | 'stopped' | 'error'>('unknown');
-  readonly llmBackendInstalling = signal(false);
-  readonly llmBackendInstallMessage = signal('');
-  /** AMD GPUバックエンドが不要と明示されたとき true。AMD GPU オプションを無効化しプロンプトを非表示にする。 */
-  readonly lemonadeBackendNotNeeded = signal(false);
-  /** ファイルシステム上にLemonadeバックエンドバイナリが存在するか（bin/ディレクトリ非空チェック）。 */
-  readonly llmGpuBackendInstalled = signal(false);
   readonly llmModelPath = signal<string>('');
   readonly lmstudioModelInput = signal<string>('');
   readonly ollamaModelInput = signal<string>('');
@@ -630,24 +611,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.llmBackendMode() === 'ollama' ? this.ollamaModelInput() : this.lmstudioModelInput()
   );
   readonly llmEngineUiVisible = computed(() =>
-    // Editor 版は AI 校正機能を一切持たないため、Lemonade UI / 状態確認を常に抑止する。
-    // これにより refreshLlmUiState()・ngOnDestroy の stopLlm・
-    // llmInstallableGpuEntry など全参照箇所で Lemonade 挙動が発火しない。
+    // Editor 版は AI 校正機能を一切持たないため、内蔵 llama-server UI / 状態確認を抑止する。
     this.runtimeAiProofreadBuild() && this.llmBackendMode() === 'local_gguf'
   );
-  // Lemonade が必要な場面でバックエンドバイナリが未インストールのとき非 null を返す。
-  // GPU 検出結果に基づいて適切なバックエンドを自動選択する。
-  // 「不要」（lemonadeBackendNotNeeded=true）が押されたときは null を返してプロンプトを抑制。
-  readonly llmInstallableGpuEntry = computed<LlmBackendEntry | null>(() => {
-    return resolveLlmInstallableGpuEntryValue(
-      this.llmEngineUiVisible(),
-      this.lemonadeBackendNotNeeded(),
-      this.llmGpuBackendInstalled(),
-      this.llmGpuMode(),
-      this.cudaAvailable() === true,
-      this.rocmAvailable() === true
-    );
-  });
   /**
    * Setup must distinguish "still probing" and "no GPU" from a valid backend.
    * In particular, the latter is not a request to install llama.cpp CPU on a
@@ -671,15 +637,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return plan.reason;
   });
-  // インストール済みかどうかに関わらず、GPU モードから期待されるバックエンドキーを返す
-  readonly llmTargetBackendKey = computed(() => {
-    return resolveLlmTargetBackendKeyValue(
-      this.llmGpuMode(),
-      this.cudaAvailable() === true,
-      this.rocmAvailable() === true
-    );
-  });
-
   readonly llmBackendModeHint = computed(() => {
     return llmBackendModeHintValue(
       this.llmBackendMode(),
@@ -1680,14 +1637,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     });
     if (llm.modelPath !== undefined) this.llmModelPath.set(llm.modelPath);
     if (llm.backendMode !== undefined) this.llmBackendMode.set(llm.backendMode);
-    this.llmGpuMode.set(llm.llmGpuMode);
-    if (llm.lemonadeUrl !== undefined) this.lemonadeUrl.set(llm.lemonadeUrl);
-    if (llm.lemonadeModel !== undefined) this.lemonadeModel.set(llm.lemonadeModel);
     if (llm.lmstudioModel !== undefined) this.lmstudioModelInput.set(llm.lmstudioModel);
     if (llm.ollamaModel !== undefined) this.ollamaModelInput.set(llm.ollamaModel);
-    if (llm.lemonadeBackendNotNeeded !== undefined) {
-      this.lemonadeBackendNotNeeded.set(llm.lemonadeBackendNotNeeded);
-    }
     if (llm.llmHipDeviceIndex !== undefined) {
       this.selectedLlmHipDeviceIndex.set(llm.llmHipDeviceIndex);
     }
@@ -3126,7 +3077,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   async runLlmProofread(
     autoMode = false,
     segments?: ProofreadSegmentInput[],
-    backendOverride?: 'llama_cpp' | 'llama_cpp_rocm' | 'lemonade' | 'openai_compatible',
+    backendOverride?: 'llama_cpp' | 'llama_cpp_rocm' | 'llama_server' | 'openai_compatible',
   ): Promise<void> {
     if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
       return;
@@ -3148,7 +3099,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
 
     // 既に完了済みのセグメントを除外して送信。校正対象が無ければエンジンを起動せず早期returnする
-    // （対象ゼロで同梱エンジン（llama-server / lemond）を無駄に起動・常駐させないため、起動より前に判定する）。
+    // （対象ゼロで同梱エンジン（llama-server）を無駄に起動・常駐させないため、起動より前に判定する）。
     const currentDoneStatus = this.llmSegmentStatus();
     this.llmProgressOffset = Object.values(currentDoneStatus).filter(v => v === 'done').length;
     const resolvedSegments = segments
@@ -3180,8 +3131,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.llmProofreadStatus.set('Gemma 4モデルが見つかりません。セットアップタブからダウンロードしてください。');
         return;
       }
-    } else if (backend === 'lemonade') {
-      // lemonade バックエンド: サーバー起動確認
+    } else if (backend === 'llama_server') {
+      // 内蔵 llama-server バックエンド: サーバー起動確認
       await this.checkLlmStatus();
       if (this.llmServerStatus() !== 'running') {
         const currentStatus = this.llmServerStatus();
@@ -3208,14 +3159,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           return;
         }
       }
-      if (this.llmGpuMode() === 'gpu') {
-        await this.refreshLlmLoadedDevice();
-        if (this.llmLoadedDevice() === 'cpu') {
-          const msg = 'CPU 専用バックエンドが検出されました。AI校正を中止しました。設定タブから GPU バックエンドを再インストールしてください。';
-          this.llmProofreadStatus.set(msg);
-          this.showAmdGpuProcessingFailure('AI校正', msg);
-          return;
-        }
+      await this.refreshLlmLoadedDevice();
+      if (this.llmLoadedDevice() === 'cpu') {
+        const msg = 'CPU 専用バックエンドが検出されました。AI校正を中止しました。GPU対応のllama-serverを確認してください。';
+        this.llmProofreadStatus.set(msg);
+        this.showAmdGpuProcessingFailure('AI校正', msg);
+        return;
       }
     } else {
       // openai_compatible バックエンド (lmstudio / ollama)
@@ -3257,10 +3206,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           request: {
             segments: resolvedSegments,
             modelPath,
-            nGpuLayers: backend === 'lemonade' ? 0 : -1,
+            nGpuLayers: backend === 'llama_server' ? 0 : -1,
             backend,
-            lemonadeUrl: this.lemonadeUrl(),
-            lemonadeModel: this.lemonadeModel(),
             openaiBaseUrl: this.activeOpenAiBaseUrl(),
             openaiModel: this.activeOpenAiModelInput(),
             systemPrompt: this.getSelectedProofreadSystemPromptForRun(),
@@ -3330,7 +3277,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async startAutoLlmProofread(): Promise<void> {
     if (!this.result()) return;
     // 12BやローカルAIアプリの選択は全体校正などの明示操作にだけ適用する。
-    await this.runLlmProofread(true, undefined, 'lemonade');
+    await this.runLlmProofread(true, undefined, 'llama_server');
   }
 
   private openProgressSnackbar(): void {
@@ -3691,7 +3638,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     // 分割ボタンからの全体校正は、設定中の外部ローカルAIアプリに左右されず
     // 指定された内蔵 Gemma 4 階層をジョブ単位で使用する。
-    const backend: 'lemonade' = 'lemonade';
+    const backend: 'llama_server' = 'llama_server';
     const modelPath = '';
 
     // 校正対象が無ければエンジンを起動せず早期returnする（無駄起動・常駐の防止）。
@@ -3750,8 +3697,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             modelPath,
             nGpuLayers: 0,
             backend,
-            lemonadeUrl: this.lemonadeUrl(),
-            lemonadeModel: this.lemonadeModel(),
             openaiBaseUrl: this.activeOpenAiBaseUrl(),
             openaiModel: this.activeOpenAiModelInput(),
             nCtx: this.llmNCtx() > 0 ? this.llmNCtx() : 16384,
@@ -3768,7 +3713,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
         } else {
           this.overallProofreadError.set(msg);
-          if (backend === 'lemonade') {
+          if (backend === 'llama_server') {
             this.showAmdGpuProcessingFailure('全体校正', msg);
           }
         }
@@ -3783,7 +3728,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
       } else {
         this.overallProofreadError.set(msg);
-        if (backend === 'lemonade') {
+        if (backend === 'llama_server') {
           this.showAmdGpuProcessingFailure('全体校正', msg);
         }
       }
@@ -4505,7 +4450,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   /**
-   * Lemonade のバックエンド導入状況とサーバー状態を確認してUI表示を更新する。
+   * 内蔵 llama-server の導入状況とサーバー状態を確認してUI表示を更新する。
    * pre-warm（起動直後のエンジン自動起動・モデル即ロード）は廃止し、遅延起動に統一した。
    * エンジンは実際の校正実行時（runLlmProofread / runOverallProofread の startLlm）に初めて起動する。
    * これにより校正していない間は VRAM を保持しない（「自身が起動したモデルは終了後解放」の方針を、
@@ -4514,18 +4459,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async refreshLlmUiState(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     if (!this.llmEngineUiVisible()) return;
-    void this.checkLlmGpuBackendInstalled();
     await this.checkLlmStatus();
-  }
-
-  async checkLlmGpuBackendInstalled(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      const installed = await invoke<boolean>('check_llm_gpu_backend_installed');
-      this.llmGpuBackendInstalled.set(installed);
-    } catch {
-      this.llmGpuBackendInstalled.set(false);
-    }
   }
 
   private async initDefaultLlmModelPath(): Promise<void> {
@@ -4628,9 +4562,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   onLlmBackendModeChange(value: LlmBackendMode): void {
     this.llmBackendMode.set(value);
-    // llmGpuMode はリセットしない。llmEngineUiVisible() が llmBackendMode === 'local_gguf'
-    // を参照するため、local_gguf 以外では Lemonade UI は非表示になり誤起動も発生しない。
-    // リセットすると local_gguf に戻したとき amd_gpu 設定が失われ llama_cpp パスへ落ちる。
+    // 内蔵 llama-server の状態確認は local_gguf 選択時だけ有効にする。
     this.localOpenAiAvailableModels.set([]);
     this.localOpenAiStatusMessage.set('');
     this.localOpenAiServerName.set('local');
@@ -4832,24 +4764,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.appSettings = updateLlmSelectionSettingsValue(this.appSettings, {
       modelPath: this.llmModelPath(),
       backendMode: this.llmBackendMode(),
-      llmGpuMode: this.llmGpuMode(),
-      lemonadeUrl: this.lemonadeUrl(),
-      lemonadeModel: this.lemonadeModel(),
       lmstudioModel: this.lmstudioModelInput(),
       ollamaModel: this.ollamaModelInput(),
-      lemonadeBackendNotNeeded: this.lemonadeBackendNotNeeded(),
       llmHipDeviceIndex: this.selectedLlmHipDeviceIndex(),
       llmPromptType: this.llmPromptType(),
       llmParallel: this.selectedLlmParallel(),
       proofreadModelTier: this.proofreadModelTier()
     });
     this.persistAppSettings();
-  }
-
-  onLlmGpuModeChange(value: LlmGpuMode): void {
-    this.llmGpuMode.set(value);
-    this.persistLlmSettings();
-    void this.refreshLlmUiState();
   }
 
   onLlmPromptTypeChange(value: LlmPromptType): void {
@@ -4936,7 +4858,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         proofreadTier: proofreadTier ?? null
       });
       this.llmServerStatus.set('running');
-      await this.syncLlmUrl();
       void this.refreshLlmLoadedDevice();
     } catch (e) {
       this.llmLastError = this.normalizeErrorMessage(e);
@@ -4953,25 +4874,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.error.set(this.normalizeErrorMessage(e));
       }
     }
-  }
-
-  /** lemond が実際に listen しているポートを取得し、loopback URL であれば lemonadeUrl を同期する。 */
-  private async syncLlmUrl(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      const port = await invoke<number>('get_llm_server_port');
-      if (port > 0) {
-        const current = this.lemonadeUrl();
-        // ユーザーが loopback 以外のカスタム URL を設定している場合は上書きしない
-        if (/^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\]):/i.test(current)) {
-          const newUrl = `http://localhost:${port}`;
-          if (current !== newUrl) {
-            this.lemonadeUrl.set(newUrl);
-            this.persistLlmSettings();
-          }
-        }
-      }
-    } catch { }
   }
 
   async stopLlm(): Promise<void> {
@@ -5000,33 +4902,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch {
       this.llmLoadedDevice.set('error');
     }
-  }
-
-  async installLlmBackend(): Promise<void> {
-    const entry = this.llmInstallableGpuEntry();
-    if (!entry || !this.isTauriRuntime()) return;
-    this.llmBackendInstalling.set(true);
-    this.llmBackendInstallMessage.set(`${entry.installKey} をダウンロード中... しばらくお待ちください`);
-    const unlisten = await listen<{ message: string }>(
-      'llm-backend-install-progress',
-      (ev) => this.llmBackendInstallMessage.set(ev.payload.message),
-    );
-    try {
-      await invoke('install_llm_backend', { backend: entry.installKey });
-      this.llmBackendInstallMessage.set(`${entry.installKey} のインストールが完了しました`);
-      await this.checkLlmGpuBackendInstalled();
-    } catch (e) {
-      this.llmBackendInstallMessage.set(this.normalizeErrorMessage(e));
-    } finally {
-      this.llmBackendInstalling.set(false);
-      unlisten();
-    }
-  }
-
-  /** [開発環境のみ] 「不要」設定を解除してAMD GPUモードを再度有効化する。 */
-  resetLlmBackendNotNeeded(): void {
-    this.lemonadeBackendNotNeeded.set(false);
-    this.persistLlmSettings();
   }
 
   private getDefaultForCurrentPromptType(): string {
@@ -5426,7 +5301,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private applySetupStatusProjection(projection: ReturnType<typeof projectSetupStatus>): void {
-    this.llmGpuBackendInstalled.set(projection.llmBackendInstalled);
     this.diarizationModelExists.set(projection.diarizationExists);
     this.diarizationModelHasConfig.set(projection.diarizationHasConfig);
     this.diarizationModelExpectedPath.set(projection.diarizationExpectedPath);
@@ -5852,12 +5726,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               const displayTotal = total + this.llmProgressOffset;
               this.llmProofreadStatus.set(`校正中: ${displayCurrent} / ${displayTotal} 行`);
             }
-            return;
-          } else if (stage === 'llm_batch_debug') {
-            // console.log('[Lemonade][BATCH DEBUG]', payload);
-            return;
-          } else if (stage === 'llm_batch_raw_preview') {
-            // console.warn('[Lemonade][BATCH RAW PREVIEW]', payload);
             return;
           } else if (stage === 'llm_batch_debug') {
             // const backend = typeof (payload as any).backend === 'string' ? (payload as any).backend : 'unknown';

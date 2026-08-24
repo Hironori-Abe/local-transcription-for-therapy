@@ -17,7 +17,7 @@ SKIP_THRESHOLD = 1        # この文字数以下のセグメントはLLM処理�
 TRAILING_PUNCTUATION = set("、。！？…・")  # 末尾句読点判定用
 MIN_BATCH_CHARS = 60      # バッチの最小合計文字数（不足時は次バッチと結合）
 MAX_BATCH_SEGMENTS = 40   # バッチの最大セグメント数（llama_cpp用）
-MAX_BATCH_SEGMENTS_LEMONADE = 40  # 内蔵 llama-server 経路用（backend 名は後方互換で lemonade）
+MAX_BATCH_SEGMENTS_LLAMA_SERVER = 40  # Rust 管理下の内蔵 llama-server 経路用
 
 _SYSTEM_PROMPT_FILE = Path(__file__).parent / "prompt_templates" / "proofread" / "gemma4_system.txt"
 _SYSTEM_PROMPT_OVERRIDE_FILE: Optional[Path] = None
@@ -42,9 +42,9 @@ _FLEX_PUNCT = "、。！？!?…・"  # 挿入/置換/削除を許可する句�
 # llama-server を複数スロット (-np N) で起動し、サイドカーから複数バッチを同時送信して
 # GPU のアイドル時間（HTTP往復・JSON解析・次バッチ準備）を埋める。バッチ処理は順序非依存
 # （context は静的、結果は id で disjoint に集約）なので並列化しても結果は同一。
-# 内蔵 llama-server 経路（backend 名は後方互換で lemonade）のみ。
+# Rust 管理下の内蔵 llama-server 経路のみ。
 # OpenAI互換は別プロセスのローカルサーバー負荷を避け 1 固定。
-_LEMONADE_PARALLEL: int = 1
+_LLAMA_SERVER_PARALLEL: int = 1
 # Rust側の内蔵 llama-server 起動は `/health` が ready になるまで待つ。ここは既存サーバーを
 # 再利用する場合や旧ビルドでの保険であり、モデルロード中の短い間隔の問い合わせを避ける。
 _LLAMA_LOADING_RETRY_MAX_DELAY_SECONDS = 8.0
@@ -291,10 +291,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-prompt-path", default=None)
     parser.add_argument(
         "--backend", default="llama_cpp",
-        choices=["llama_cpp", "llama_cpp_rocm", "lemonade", "openai_compatible"],
+        choices=["llama_cpp", "llama_cpp_rocm", "llama_server", "openai_compatible"],
     )
-    parser.add_argument("--llm-url", default="http://localhost:13305")
-    parser.add_argument("--llm-model", default="gemma-4-E4B-it-qat")
+    parser.add_argument("--server-url", default="http://127.0.0.1:0")
+    parser.add_argument("--server-model", default="gemma-4-E4B-it-qat")
     parser.add_argument("--openai-base-url", default="")
     parser.add_argument("--openai-model", default="")
     parser.add_argument("--n-ctx", type=int, default=16384)
@@ -995,10 +995,10 @@ def _proofread_segments_openai_chat(
             jsonDetected=json_detected,
             allFallback=all_fallback,
         )
-        if backend_name == "lemonade":
+        if backend_name == "llama_server":
             emit_event(
                 "llm_batch_debug",
-                backend="lemonade",
+                backend="llama_server",
                 batchIndex=batch_idx + 1,
                 totalBatches=total_batches,
                 batchSize=len(batch),
@@ -1025,7 +1025,7 @@ def _proofread_segments_openai_chat(
                 jsonDetected=json_detected,
                 preview=raw_preview,
             )
-            if backend_name == "lemonade":
+            if backend_name == "llama_server":
                 emit_event(
                     "llm_batch_raw_preview",
                     batchIndex=batch_idx + 1,
@@ -1066,24 +1066,24 @@ def _proofread_segments_openai_chat(
     return [results_map[s["id"]] for s in segments if s["id"] in results_map]
 
 
-def proofread_segments_llm(
-    segments: List[Dict], llm_url: str, llm_model: str,
-    max_batch: int = MAX_BATCH_SEGMENTS_LEMONADE,
+def proofread_segments_llama_server(
+    segments: List[Dict], server_url: str, server_model: str,
+    max_batch: int = MAX_BATCH_SEGMENTS_LLAMA_SERVER,
 ) -> List[Dict]:
     # chat_template_kwargs で thinking モードを無効化する。
     # llama-server は thinking=1 がデフォルト。このパラメータを渡しても無害。
     return _proofread_segments_openai_chat(
         segments=segments,
-        base_url=llm_url,
-        model=llm_model,
+        base_url=server_url,
+        model=server_model,
         provider_label="AI校正エンジン",
-        backend_name="lemonade",
+        backend_name="llama_server",
         max_batch_segments=max(1, max_batch),
         require_model_list=True,
         fallback_to_first_model=True,
         extra_payload={"chat_template_kwargs": {"enable_thinking": False}},
         allow_grammar=True,
-        parallel=_LEMONADE_PARALLEL,
+        parallel=_LLAMA_SERVER_PARALLEL,
     )
 
 
@@ -1269,7 +1269,7 @@ def proofread_segments(
 
 
 def main() -> int:
-    global _SYSTEM_PROMPT_OVERRIDE_FILE, _PROMPT_TYPE, _GRAMMAR_MODE, _LEMONADE_PARALLEL
+    global _SYSTEM_PROMPT_OVERRIDE_FILE, _PROMPT_TYPE, _GRAMMAR_MODE, _LLAMA_SERVER_PARALLEL
     force_utf8_stdio()
     args = parse_args()
     if args.system_prompt_path:
@@ -1279,7 +1279,7 @@ def main() -> int:
     if args.grammar:
         _GRAMMAR_MODE = args.grammar
     if args.parallel:
-        _LEMONADE_PARALLEL = max(1, args.parallel)
+        _LLAMA_SERVER_PARALLEL = max(1, args.parallel)
 
     if args.backend in ("llama_cpp", "llama_cpp_rocm") and not args.model_path:
         print(json.dumps({
@@ -1302,8 +1302,10 @@ def main() -> int:
             print(json.dumps({"success": False, "error": {"message": "セグメントが空です。", "type": "validation_error"}}, ensure_ascii=False))
             return 1
 
-        if args.backend == "lemonade":
-            items = proofread_segments_llm(segments, args.llm_url, args.llm_model, max_batch=args.max_batch)
+        if args.backend == "llama_server":
+            items = proofread_segments_llama_server(
+                segments, args.server_url, args.server_model, max_batch=args.max_batch
+            )
         elif args.backend == "openai_compatible":
             items = proofread_segments_openai_compatible(segments, args.openai_base_url, args.openai_model, max_batch=args.max_batch)
         elif args.backend == "llama_cpp_rocm":

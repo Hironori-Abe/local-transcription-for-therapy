@@ -178,45 +178,6 @@
   }
 }
 
-.lemonade-hw-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-
-.lemonade-hw-tag {
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 0.78rem;
-  line-height: 1.6;
-  border: 1px solid;
-}
-
-.lemonade-hw-tag--gpu {
-  background: light-dark(#e3f2fd, #16283a);
-  color: light-dark(#1565c0, #7fb8f0);
-  border-color: light-dark(#90caf9, #2b4f74);
-}
-
-.lemonade-hw-tag--npu {
-  background: light-dark(#f3e5f5, #2b1c33);
-  color: light-dark(#6a1b9a, #c78ce0);
-  border-color: light-dark(#ce93d8, #593f66);
-}
-
-.lemonade-hw-tag--cpu {
-  background: light-dark(#f5f5f5, #171d24);
-  color: light-dark(#616161, #a8afb6);
-  border-color: light-dark(#bdbdbd, #4e545a);
-}
-
-.lemonade-hw-tag--installable {
-  background: transparent !important;
-  border-style: dashed !important;
-  opacity: 0.65;
-}
-
 .compute-env-row {
   flex-wrap: wrap;
   gap: 8px;

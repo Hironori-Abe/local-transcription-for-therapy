@@ -34,17 +34,17 @@ Apache License under which this product is released.
     pyannote.audio (MIT) and SpeechBrain (Apache-2.0).
 
 * LLM proofreading runtime
-    llama.cpp (MIT) and Lemonade SDK (Apache-2.0).
+    llama.cpp (MIT).
 
-* LLM proofreading model
-    Gemma 4 E4B by Google DeepMind, licensed under Apache-2.0
+* LLM proofreading models
+    Gemma 4 E4B and Gemma 4 12B by Google DeepMind, licensed under Apache-2.0
     (Gemma 4 is not covered by the legacy Gemma Terms of Use or
-    Prohibited Use Policy). GGUF quantization distributed by Unsloth
-    (unsloth/gemma-4-E4B-it-qat-GGUF, QAT) under Apache-2.0.
+    Prohibited Use Policy). GGUF quantization and MTP draft models are
+    distributed by Unsloth under Apache-2.0.
 
 * Audio decoding
     FFmpeg is used as a local command-line executable for audio decoding
-    and format conversion. Windows builds bundle a BtbN FFmpeg "lgpl"
+    and format conversion. Windows and Linux builds bundle a BtbN FFmpeg "lgpl"
     build and treat it as LGPLv3 because the build includes
     --enable-version3. The bundled build is checked to exclude
     --enable-gpl, --enable-nonfree, libx264, libx265, libxvid, and
@@ -55,6 +55,11 @@ Apache License under which this product is released.
     FFMPEG_BUILD_INFO.txt. LoTT distribution Python environments do not
     include PyAV ("av") or imageio-ffmpeg; faster-whisper is installed
     without dependency-resolving PyAV into the distribution environment.
+
+* Linux media playback
+    Linux AppImage builds bundle GStreamer core and base/good audio
+    plugins under the LGPL (with LGPL-compatible MIT/BSD components).
+    GPL plugin sets and gst-libav are not bundled.
 
 * GPU runtime (CUDA builds)
     NVIDIA CUDA redistributable libraries (CUDA Runtime "cudart" and

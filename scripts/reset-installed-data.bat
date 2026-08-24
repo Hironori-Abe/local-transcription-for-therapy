@@ -54,8 +54,9 @@ echo   [4] Gemma GGUF model  (LLM proofreading)
 echo       %LOCALAPPDATA%\net.gakkousya.lott\models\llm\  ^(v0.3+^)
 echo       %INSTDIR%\python_sidecar\models\llm\  ^(legacy resource_dir^)
 echo.
-echo   [5] LLM backend cache  (legacy lemonade dir; llama-server binaries etc.)
-echo       %LOCALAPPDATA%\net.gakkousya.lott\lemonade\
+echo   [5] LLM engine cache  (llama-server binaries and config)
+echo       %LOCALAPPDATA%\net.gakkousya.lott\llm-engine\  ^(current^)
+echo       %LOCALAPPDATA%\net.gakkousya.lott\lemonade\  ^(legacy fallback^)
 echo.
 echo   [6] App settings  (localStorage / WebView2 data)
 echo       %APPDATA%\net.gakkousya.lott\
@@ -74,7 +75,7 @@ if "%CHOICE%"=="1" ( call :item_python & goto done )
 if "%CHOICE%"=="2" ( call :item_whisper & goto done )
 if "%CHOICE%"=="3" ( call :item_diarization & goto done )
 if "%CHOICE%"=="4" ( call :item_gemma & goto done )
-if "%CHOICE%"=="5" ( call :item_lemonade & goto done )
+if "%CHOICE%"=="5" ( call :item_llm_engine & goto done )
 if "%CHOICE%"=="6" ( call :item_settings & goto done )
 echo Invalid choice. Enter 1-6, A, or Q.
 goto ask_choice
@@ -87,7 +88,7 @@ call :item_python
 call :item_whisper
 call :item_diarization
 call :item_gemma
-call :item_lemonade
+call :item_llm_engine
 call :item_settings
 goto done
 
@@ -230,25 +231,38 @@ echo [4] Done: Gemma GGUF deleted.
 exit /b 0
 
 :: ===========================================================
-::  Subroutine: [5] LLM backend cache
+::  Subroutine: [5] LLM engine cache
 :: ===========================================================
-:item_lemonade
+:item_llm_engine
 echo.
-set "LEMON=%LOCALAPPDATA%\net.gakkousya.lott\lemonade"
-if not exist "%LEMON%" (
-    echo [5] LLM backend cache dir not found ^(skip^): %LEMON%
+set "LLM_ENGINE=%LOCALAPPDATA%\net.gakkousya.lott\llm-engine"
+set "LLM_LEGACY=%LOCALAPPDATA%\net.gakkousya.lott\lemonade"
+set "FOUND_LLM_CACHE=0"
+if exist "%LLM_ENGINE%" set "FOUND_LLM_CACHE=1"
+if exist "%LLM_LEGACY%" set "FOUND_LLM_CACHE=1"
+if "%FOUND_LLM_CACHE%"=="0" (
+    echo [5] LLM engine cache dirs not found ^(skip^).
     exit /b 0
 )
-echo [5] Delete LLM backend cache ^(legacy lemonade dir; llama-server binaries, config.json^):
-echo       %LEMON%
+echo [5] Delete LLM engine cache ^(current and legacy directories^):
+if exist "%LLM_ENGINE%" echo       %LLM_ENGINE%
+if exist "%LLM_LEGACY%" echo       %LLM_LEGACY%
 set /p CONFIRM5="Confirm? [Y/N]: "
 if /i not "%CONFIRM5%"=="Y" ( echo Skipped. & exit /b 0 )
 echo Deleting...
-rd /s /q "%LEMON%"
-if %ERRORLEVEL% equ 0 (
-    echo [5] Done: LLM backend cache deleted.
+set "LLM_DELETE_FAILED=0"
+if exist "%LLM_ENGINE%" (
+    rd /s /q "%LLM_ENGINE%"
+    if exist "%LLM_ENGINE%" set "LLM_DELETE_FAILED=1"
+)
+if exist "%LLM_LEGACY%" (
+    rd /s /q "%LLM_LEGACY%"
+    if exist "%LLM_LEGACY%" set "LLM_DELETE_FAILED=1"
+)
+if "%LLM_DELETE_FAILED%"=="0" (
+    echo [5] Done: LLM engine caches deleted.
 ) else (
-    echo [5] ERROR: delete failed ^(files may still be in use^).
+    echo [5] ERROR: one or more cache directories could not be deleted ^(files may be in use^).
 )
 exit /b 0
 

@@ -94,17 +94,13 @@ test('general app settings preserve CPU-build coercion and proofread defaults', 
   });
 });
 
-test('persisted LLM settings apply migrations and current backend policy', () => {
+test('persisted LLM settings apply current backend policy', () => {
   const settings: AppSettingsV1 = {
     llm: {
       modelPath: '/models/custom.gguf',
       backendMode: 'lmstudio',
-      llmGpuMode: 'cpu',
-      lemonadeUrl: 'http://localhost:13305',
-      lemonadeModel: 'custom-model',
       lmstudioModel: 'studio-model',
       ollamaModel: 'ollama-model',
-      lemonadeBackendNotNeeded: true,
       llmHipDeviceIndex: -1,
       llmPromptType: 'original',
       llmParallel: 30,
@@ -118,12 +114,8 @@ test('persisted LLM settings apply migrations and current backend policy', () =>
   }), {
     modelPath: '/models/custom.gguf',
     backendMode: 'local_gguf',
-    llmGpuMode: 'cpu',
-    lemonadeUrl: 'http://localhost:13306',
-    lemonadeModel: 'custom-model',
     lmstudioModel: 'studio-model',
     ollamaModel: 'ollama-model',
-    lemonadeBackendNotNeeded: true,
     llmHipDeviceIndex: -1,
     llmPromptType: 'original',
     llmParallel: 24,
@@ -137,8 +129,6 @@ test('persisted LLM settings discard stale models and unsupported values', () =>
   const settings = {
     llm: {
       backendMode: 'invalid',
-      llmGpuMode: 'cuda_parallel',
-      lemonadeModel: 'Gemma-4-E4B-it-GGUF',
       llmHipDeviceIndex: -2,
       llmPromptType: 'invalid',
       llmParallel: -1,
@@ -151,14 +141,12 @@ test('persisted LLM settings discard stale models and unsupported values', () =>
     aiProofreadBuild: false
   }), {
     backendMode: undefined,
-    llmGpuMode: 'gpu',
     proofreadModelTier: 'e4b'
   });
   assert.deepEqual(resolveLlmAppSettingsValue({}, {
     localLlmAppsEnabled: true,
     aiProofreadBuild: true
   }), {
-    llmGpuMode: 'gpu',
     proofreadModelTier: 'e4b'
   });
 });
@@ -217,12 +205,8 @@ test('LLM selection updates preserve model-specific saved dictionaries', () => {
   const updated = updateLlmSelectionSettingsValue(settings, {
     modelPath: '/models/model.gguf',
     backendMode: 'local_gguf',
-    llmGpuMode: 'gpu',
-    lemonadeUrl: 'http://localhost:13306',
-    lemonadeModel: 'Gemma-4-E4B-it-QAT',
     lmstudioModel: 'studio',
     ollamaModel: 'ollama',
-    lemonadeBackendNotNeeded: false,
     llmHipDeviceIndex: 1,
     llmPromptType: 'gemma4',
     llmParallel: 2,

@@ -192,13 +192,6 @@ export interface SegmentRetranscribeAvailabilityValueInput {
   selectedAudioPath: string;
 }
 
-export interface LlmInstallableBackendEntryValue {
-  label: string;
-  state: 'installable';
-  category: 'gpu' | 'cpu';
-  installKey: string;
-}
-
 export interface LlmDeviceMemoryValueInput {
   index: number;
   totalVramMb: number;
@@ -806,51 +799,6 @@ export function filterOverallProofreadVisibleItemsValue<T extends { id: number; 
 
 export function isJapaneseLanguageValue(language: string | null | undefined): boolean {
   return (language ?? 'ja').toLowerCase() === 'ja';
-}
-
-export function resolveLlmInstallableGpuEntryValue(
-  engineUiVisible: boolean,
-  backendNotNeeded: boolean,
-  backendInstalled: boolean,
-  gpuMode: 'gpu' | 'cpu',
-  cudaAvailable: boolean,
-  rocmAvailable: boolean
-): LlmInstallableBackendEntryValue | null {
-  if (!engineUiVisible || backendNotNeeded || backendInstalled) {
-    return null;
-  }
-  if (gpuMode === 'cpu') {
-    return { installKey: 'llamacpp:cpu', label: 'LlamaCPP - CPU', state: 'installable', category: 'cpu' };
-  }
-  // NVIDIA/CUDA builds ship llama-server with the application. There is no
-  // supported in-app CUDA download key; a missing bundled binary is a package
-  // installation error and must not be replaced with Vulkan silently.
-  if (cudaAvailable) {
-    return null;
-  }
-  if (rocmAvailable) {
-    return { installKey: 'llamacpp:rocm', label: 'LlamaCPP - ROCm (AMD GPU)', state: 'installable', category: 'gpu' };
-  }
-  return null;
-}
-
-export function resolveLlmTargetBackendKeyValue(
-  gpuMode: 'gpu' | 'cpu',
-  cudaAvailable: boolean,
-  rocmAvailable: boolean
-): string {
-  if (gpuMode === 'cpu') {
-    return 'llamacpp:cpu';
-  }
-  if (cudaAvailable) {
-    // Internal selection marker only; this is never passed to the install
-    // command because CUDA is provided by the bundled binary.
-    return 'llamacpp:cuda';
-  }
-  if (rocmAvailable) {
-    return 'llamacpp:rocm';
-  }
-  return '';
 }
 
 export function llmBackendModeHintValue(
@@ -1741,12 +1689,6 @@ export function resolveGeneralAppSettingsValue(
   return resolved;
 }
 
-const staleLemonadeModelNames = new Set([
-  'Gemma-4-E4B-it-GGUF',
-  'gemma-4-12B-qat-text',
-  'gemma-4-12B-it-qat-GGUF-UD-Q4_K_XL'
-]);
-
 export function resolvePersistedLlmBackendModeValue(
   saved: unknown,
   localLlmAppsEnabled: boolean
@@ -1765,7 +1707,6 @@ export function resolveLlmAppSettingsValue(
 ): ResolvedLlmAppSettingsValue {
   const llm = settings.llm;
   const resolved: ResolvedLlmAppSettingsValue = {
-    llmGpuMode: llm?.llmGpuMode === 'cpu' ? 'cpu' : 'gpu',
     proofreadModelTier: llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
       ? '12b'
       : 'e4b'
@@ -1780,26 +1721,11 @@ export function resolveLlmAppSettingsValue(
     llm.backendMode,
     options.localLlmAppsEnabled
   );
-  if (typeof llm.lemonadeUrl === 'string' && llm.lemonadeUrl) {
-    resolved.lemonadeUrl = llm.lemonadeUrl === 'http://localhost:13305'
-      ? 'http://localhost:13306'
-      : llm.lemonadeUrl;
-  }
-  if (
-    typeof llm.lemonadeModel === 'string'
-    && llm.lemonadeModel
-    && !staleLemonadeModelNames.has(llm.lemonadeModel)
-  ) {
-    resolved.lemonadeModel = llm.lemonadeModel;
-  }
   if (typeof llm.lmstudioModel === 'string' && llm.lmstudioModel) {
     resolved.lmstudioModel = llm.lmstudioModel;
   }
   if (typeof llm.ollamaModel === 'string' && llm.ollamaModel) {
     resolved.ollamaModel = llm.ollamaModel;
-  }
-  if (typeof llm.lemonadeBackendNotNeeded === 'boolean') {
-    resolved.lemonadeBackendNotNeeded = llm.lemonadeBackendNotNeeded;
   }
   if (Number.isInteger(llm.llmHipDeviceIndex) && Number(llm.llmHipDeviceIndex) >= -1) {
     resolved.llmHipDeviceIndex = Number(llm.llmHipDeviceIndex);
@@ -1895,12 +1821,8 @@ export function updateLlmSelectionSettingsValue(
       ...(settings.llm ?? {}),
       modelPath: value.modelPath,
       backendMode: value.backendMode,
-      llmGpuMode: value.llmGpuMode,
-      lemonadeUrl: value.lemonadeUrl,
-      lemonadeModel: value.lemonadeModel,
       lmstudioModel: value.lmstudioModel,
       ollamaModel: value.ollamaModel,
-      lemonadeBackendNotNeeded: value.lemonadeBackendNotNeeded,
       llmHipDeviceIndex: value.llmHipDeviceIndex,
       llmPromptType: value.llmPromptType,
       llmParallel: value.llmParallel,

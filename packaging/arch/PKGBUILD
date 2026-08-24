@@ -1,6 +1,6 @@
 pkgname=local-transcription-for-therapy-cuda
 pkgver=0.9.8
-pkgrel=11
+pkgrel=12
 pkgdesc='Local transcription and proofreading for therapy sessions (NVIDIA CUDA)'
 arch=('x86_64')
 url='https://github.com/Hironori-Abe/local-transcription-for-therapy'

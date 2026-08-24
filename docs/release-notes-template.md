@@ -13,7 +13,11 @@
 | `LoTT-vX.Y.Z-windows-x64-cuda-setup.exe` | NVIDIA GPU (CUDA 12.x) | 主配布・安定版 |
 | `LoTT-vX.Y.Z-windows-x64-cpu-setup.exe` | GPU 不要 | 動作確認・試用向け（常用非推奨） |
 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | 校正中心の軽量版（文字起こし・話者分離なし） |
-| `SHA256SUMS.txt` | — | 各ファイルの SHA-256 チェックサム |
+| `LoTT-vX.Y.Z-linux-x64-cuda.AppImage` | Linux x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
+| `LoTT-vX.Y.Z-linux-x64-cuda.deb` | Ubuntu系 x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
+| `LoTT-vX.Y.Z-linux-x64-cuda-cachyos.pkg.tar.zst` | CachyOS / Arch x86-64・NVIDIA GPU | 汎用x86-64版 |
+| `LoTT-vX.Y.Z-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst` | CachyOS・x86-64-v3対応CPU・NVIDIA GPU | 実験版。添付する場合だけ掲載 |
+| `SHA256SUMS.txt` | — | 各配布ディレクトリ内のファイルに対応するSHA-256チェックサム |
 
 <!-- AMD GPU版はexperimentalかつ自己ビルド向け。一般向けReleaseにはインストーラーを添付しない。 -->
 
@@ -39,13 +43,26 @@ sha256sum -c SHA256SUMS.txt
 
 ## 動作要件
 
+### Windows NVIDIA GPU版
+
 - Windows 10 / 11 (x64)
-- NVIDIA GPU + CUDA 12.x + cuDNN 9.x（CUDA 版。Editor 版は GPU 不要）
+- NVIDIA GPU + CUDA 12.x + cuDNN 9.x
 - ディスク空き容量: 約 XX GB（モデルダウンロード含む）
+
+### Linux NVIDIA GPU版
+
+- x86-64 Linux
+- 使用中のカーネルに対応するNVIDIAドライバーと`nvidia-utils`
+- CUDA Toolkitは実行時不要
+- AppImageでは`xdg-desktop-portal`、対応するportal backend、`zenity`が必要
+
+### CPU / Editor版
+
+- 対応OS・CPU・RAM・ディスク要件を記入
 
 ## インストールと初回セットアップ
 
-1. インストーラーを実行する
+1. 対応するインストーラーまたはパッケージを導入する
 2. アプリを起動し、セットアップタブから Python パッケージ・モデルをインストールする
    - **初回セットアップ時のみインターネット接続が必要です**（依存パッケージ・モデルの取得）
 3. セットアップ完了後はオフラインで動作します

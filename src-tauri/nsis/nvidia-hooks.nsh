@@ -1,12 +1,11 @@
 ; NVIDIA (CUDA) 版インストーラーフック
-; NVIDIA 版は AI 校正に同梱 llama-server (CUDA) を直接起動するため、Lemonade を同梱しない。
-; そのため lemonade-hooks.nsh と異なり、Lemonade の winget インストール促しは行わない。
+; NVIDIA版はAI校正用の同梱CUDA llama-serverを直接起動する。
+; 外部LLMランタイムのインストール促しやプロセス管理は行わない。
 ; アンインストール時は、Tauri 標準の「アプリデータを削除する」の選択を尊重する。
 ; Called by Tauri NSIS template via NSIS_HOOK_POSTINSTALL / NSIS_HOOK_POSTUNINSTALL
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; NVIDIA 版は追加 LLM ランタイム (Lemonade) を必要としない。
-  ; AI 校正は同梱 llama-server (CUDA) を直接起動するため、インストール時の追加処理は行わない。
+  ; AI校正は同梱llama-server (CUDA)を直接起動するため、追加LLMランタイムの導入処理は行わない。
   ; Python パッケージ・各種モデルは初回起動後にセットアップ UI から導入する。
 
   ; ローカルAIアプリ連携はインストーラーでは選択させない。

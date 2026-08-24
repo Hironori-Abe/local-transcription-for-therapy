@@ -210,9 +210,8 @@ if exist "%PYTHON312_DEST%\get-pip.py" (
 )
 echo.
 
-:: --- Lemonade is NOT bundled in the NVIDIA build ---
-:: NVIDIA 版は AI 校正に同梱 llama-server (CUDA) を直接起動するため Lemonade を同梱しない。
-:: AMD 版も後から取得した ROCm/Vulkan llama-server を直接起動するため Lemonade は使わない。
+:: --- LLM runtime: direct llama-server launch ---
+:: NVIDIA版は同梱CUDA llama-server、AMD版は取得済みROCm/Vulkan llama-serverを直接起動する。
 
 :: --- Download LGPL FFmpeg CLI ---
 echo [INFO] Ensuring LGPL FFmpeg CLI...

@@ -482,7 +482,7 @@ if errorlevel 1 (
   echo [WARN] ctranslate2 CUDA summary failed.
   set "HAS_WARN=1"
 )
-echo [INFO] LLM backend: llama.cpp llama-server direct launch ^(no Lemonade/lemond^).
+echo [INFO] LLM backend: llama.cpp llama-server direct launch.
 where xrt-smi >nul 2>&1
 if not errorlevel 1 (
   echo [INFO] AMD NPU xrt-smi status:

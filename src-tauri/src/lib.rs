@@ -108,7 +108,7 @@ fn debounce_dev_window_focus(app: AppHandle) -> bool {
     schedule_dev_window_focus(&app, &window)
 }
 
-/// アプリ固有の lemond が listen しているかを確認する。port=0 は常に false。
+/// アプリが管理する llama-server が listen しているかを確認する。port=0 は常に false。
 fn llm_server_port_open(port: u16) -> bool {
     if port == 0 {
         return false;
@@ -156,18 +156,19 @@ fn llm_server_ready(port: u16) -> bool {
     }
 }
 
-/// アプリ固有 lemond に割り当てるポートを決定する。
-/// 優先順: 既存 config.json のポート（空きなら再利用）→ OS が割り当てた空きポート。
-fn resolve_llm_server_port(cache_dir: &Path) -> u16 {
-    // 既存の config.json からポートを読み取る
-    let config_path = cache_dir.join("config.json");
-    if let Ok(s) = std::fs::read_to_string(&config_path) {
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            if let Some(p) = v["port"].as_u64().filter(|&p| p > 1024 && p < 65535) {
-                let port = p as u16;
-                // そのポートが空いていれば再利用（再起動時の安定性）
-                if !llm_server_port_open(port) {
-                    return port;
+/// アプリ固有 llama-server に割り当てるポートを決定する。
+/// 優先順: 新旧キャッシュの config.json（空きなら再利用）→ OS が割り当てた空きポート。
+fn resolve_llm_server_port(cache_dirs: &[PathBuf]) -> u16 {
+    for cache_dir in cache_dirs {
+        let config_path = cache_dir.join("config.json");
+        if let Ok(s) = std::fs::read_to_string(&config_path) {
+            if let Ok(v) = serde_json::from_str::<Value>(&s) {
+                if let Some(p) = v["port"].as_u64().filter(|&p| p > 1024 && p < 65535) {
+                    let port = p as u16;
+                    // そのポートが空いていれば再利用（再起動時の安定性）
+                    if !llm_server_port_open(port) {
+                        return port;
+                    }
                 }
             }
         }
@@ -655,7 +656,7 @@ fn ollama_model_already_running(target: &LocalOpenAiHttpTarget, model_id: &str) 
 /// - LM Studio: /api/v1/models/load で明示ロードし、返却された instance_id を記録する。
 ///              既にロード済みなら他アプリが使っている可能性があるためスキップ。
 /// - Ollama   : 未ロードの場合のみアンロード対象として記録（推論リクエストで自動ロード）。
-/// - Lemonade : 常にアンロード対象として記録。
+/// - 既知のサーバー以外 : アンロード対象にしない。
 /// 返り値が Some → 自分がロードした（完了・中止・終了時にアンロードする）。
 /// 返り値が None → 既にロード済み or 不明なサーバー（アンロードしない）。
 fn prepare_openai_unload_info(
@@ -713,14 +714,6 @@ fn prepare_openai_unload_info(
                 model_id: model_id.to_string(),
             })
         }
-        "lemonade" => Some(OpenAiUnloadTarget {
-            host: target.host,
-            authority: target.authority,
-            port: target.port,
-            path_prefix: target.path_prefix,
-            server_type,
-            model_id: model_id.to_string(),
-        }),
         _ => None, // 不明なサーバーはアンロードしない
     }
 }
@@ -889,7 +882,7 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
 
     // dev ビルドではリソースが target/debug 配下にコピーされず resource_dir() からも
     // 解決できないため、ソースツリーの src-tauri/resources/llama-server を直接参照する。
-    // これにより NVIDIA dev でも CUDA 版 llama-server が見つかり、Lemonade(vulkan) 経路を
+    // これにより NVIDIA dev でも CUDA 版 llama-server が見つかり、Vulkan 経路を
     // 介さず CUDA で AI 校正が動く。cfg(debug_assertions) ガードのためリリース挙動・配布物・
     // ライセンス前提は不変で、AMD リリースにも影響しない。
     #[cfg(debug_assertions)]
@@ -1060,57 +1053,58 @@ fn configure_llama_server_runtime_env(cmd: &mut Command, bin_path: &str) {
     }
 }
 
-/// セットアップから取得した Vulkan ビルドの
-/// llama-server バイナリを探す（`~/.cache/{app-id}/lemonade/bin/llamacpp/vulkan/llama-server`）。
+/// セットアップから取得した Vulkan ビルドの llama-server バイナリを探す。
+/// 新規配置先は `~/.cache/{app-id}/llm-engine/`、旧版の
+/// `~/.cache/{app-id}/lemonade/` も既存ユーザー向けに読み取り対象とする。
 /// AMD で 12B + MTP を直起動するために使う。rocm-stable ビルドは古くドラフトの
 /// `gemma4-assistant` を認識できないため、MTP には新しい Vulkan ビルドを用いる。
 fn find_llm_vulkan_llama_server(app: &AppHandle) -> Option<String> {
-    let cache = get_llm_engine_cache_dir(app)?;
     let exe = std::env::consts::EXE_SUFFIX;
-    let path = cache
-        .join("bin")
-        .join("llamacpp")
-        .join("vulkan")
-        .join(format!("llama-server{exe}"));
-    if llama_server_binary_is_usable(&path) {
-        Some(path.to_string_lossy().into_owned())
-    } else {
-        None
+    for cache in get_llm_engine_cache_dirs(app) {
+        let path = cache
+            .join("bin")
+            .join("llamacpp")
+            .join("vulkan")
+            .join(format!("llama-server{exe}"));
+        if llama_server_binary_is_usable(&path) {
+            return Some(path.to_string_lossy().into_owned());
+        }
     }
+    None
 }
 
 /// セットアップから取得した ROCm ビルドの llama-server を返す（Vulkan 版の対）。
 /// AMD の 12B + MTP 高速経路で使う。
 fn find_llm_rocm_llama_server(app: &AppHandle) -> Option<String> {
-    let cache = get_llm_engine_cache_dir(app)?;
     let exe = std::env::consts::EXE_SUFFIX;
-    let path = cache
-        .join("bin")
-        .join("llamacpp")
-        .join("rocm-stable")
-        .join(format!("llama-server{exe}"));
-    if llama_server_binary_is_usable(&path) {
-        Some(path.to_string_lossy().into_owned())
-    } else {
-        None
+    for cache in get_llm_engine_cache_dirs(app) {
+        let path = cache
+            .join("bin")
+            .join("llamacpp")
+            .join("rocm-stable")
+            .join(format!("llama-server{exe}"));
+        if llama_server_binary_is_usable(&path) {
+            return Some(path.to_string_lossy().into_owned());
+        }
     }
+    None
 }
 
 /// セットアップから取得した CPU 版 llama-server を返す。
 /// Editor 版の短時間音声入力はこの CPU バックエンドだけを使う。
 fn find_llm_cpu_llama_server(app: &AppHandle) -> Option<String> {
-    let cache = get_llm_engine_cache_dir(app)?;
     let exe = std::env::consts::EXE_SUFFIX;
-    let path = cache
-        .join("bin")
-        .join("llamacpp")
-        .join("cpu")
-        .join(format!("llama-server{exe}"));
-    if llama_server_binary_is_usable(&path) {
-        Some(path.to_string_lossy().into_owned())
-    } else {
-        None
+    for cache in get_llm_engine_cache_dirs(app) {
+        let path = cache
+            .join("bin")
+            .join("llamacpp")
+            .join("cpu")
+            .join(format!("llama-server{exe}"));
+        if llama_server_binary_is_usable(&path) {
+            return Some(path.to_string_lossy().into_owned());
+        }
     }
+    None
 }
 
 /// ROCm ビルドがドラフト arch `gemma4-assistant`（MTP）を解釈できるかを、同梱
@@ -1355,12 +1349,12 @@ fn try_start_llama_server_cuda(
     Ok((child, oom_flag))
 }
 
-/// AMD GPU 向けに、lemond がダウンロードした Vulkan ビルドの llama-server を直接起動する。
-/// NVIDIA 直起動（try_start_llama_server_cuda）の AMD 版。lemond のモデル管理を介さず、
+/// AMD GPU 向けに、セットアップで取得した Vulkan ビルドの llama-server を直接起動する。
+/// NVIDIA 直起動（try_start_llama_server_cuda）の AMD 版。外部モデル管理を介さず、
 /// ローカル GGUF（本体 + MTP ドラフト）を直接ロードして 12B + MTP（投機的デコード）を有効にする。
 ///
 /// rocm-stable の llama-server（古いビルド）はドラフトのアーキテクチャ `gemma4-assistant` を
-/// 認識できないため、MTP には Lemonade が別途取得する新しい Vulkan ビルド（b9585+）を使う。
+/// 認識できないため、MTP には新しい Vulkan ビルド（b9585+）を使う。
 /// VRAM が限られる AMD ノート GPU（8GB 等）でも収まるよう `-ngl` は指定せず auto-fit に任せる
 /// （明示すると auto-fit が無効化され、本体 + ドラフトで OOM する）。
 fn try_start_llama_server_vulkan(
@@ -1495,12 +1489,12 @@ fn preferred_vulkan_device_index(_bin_path: &str) -> i32 {
     0
 }
 
-/// AMD GPU 向けに、lemond がダウンロードした ROCm ビルドの llama-server を直接起動する。
+/// AMD GPU 向けに、セットアップで取得した ROCm ビルドの llama-server を直接起動する。
 /// Vulkan 版（try_start_llama_server_vulkan）の ROCm 版。新しい rocm ビルド（b9585+）は
 /// ドラフト arch `gemma4-assistant` を解釈でき、MTP（投機的デコード）を有効化できる。
 ///
 /// rocBLAS は `LD_LIBRARY_PATH` に therock を載せず、システム ROCm（/opt/rocm。対象 GPU arch の
-/// Tensile を含む）から解決する。lemonade の therock は iGPU 専用 arch のことがあり、dGPU では
+/// Tensile を含む）から解決する。ダウンロード済みビルドの therock は iGPU 専用 arch のことがあり、dGPU では
 /// 推論時に rocBLAS が落ちるため。`-ngl` は指定せず `--fit on`（auto-fit）に任せ、warmup は
 /// 無効化しない（起動時 forward パスで arch 不整合を表面化させ、呼び出し側が Vulkan へ退避できる）。
 fn try_start_llama_server_rocm(
@@ -1612,8 +1606,8 @@ fn try_start_llama_server_rocm(
 }
 
 /// 子プロセスを Job Object に紐付け、親プロセス終了時に自動 kill させる（Windows のみ）。
-/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、同梱エンジン
-/// （CUDA llama-server.exe / AMD lemond と配下のバックエンド）を確実に終了させ VRAM を解放する。
+/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、管理下の llama-server
+/// （CUDA/ROCm/Vulkan）を確実に終了させ VRAM を解放する。
 #[cfg(target_os = "windows")]
 fn assign_to_kill_on_close_job(child: &Child) {
     use std::os::windows::io::AsRawHandle;
@@ -1648,7 +1642,7 @@ fn assign_to_kill_on_close_job(_child: &Child) {}
 
 /// アプリが起動した CUDA llama-server (mode==1) を停止して VRAM を解放する。
 /// 「自分でVRAMにロードしたものは完了時にアンロードする」方針に合わせ、AI校正完了後に呼ぶ。
-/// 停止したら true。mode!=1（lemond 等）なら何もせず false を返す。
+/// 停止したら true。mode!=1（管理外プロセス等）なら何もせず false を返す。
 fn try_stop_cuda_llama_server(app: &AppHandle) -> bool {
     let state = app.state::<LlmServer>();
     if state.mode.load(Ordering::Relaxed) != 1 {
@@ -1684,11 +1678,37 @@ fn stop_retained_voice_input_server(app: &AppHandle) -> bool {
     true
 }
 
-/// LLM エンジン用のアプリ固有キャッシュディレクトリを返す（dir 名は後方互換で `lemonade`）。
-/// lemond に位置引数として渡すことで、バックエンドバイナリや config.json を
-/// アプリ固有の場所（~/.cache/{app-id}/lemonade/）に格納する。
+const LLM_ENGINE_CACHE_DIR_NAME: &str = "llm-engine";
+const LEGACY_LLM_ENGINE_CACHE_DIR_NAME: &str = "lemonade";
+
+/// LLM エンジン用のアプリ固有キャッシュディレクトリを返す。
+/// 新規インストール・ダウンロードは `llm-engine` に保存する。
 fn get_llm_engine_cache_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_cache_dir().ok().map(|d| d.join("lemonade"))
+    app.path()
+        .app_cache_dir()
+        .ok()
+        .map(|d| d.join(LLM_ENGINE_CACHE_DIR_NAME))
+}
+
+/// llama-server バックエンドの検索先を新しい保存先から旧保存先の順に返す。
+/// 旧ディレクトリは既存ユーザーのダウンロード済みバイナリを引き続き利用するための
+/// 読み取り互換であり、旧ディレクトリのルートにある古い管理ツールは実行しない。
+fn llm_engine_cache_dirs_from_base(base: &Path) -> Vec<PathBuf> {
+    let primary = base.join(LLM_ENGINE_CACHE_DIR_NAME);
+    let legacy = base.join(LEGACY_LLM_ENGINE_CACHE_DIR_NAME);
+    if primary == legacy {
+        vec![primary]
+    } else {
+        vec![primary, legacy]
+    }
+}
+
+fn get_llm_engine_cache_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    app.path()
+        .app_cache_dir()
+        .ok()
+        .map(|base| llm_engine_cache_dirs_from_base(&base))
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1709,7 +1729,7 @@ fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
 }
 
 /// アプリ固有キャッシュの config.json に解決済みポートを書き込む（次回起動での再利用用）。
-/// lemond 撤去後は直起動 llama-server のポート永続化のみに使う（他のキーは参照されない）。
+/// 直起動 llama-server のポート永続化のみに使う（他のキーは参照されない）。
 fn ensure_llm_server_port_config(cache_dir: &Path, port: u16) {
     let config_path = cache_dir.join("config.json");
     let mut config: Value = if config_path.exists() {
@@ -1943,16 +1963,16 @@ fn resolve_effective_proofread_tier_for(app: &AppHandle, want: GemmaTier) -> Gem
 
 /// AMD GPU（NVIDIA 直起動が使えない環境）で 12B + MTP を Vulkan llama-server 直起動で
 /// 動かせるか判定し、起動に必要なパラメータ (vulkan_bin, 本体GGUF, MTPドラフト, ctx) を返す。
-/// 条件を満たさなければ None（E4B や 12B 未導入は従来どおり lemond 経路へ）。
+/// 条件を満たさなければ None（E4B や 12B 未導入は呼び出し側でエラーにする）。
 ///
-/// NVIDIA 直起動と同じく、lemond のモデル管理を介さずローカル GGUF を直接ロードする。
+/// NVIDIA 直起動と同じく、外部モデル管理を介さずローカル GGUF を直接ロードする。
 /// これにより rocm-stable では未対応のドラフト（`gemma4-assistant`）も、新しい Vulkan
 /// ビルドで MTP（投機的デコード）として有効化できる。
 fn amd_vulkan_12b_launch(
     app: &AppHandle,
     proofread_tier: Option<GemmaTier>,
 ) -> Option<(String, String, Option<String>, u32)> {
-    // 実効階層が 12B のときだけ対象（E4B は従来どおり lemond で動かす）。
+    // 実効階層が 12B のときだけ対象。
     if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::B12 {
         return None;
     }
@@ -2038,7 +2058,7 @@ fn amd_gpu_priority_list() -> Vec<(i32, String, u64)> {
 
 /// システム ROCm（/opt/rocm*）の rocBLAS Tensile ライブラリに、指定 gfx arch のカーネルが
 /// 含まれるかを確認する。含まれなければ ROCm 直起動は推論時に rocBLAS で落ちるため、この
-/// ゲートで弾いて Vulkan へフォールバックする（lemonade の therock は arch を欠くことがある）。
+/// ゲートで弾いて Vulkan へフォールバックする（ダウンロード済み therock は arch を欠くことがある）。
 fn system_rocm_tensile_has_arch(gfx: &str) -> bool {
     if gfx.is_empty() {
         return false;
@@ -2066,7 +2086,7 @@ fn system_rocm_tensile_has_arch(gfx: &str) -> bool {
 /// AMD GPU で 12B + MTP を ROCm llama-server 直起動で動かせるか判定し、起動パラメータを返す。
 /// 条件: 実効階層 12B ∧ rocm ビルドが gemma4-assistant 対応(b9585+) ∧ AMD GPU 検出 ∧
 /// システム ROCm にその GPU arch の rocBLAS Tensile がある（推論時クラッシュを起動前に排除）。
-/// 満たさなければ None（→ Vulkan 直起動、それも不可なら lemond E4B へフォールバック）。
+/// 満たさなければ None（→ Vulkan 直起動、それも不可なら E4B 起動へフォールバック）。
 fn amd_rocm_12b_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Option<RocmLaunch> {
     if proofread_tier.unwrap_or_else(|| resolve_effective_proofread_tier(app)) != GemmaTier::B12 {
         return None;
@@ -2085,7 +2105,7 @@ fn amd_rocm_12b_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Op
 }
 
 /// AMD で 12B を直起動する計画（ROCm 優先・Vulkan フォールバック）を返す。
-/// どちらも不可なら None（→ lemond E4B 経路へ）。NVIDIA・E4B では常に None。
+/// どちらも不可なら None（→ E4B 起動へ）。NVIDIA・E4B では常に None。
 fn amd_12b_launch_plan(
     app: &AppHandle,
     proofread_tier: Option<GemmaTier>,
@@ -2209,8 +2229,8 @@ fn start_amd_12b_blocking(
 // 単一スロットで処理するため 16384 とする。
 const AMD_E4B_CTX_SIZE: u32 = 16384;
 
-/// AMD で E4B(標準) を ROCm 直起動するパラメータを返す。lemonade(lemond) 撤去の布石として、
-/// E4B も 12B と同様 lemond 非経由でローカル GGUF を直接ロードする。ROCm が確実に使える機
+/// AMD で E4B(標準) を ROCm 直起動するパラメータを返す。E4B も 12B と同様、
+/// ローカル GGUF を直接ロードする。ROCm が確実に使える機
 /// （rocm バイナリ存在 ∧ AMD GPU 検出 ∧ system ROCm に対象 arch の rocBLAS Tensile あり）
 /// だけを対象にする。E4B用MTPドラフトが配置済みなら本体と一緒に渡す。
 /// Linux 以外では GPU 検出系が空を返し None。
@@ -2228,7 +2248,7 @@ fn amd_e4b_rocm_launch(app: &AppHandle, proofread_tier: Option<GemmaTier>) -> Op
     Some((rocm_bin, main_path, mtp_path, AMD_E4B_CTX_SIZE, hip_index))
 }
 
-/// E4B(標準) を ROCm llama-server で直起動する（lemond 非経由）。起動して resolved_port が
+/// E4B(標準) を ROCm llama-server で直起動する。起動して resolved_port が
 /// 開けば true（mode=1: per-job 停止・kill-on-close の対象、単一スロット）。起動失敗・即死・
 /// タイムアウトなら残骸を kill して false を返し、呼び出し側が Vulkan 経路へ退避する。
 fn try_start_amd_e4b_rocm_direct(
@@ -2301,7 +2321,7 @@ fn amd_e4b_vulkan_launch(
     Some((vk_bin, main_path, mtp_path, AMD_E4B_CTX_SIZE))
 }
 
-/// E4B(標準) を Vulkan llama-server で直起動する（lemond 非経由）。**単一GPU固定**
+/// E4B(標準) を Vulkan llama-server で直起動する。**単一GPU固定**
 /// （WindowsはVulkan0、LinuxはNVIDIA GPUがあればその番号）で、iGPU+dGPU同時列挙による
 /// RADV初期化ハング（最初の不具合と同根）を回避する。起動して resolved_port が開けば true。
 /// 失敗・OOM・即死・タイムアウトなら残骸を kill して false を返す。
@@ -2471,7 +2491,7 @@ fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> 
     }
 }
 
-/// アプリ固有 lemond が listen しているポートを返す。未解決時は 0。
+/// アプリ固有 llama-server が listen しているポートを返す。未解決時は 0。
 #[tauri::command]
 fn get_llm_server_port(state: tauri::State<'_, LlmServer>) -> u16 {
     state.port.load(Ordering::Relaxed) as u16
@@ -2643,7 +2663,7 @@ async fn start_llm_server(
     let resolved_port = match get_llm_engine_cache_dir(&app) {
         Some(p) => {
             let _ = std::fs::create_dir_all(&p);
-            let rp = resolve_llm_server_port(&p);
+            let rp = resolve_llm_server_port(&get_llm_engine_cache_dirs(&app));
             ensure_llm_server_port_config(&p, rp);
             rp
         }
@@ -2714,7 +2734,7 @@ async fn start_llm_server(
         };
         Err(message.to_string())
     } else if let Some((rocm, vulkan)) = amd_12b_launch_plan(&app, Some(effective_tier)) {
-        // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック（lemond 非経由）。
+        // AMD GPU 直起動: 高精度(12B)+MTP。ROCm 優先 → 起動失敗時 Vulkan フォールバック。
         // NVIDIA 直起動と同じく mode=1（per-job 停止・kill-on-close の対象）。単一スロット運用。
         tauri::async_runtime::spawn_blocking(move || {
             let result = start_amd_12b_blocking(
@@ -2734,8 +2754,8 @@ async fn start_llm_server(
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
     } else {
-        // AMD E4B(標準): lemond 非経由で直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
-        // どちらも不可ならエラー（lemond は撤去済み）。GPU ランタイム/モデルの準備を促す。
+        // AMD E4B(標準): 直起動する。ROCm 優先 → Vulkan（単一GPU固定）フォールバック。
+        // どちらも不可ならエラー。GPU ランタイム/モデルの準備を促す。
         let e4b_rocm = amd_e4b_rocm_launch(&app, Some(effective_tier));
         let e4b_vulkan = amd_e4b_vulkan_launch(&app, Some(effective_tier));
         tauri::async_runtime::spawn_blocking(move || {
@@ -2932,7 +2952,7 @@ fn start_editor_voice_input_server_blocking(
     let resolved_port = match get_llm_engine_cache_dir(app) {
         Some(p) => {
             let _ = fs::create_dir_all(&p);
-            let rp = resolve_llm_server_port(&p);
+            let rp = resolve_llm_server_port(&get_llm_engine_cache_dirs(app));
             ensure_llm_server_port_config(&p, rp);
             rp
         }
@@ -3055,7 +3075,7 @@ fn start_full_voice_input_server_blocking(
     let resolved_port = match get_llm_engine_cache_dir(app) {
         Some(p) => {
             let _ = fs::create_dir_all(&p);
-            let rp = resolve_llm_server_port(&p);
+            let rp = resolve_llm_server_port(&get_llm_engine_cache_dirs(app));
             ensure_llm_server_port_config(&p, rp);
             rp
         }
@@ -4410,11 +4430,6 @@ struct LlmProofreadRequest {
     n_gpu_layers: Option<i32>,
     system_prompt: Option<String>,
     backend: Option<String>,
-    // 永続設定キー / フロント signal は lemonade のまま（後方互換）。内部フィールド名のみ llm。
-    #[serde(rename = "lemonadeUrl")]
-    llm_url: Option<String>,
-    #[serde(rename = "lemonadeModel")]
-    llm_model: Option<String>,
     openai_base_url: Option<String>,
     openai_model: Option<String>,
     n_ctx: Option<i64>,
@@ -7646,7 +7661,7 @@ fn get_editor_voice_cpu_backend_info(app: &AppHandle) -> (bool, String) {
     }
     let exe = std::env::consts::EXE_SUFFIX;
     let expected = get_llm_engine_cache_dir(app)
-        .unwrap_or_else(|| PathBuf::from("lemonade"))
+        .unwrap_or_else(|| PathBuf::from(LLM_ENGINE_CACHE_DIR_NAME))
         .join("bin")
         .join("llamacpp")
         .join("cpu")
@@ -7656,7 +7671,7 @@ fn get_editor_voice_cpu_backend_info(app: &AppHandle) -> (bool, String) {
 
 fn editor_voice_cpu_backend_dir(app: &AppHandle) -> PathBuf {
     get_llm_engine_cache_dir(app)
-        .unwrap_or_else(|| PathBuf::from("lemonade"))
+        .unwrap_or_else(|| PathBuf::from(LLM_ENGINE_CACHE_DIR_NAME))
         .join("bin")
         .join("llamacpp")
         .join("cpu")
@@ -9615,11 +9630,11 @@ fn proofread_transcription_llm_blocking_with_kind(
     }
 
     let backend = request.backend.as_deref().unwrap_or("llama_cpp");
-    let is_lemonade = backend == "lemonade";
+    let is_llama_server = backend == "llama_server";
     let is_openai_compatible = backend == "openai_compatible";
     let is_llama_cpp = backend == "llama_cpp" || backend == "llama_cpp_rocm";
 
-    if !is_llama_cpp && !is_lemonade && !is_openai_compatible {
+    if !is_llama_cpp && !is_llama_server && !is_openai_compatible {
         return Ok(ProofreadTranscriptionResponse {
             success: false,
             result: None,
@@ -9635,7 +9650,7 @@ fn proofread_transcription_llm_blocking_with_kind(
         });
     }
 
-    if !is_lemonade && !is_openai_compatible && request.model_path.is_empty() {
+    if !is_llama_server && !is_openai_compatible && request.model_path.is_empty() {
         return Ok(ProofreadTranscriptionResponse {
             success: false,
             result: None,
@@ -9748,14 +9763,19 @@ fn proofread_transcription_llm_blocking_with_kind(
         .arg(max_batch.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if is_lemonade {
-        let url = request
-            .llm_url
-            .as_deref()
-            .unwrap_or("http://localhost:13306");
-        let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
-        cmd.arg("--llm-url").arg(url);
-        cmd.arg("--llm-model").arg(model);
+    if is_llama_server {
+        if llm_port == 0 {
+            return Err(
+                "管理下の llama-server が起動していません。先にエンジンを起動してください。"
+                    .to_string(),
+            );
+        }
+        // 内蔵経路は Rust が管理する loopback の llama-server に限定する。
+        // URL・モデル名をリクエストや永続設定から受け取らないことで、外部推論先への
+        // 会話データ送信や stale な旧設定の再利用を防ぐ。
+        let url = format!("http://127.0.0.1:{llm_port}");
+        cmd.arg("--server-url").arg(url);
+        cmd.arg("--server-model").arg(LLM_DEFAULT_MODEL);
         // CUDA llama-server (mode==1) のときだけ、起動時に決めたスロット数 (-np) と同じ
         // 同時送信数で並列ディスパッチし GPU のアイドルを埋める。
         // mode==0（停止中）や逐次経路では --parallel を渡さず既定=1 のままにする。
@@ -9872,7 +9892,7 @@ fn proofread_transcription_llm_blocking_with_kind(
                     *guard = None;
                 }
             }
-            if is_lemonade {
+            if is_llama_server {
                 let _ = try_stop_cuda_llama_server(&app);
             }
             return Err(format!(
@@ -9895,7 +9915,7 @@ fn proofread_transcription_llm_blocking_with_kind(
             *guard = None;
         }
     }
-    if is_lemonade {
+    if is_llama_server {
         let _ = try_stop_cuda_llama_server(&app);
     }
 
@@ -10777,6 +10797,18 @@ fn split_token_candidates(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llm_engine_cache_dirs_prefer_new_path_and_keep_legacy_fallback() {
+        let dirs = llm_engine_cache_dirs_from_base(Path::new("/tmp/lott-cache"));
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/tmp/lott-cache/llm-engine"),
+                PathBuf::from("/tmp/lott-cache/lemonade"),
+            ]
+        );
+    }
 
     #[test]
     fn build_variant_matches_packaged_identifier_and_prioritizes_cpu() {
@@ -13656,11 +13688,11 @@ fn run_overall_proofread_blocking(
     }
 
     let backend = request.backend.as_deref().unwrap_or("llama_cpp");
-    let is_lemonade = backend == "lemonade";
+    let is_llama_server = backend == "llama_server";
     let is_openai_compatible = backend == "openai_compatible";
     let is_llama_cpp = backend == "llama_cpp" || backend == "llama_cpp_rocm";
 
-    if !is_llama_cpp && !is_lemonade && !is_openai_compatible {
+    if !is_llama_cpp && !is_llama_server && !is_openai_compatible {
         return Ok(OverallProofreadResponse {
             success: false,
             result: None,
@@ -13676,7 +13708,7 @@ fn run_overall_proofread_blocking(
         });
     }
 
-    if !is_lemonade && !is_openai_compatible && request.model_path.is_empty() {
+    if !is_llama_server && !is_openai_compatible && request.model_path.is_empty() {
         return Ok(OverallProofreadResponse {
             success: false,
             result: None,
@@ -13786,14 +13818,19 @@ fn run_overall_proofread_blocking(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if is_lemonade {
-        let url = request
-            .llm_url
-            .as_deref()
-            .unwrap_or("http://localhost:13306");
-        let model = request.llm_model.as_deref().unwrap_or(LLM_DEFAULT_MODEL);
-        cmd.arg("--llm-url").arg(url);
-        cmd.arg("--llm-model").arg(model);
+    if is_llama_server {
+        if llm_port == 0 {
+            return Err(
+                "管理下の llama-server が起動していません。先にエンジンを起動してください。"
+                    .to_string(),
+            );
+        }
+        // 内蔵経路は Rust が管理する loopback の llama-server に限定する。
+        // URL・モデル名をリクエストや永続設定から受け取らないことで、外部推論先への
+        // 会話データ送信や stale な旧設定の再利用を防ぐ。
+        let url = format!("http://127.0.0.1:{llm_port}");
+        cmd.arg("--server-url").arg(url);
+        cmd.arg("--server-model").arg(LLM_DEFAULT_MODEL);
         // CUDA llama-server (mode==1) のときだけ、起動時に決めたスロット数 (-np) と同じ
         // 同時送信数で並列ディスパッチし GPU のアイドルを埋める（全体校正も継続バッチング）。
         let llm_state = app.state::<LlmServer>();
@@ -13895,7 +13932,7 @@ fn run_overall_proofread_blocking(
                     *guard = None;
                 }
             }
-            if is_lemonade {
+            if is_llama_server {
                 let _ = try_stop_cuda_llama_server(&app);
             }
             return Err(format!(
@@ -13918,7 +13955,7 @@ fn run_overall_proofread_blocking(
             *guard = None;
         }
     }
-    if is_lemonade {
+    if is_llama_server {
         let _ = try_stop_cuda_llama_server(&app);
     }
 

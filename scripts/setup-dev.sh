@@ -689,6 +689,8 @@ install_amd_npu_packages() {
   codename="$(ubuntu_codename)"
   if [[ "$codename" == "noble" || "$codename" == "questing" ]]; then
     if have add-apt-repository; then
+      # This PPA is an AMD XDNA/XRT driver package source. Its project name is
+      # unrelated to LoTT's LLM engine and must not be treated as a runtime dependency.
       info "Adding AMD XDNA NPU package PPA (ppa:lemonade-team/stable)..."
       if ! "${SUDO_CMD[@]}" add-apt-repository -y ppa:lemonade-team/stable; then
         warn "Failed to add AMD XDNA NPU package PPA. AMD NPU packages may need manual installation."

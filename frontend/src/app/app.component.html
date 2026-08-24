@@ -866,23 +866,6 @@
                     [value]="gemma12bDownloadPercent()"></mat-progress-bar>
                   <span class="whisper-dl-bytes">{{ gemma12bDownloadBytesLabel() || 'ダウンロード中...' }}</span>
                 </div>
-                <!-- AI校正の処理方法セレクタ: 配布ラインがCUDA/AMD分離済みのため現在非表示。NPU実用化時に再表示予定。
-              <mat-form-field *ngIf="llmBackendMode() === 'local_gguf'"
-                appearance="outline" class="settings-llm-field settings-field-compact">
-                <mat-label>AI校正の処理方法</mat-label>
-                <mat-select [disabled]="llmProofreadRunning()" [value]="llmGpuMode()"
-                  (valueChange)="onLlmGpuModeChange($event)">
-                  <mat-option [value]="'cuda_only'" [disabled]="cudaAvailable() === false">RTX GPU 単体</mat-option>
-                  <mat-option [value]="'amd_gpu'" [disabled]="lemonadeBackendNotNeeded()">AMD GPU{{ lemonadeBackendNotNeeded() ? '（無効）' : '' }}</mat-option>
-                </mat-select>
-              </mat-form-field>
-              <button *ngIf="isDevModeBuild && lemonadeBackendNotNeeded() && llmBackendMode() === 'local_gguf'"
-                mat-stroked-button (click)="resetLlmBackendNotNeeded()"
-                style="font-size: 11px;"
-                matTooltip="[開発用] AMD GPUバックエンド「不要」の設定を解除します">
-                AMD GPU 再有効化
-              </button>
-              -->
                 <mat-form-field *ngIf="llmBackendMode() === 'local_gguf' && computeEnvInfo()?.devices?.length"
                   appearance="outline" class="settings-llm-field settings-field-device">
                   <mat-label>使用デバイス</mat-label>
@@ -1114,11 +1097,7 @@
 [テキストのリスト]</pre>
                 </div>
               </ng-container>
-              <!-- <div class="section-separator"><span>LLM バックエンド</span></div> -->
-              <!-- iGPU/NPU割当スライダー: 封印中（lemonadeParallelEnabled UIは未使用のため削除済み） -->
-              <!-- AI校正エンジンの状態/起動/停止/更新の行は廃止。エンジンは校正実行時に
-                   オンデマンド起動し、ジョブ後に解放するため手動操作は不要。AMD/Editor の
-                   バックエンド導入はセットアップタブ（installLlmBackend）に集約。 -->
+              <!-- エンジンは校正実行時にオンデマンド起動し、ジョブ後に解放する。 -->
             </ng-container>
           </mat-card-content>
         </mat-card>
@@ -1153,7 +1132,6 @@
                   音声デコード / WAV 変換に使用。配布用 Python 環境には PyAV（<code>av</code>）と <code>imageio-ffmpeg</code> を含めません。</li>
                 <li>llama.cpp（ggml-org, MIT）<br>
                   AI校正エンジン（ローカル LLM 推論）に使用。</li>
-                <li *ngIf="buildVariant() === 'rocm'">Lemonade（lemonade-sdk, Apache-2.0）</li>
                 <li>Gemma 4 E4B（Google DeepMind, Apache-2.0）<br>
                   内蔵版: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code> UD-Q4_K_XL + MTP GGUF（QAT/MTP, Unsloth, Apache-2.0）</li>
               </ul>

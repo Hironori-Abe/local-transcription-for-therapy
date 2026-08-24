@@ -4,11 +4,11 @@
 ライセンス表示（attribution / NOTICE）をまとめたものです。配布物（NSIS インストーラー、Linux
 パッケージ）に同梱し、アプリ内からも参照できるようにすることを想定しています。
 
-> 主要項目（F章の4点・手動補完ライセンス）は確認・対応済み（2026-06-12）。
+> 主要項目（F章の4点・手動補完ライセンス）とLinuxメディア配布構成は確認・対応済み（2026-08-24）。
 > 依存やバージョンを更新した場合は、該当行とチェックリストを再確認すること。
 > 本ファイルは法的助言ではありません。
 
-最終更新: 2026-07-09
+最終更新: 2026-08-24
 
 ---
 
@@ -24,12 +24,13 @@
 
 | コンポーネント | 用途 | ライセンス | 義務 / 注意 |
 |---|---|---|---|
-| **Python 3.12 embeddable** (`resources/python312/`) | Python ランタイム | PSF License Agreement | ライセンス本文の同梱（`LICENSE.txt` 同梱済み） |
+| **Python 3.12 runtime**（Windows: `resources/python312/`、Linux: `resources/python312-linux/`） | Python ランタイム | PSF License Agreement | ライセンス本文を各配布リソースへ同梱。Linux版はUbuntu 24.04コンテナで基本ランタイムを構成 |
 | **llama.cpp** (`resources/llama-server/` の Windows DLL / Linux `cuda/llama-server` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | Windowsは公式CUDA archive、Linux CUDAは固定commit b10075 source build。著作権表示＋MIT本文の同梱。再ビルド手順は `scripts/build-llama-server-cuda-linux.sh` |
-| ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV 変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows NSIS で同梱確認済み。`--enable-gpl` / `--enable-nonfree` / GPL 系 encoder なし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt` を同梱 |
+| ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV変換 / LinuxのAAC再生用FLAC変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows・Linux配布リソースへ同梱。`--enable-gpl` / `--enable-nonfree` / GPL系encoderなし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt`を同梱 |
+| ✅ **GStreamer core / base / good / ALSA / PulseAudio plugins**（Linux AppImage） | WebKitGTKの音声再生 | **LGPL-2.1（プラグインによりLGPL互換のMIT / BSDを含む）** | `bundleMediaFramework`で同梱。`plugins-ugly` / `gst-libav` / `faad`等は導入せず、GPL系プラグイン名の混入をビルド時に拒否。公式licensing FAQ: `https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html` |
 | ✅ **NVIDIA CUDA 再頒布ランタイム** (`cublas*`, `cudart*`, `nvrtc*` 等 — CUDA 12.4 devel imageからLinux source build時に抽出 / Windows公式ビルド由来DLL) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3）。Linux source buildは公式コンテナ内のEULA/LICENSE候補を `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt` にもコピーし、見つからなければビルド失敗。`libcuda.so.1`（NVIDIAドライバー）は同梱しない |
 
-> Lemonade SDK / lemond は現在の配布物には同梱しません。`%LOCALAPPDATA%\{app-id}\lemonade\` というディレクトリ名は後方互換のキャッシュ名として残る場合がありますが、中身はダウンロード済み llama.cpp バックエンドや設定ファイルです。
+> LLM校正は、同梱またはセットアップで取得する llama.cpp `llama-server` を直接起動します。外部のランタイム管理デーモンやCLIは配布しません。既存ユーザーの移行期間中は、旧 `%LOCALAPPDATA%\{app-id}\lemonade\` キャッシュを読み取る場合がありますが、現在の保存先は `llm-engine` です。
 
 ---
 
@@ -76,7 +77,7 @@
 | tauri / tauri-plugin-dialog / tauri-build | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | serde / serde_json | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | zip | MIT | 著作権＋本文同梱 |
-| base64 / encoding_rs / regex | MIT / Apache-2.0 | 著作権＋本文同梱 |
+| base64 / encoding_rs / regex / chrono | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | windows-sys | MIT / Apache-2.0 | 著作権＋本文同梱 |
 
 > `cargo about` で Rust 依存の全ライセンスを機械生成できます（後述）。
@@ -90,6 +91,7 @@
 | 🔴 **pyannote speaker-diarization-community-1** | **CC-BY-4.0** | **帰属表示が必須**。作者クレジット＋ライセンスへのリンク＋（改変した場合）変更の明示。アプリの About / NOTICE に記載 |
 | **Whisper turbo**（faster-whisper / Systran 変換版） | MIT（OpenAI Whisper 由来） | 著作権＋本文同梱 |
 | **Gemma 4 E4B GGUF**（`unsloth/gemma-4-E4B-it-qat-GGUF`） | ✅ **Apache-2.0**（Gemma 4 は旧 Gemma Terms / 禁止用途ポリシー非適用。確認済み） | Google DeepMind ＋ Unsloth を Apache-2.0 として帰属表示（F-2 参照） |
+| **Gemma 4 12B GGUF + MTP draft**（`unsloth/gemma-4-12B-it-qat-GGUF`） | ✅ **Apache-2.0** | 本体と`mtp-gemma-4-12B-it.gguf`をオプション取得。Google DeepMind＋Unslothを帰属表示（F-2参照） |
 
 ---
 
@@ -132,7 +134,7 @@
   3. ✅ NOTICE に「NVIDIA CUDA ランタイムライブラリを CUDA Toolkit EULA に基づき再頒布」「cuBLAS は UC Regents ほかの第三者 BSD 表示を含む」と記載（対応済み: NOTICE 更新）。
   4. CUDA バージョン更新時（`scripts/setup-dev.bat` の `LLAMA_CUDA_ZIP` の CUDA 版数変更時）は、対応するアーカイブ版 EULA へ差し替え、Attachment A/B の収録・文言を再確認。
 
-### F-4. ffmpeg / PyAV 非依存化 — ✅ **Windows NSIS 検証済み（2026-06-02）**
+### F-4. ffmpeg / PyAV 非依存化 — ✅ **Windows / Linux配布経路対応済み**
 
 調査結果:
 
@@ -160,7 +162,8 @@
 - ✅ Tauri: 同梱 LGPL ffmpeg があれば `FFMPEG_BIN` として Python サイドカーへ渡す。
 - ✅ `scripts/setup_ffmpeg_lgpl.py`: BtbN `lgpl` build を取得し、`--enable-gpl` / GPL 系ライブラリの混入を検査する。
 - ✅ Windows: `resources/ffmpeg/ffmpeg.exe`、`LICENSE.txt`、`FFMPEG_BUILD_INFO.txt` を生成し、NSIS インストール後の配置まで確認済み。
-- 🟡 残: Linux 配布ライン用の `resources/ffmpeg/ffmpeg` 生成と実機検証。
+- ✅ Linux: `resources/ffmpeg/ffmpeg`をAppImage / `.deb` / CachyOSパッケージへ同梱。AAC系ファイルの再生用FLAC変換にも使用する。
+- ✅ Linux AppImage: LGPLのGStreamer base / good系だけを同梱し、GPL系プラグインの混入と必須プラグイン欠落をビルド時に検査する。
 
 Windows 同梱 FFmpeg の記録:
 - 取得元: `https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip`
@@ -205,7 +208,8 @@ Windows 同梱 FFmpeg の記録:
 - [x] Gemma の正確なライセンス／禁止用途ポリシーを確認（F-2: Gemma 4 = Apache-2.0、禁止用途ポリシー非適用）
 - [x] CUDA 再頒布 DLL が EULA の再頒布可能リストに含まれることを確認（F-3: Attachment A 収録。cuBLAS の第三者帰属が必要）
 - [x] CUDA EULA 本文＋ Attachment B（cuBLAS 第三者通知）を配布物に同梱（F-3: `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt`）
-- [x] 同梱 ffmpeg を LGPL ビルドへ差し替え、`av` / `imageio-ffmpeg` 不在を確認（F-4: Windows NSIS）
+- [x] 同梱 ffmpeg を LGPL ビルドへ差し替え、`av` / `imageio-ffmpeg` 不在を確認（F-4: Windows / Linux配布経路）
+- [x] Linux AppImageのGStreamerをbase / good系に限定し、GPL系プラグインの混入検査を追加
 - [x] 各依存のフルライセンス本文を収集・同梱（自動収集＋ `licenses/manual/` で pywin32 / sentencepiece / selectors / CUDA EULA を補完）
 - [ ] リリースビルド時に Windows release venv で `collect_licenses.py` を再生成し、「不明」ゼロ（または manual/ でカバー済み）を確認
 - [x] 本ファイルと `licenses/` をインストーラー同梱物に追加（Tauri resources）

@@ -198,9 +198,9 @@ fi
 info "Emulation state saved: $EMULATION_STATE_FILE"
 
 if [[ "${LOTT_TORCH_BACKEND:-cuda}" == "rocm" ]]; then
-  info "LLM backend: downloaded llama.cpp ROCm/Vulkan llama-server direct launch (no Lemonade/lemond)."
+  info "LLM backend: downloaded llama.cpp ROCm/Vulkan llama-server direct launch."
 else
-  info "LLM backend: bundled Linux CUDA llama-server direct launch (no Lemonade/lemond)."
+  info "LLM backend: bundled Linux CUDA llama-server direct launch."
 fi
 
 if [[ ! -d "$ROOT_DIR/python_sidecar/models/pyannote-speaker-diarization-community-1" ]]; then

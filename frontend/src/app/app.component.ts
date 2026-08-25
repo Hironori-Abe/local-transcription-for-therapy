@@ -99,6 +99,7 @@ import {
   calculateRuntimeEstimateValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
+  cpuRuntimeSetupBannerVisibleValue,
   displaySpeakerValue,
   editorVoiceInputDownloadButtonColorValue,
   editorVoiceInputMemoryTierValue,
@@ -4108,6 +4109,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   isTranscriptionTabDisabled(): boolean {
     return this.transcriptionTabDisabled();
+  }
+
+  isCpuRuntimeSetupBannerVisible(): boolean {
+    return cpuRuntimeSetupBannerVisibleValue(
+      this.runtimeCpuOnlyBuild(),
+      this.transcriptionTabVisible(),
+      this.isTranscriptionTabDisabled(),
+      this.needsFullSetup()
+    );
   }
 
   isDiarizationModelMissing(): boolean {

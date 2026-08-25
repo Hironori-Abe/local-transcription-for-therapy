@@ -154,6 +154,23 @@
           </div>
         </div>
 
+        <!-- CPUランタイム未検出バナー（通常セットアップ完了後の実行環境エラー） -->
+        <div *ngIf="isCpuRuntimeSetupBannerVisible()" class="gpu-setup-banner cpu-setup-banner">
+          <div class="gpu-setup-banner-header">
+            <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
+            <span class="gpu-setup-title">CPU推論ランタイムが検出されませんでした</span>
+          </div>
+          <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
+          <p class="gpu-setup-desc">CPU版で文字起こしを利用するには、CPU推論ランタイムが必要です。文字起こし画面上部のセットアップ状態を確認し、必要ならセットアップを再実行してからアプリを再起動してください。</p>
+          <div class="gpu-setup-recheck">
+            <p class="gpu-setup-recheck-note">セットアップやPython環境を変更した後は、状態を再確認してください。</p>
+            <button mat-stroked-button class="gpu-setup-recheck-btn" (click)="onRecheckAllSetupStatus()">
+              <mat-icon class="material-symbols-outlined">refresh</mat-icon>
+              状態を再確認
+            </button>
+          </div>
+        </div>
+
         <!-- 統合セットアップブロック -->
         <div *ngIf="needsFullSetup()" class="unified-setup-block">
           <p class="unified-setup-title">初期セットアップが必要です</p>

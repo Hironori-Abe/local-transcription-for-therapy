@@ -756,6 +756,19 @@ export function transcriptionRuntimeReasonValue(
   return normalized;
 }
 
+/** Show a runtime warning only after the normal setup checks have completed. */
+export function cpuRuntimeSetupBannerVisibleValue(
+  cpuOnlyBuild: boolean,
+  transcriptionTabVisible: boolean,
+  transcriptionTabDisabled: boolean,
+  needsFullSetup: boolean
+): boolean {
+  return cpuOnlyBuild
+    && transcriptionTabVisible
+    && transcriptionTabDisabled
+    && !needsFullSetup;
+}
+
 export function processingStatusTextValue(input: ProcessingStatusTextValueInput): string {
   if (!input.visible) {
     return '';

@@ -18,6 +18,7 @@ import {
   calculateRuntimeEstimateValue,
   computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
+  cpuRuntimeSetupBannerVisibleValue,
   countSubstringOccurrencesValue,
   displaySpeakerValue,
   editorVoiceInputDownloadButtonColorValue,
@@ -191,6 +192,25 @@ test('Full GPU runtime reasons never promise an unavailable CPU fallback', () =>
     'GPU が確認できないため、文字起こし・話者分離は利用できません。'
   );
   assert.equal(transcriptionRuntimeReasonValue(true, 'CUDA が利用可能です。', false), '');
+});
+
+test('CPU runtime reasons remain actionable when the runtime probe fails', () => {
+  const fallback = transcriptionRuntimeReasonValue(false, '', true);
+  assert.match(fallback, /CPU/);
+  assert.match(fallback, /ランタイム/);
+  assert.match(fallback, /文字起こし/);
+
+  const probeFailure = 'CTranslate2 の CPU ランタイムを確認できませんでした。Python環境を確認してください。';
+  assert.equal(transcriptionRuntimeReasonValue(false, `  ${probeFailure}  `, true), probeFailure);
+  assert.equal(transcriptionRuntimeReasonValue(true, probeFailure, true), '');
+});
+
+test('CPU runtime banner is shown only after setup is complete', () => {
+  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, true, false), true);
+  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, false, false), false);
+  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, false, true, false), false);
+  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, true, true), false);
+  assert.equal(cpuRuntimeSetupBannerVisibleValue(false, true, true, false), false);
 });
 
 test('LLM mode, VRAM, parallelism, and context hints preserve current UI rules', () => {

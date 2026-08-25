@@ -850,7 +850,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   // 実行中に Angular signal や textContent を更新しないことで、sticky な編集画面全体の
   // Layout / Paint を避ける。
   readonly shortcutHintDisplaySeconds = 5;
-  readonly shortcutHintFadeSeconds = 0.5;
   readonly shortcutHintCycleDuration = `${this.shortcutHints.length * this.shortcutHintDisplaySeconds}s`;
   readonly shortcutHintsAriaLabel = `キーボードショートカットのヒント: ${this.shortcutHints.join('、')}`;
   readonly hiddenSegmentIds = signal<Record<number, boolean>>({});

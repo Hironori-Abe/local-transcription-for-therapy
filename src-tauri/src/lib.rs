@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -22,6 +22,9 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
+
+#[cfg(target_os = "linux")]
+use std::ffi::OsString;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -537,6 +540,7 @@ fn local_openai_http_post_json_with_response(
     serde_json::from_slice(&body_decoded).map_err(|e| format!("JSON 解析に失敗しました: {e}"))
 }
 
+#[cfg(target_os = "linux")]
 fn local_openai_http_get_status_body(
     target: &LocalOpenAiHttpTarget,
     path: &str,
@@ -973,11 +977,6 @@ fn linux_cuda_bundle_metadata_is_valid(bin_path: &Path) -> bool {
     };
     let source_tag = format!("source_tag={LLAMA_CPP_LINUX_CUDA_BUILD_TAG}");
     contents.lines().any(|line| line.trim() == source_tag) && contents.contains("GGML_CUDA=ON")
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_cuda_bundle_metadata_is_valid(_bin_path: &Path) -> bool {
-    true
 }
 
 /// `llama-server` の候補が実際に実行可能なファイルかを判定する。

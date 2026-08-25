@@ -1,4 +1,6 @@
-﻿:host {
+﻿@use 'sass:math';
+
+:host {
   display: block;
   font-size: clamp(14px, 0.35vw + 12px, 18px);
   overflow-x: hidden;
@@ -772,7 +774,6 @@
  */
 .shortcut-hint {
   flex: 1 1 auto;
-  justify-content: center;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -808,52 +809,42 @@
 
 .shortcut-hint-text {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
-  text-align: center;
-  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
   opacity: 0;
-  transform: translate3d(0, 2px, 0);
-  will-change: opacity, transform;
-  animation: shortcut-hint-crossfade var(--shortcut-hint-cycle-duration) linear infinite;
+  animation: shortcut-hint-cycle var(--shortcut-hint-cycle-duration) steps(1, end) infinite;
   animation-delay: var(--shortcut-hint-delay);
 }
 
-.shortcut-hint-text:first-child {
-  opacity: 1;
+.shortcut-hint-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.shortcut-hint:hover .shortcut-hint-text,
-.shortcut-hint:focus .shortcut-hint-text {
-  animation-play-state: paused;
-}
+// CSS keyframe offsets cannot be derived from the Angular array at runtime.
+// Keep this slot count aligned with shortcutHints (currently six entries).
+$shortcut-hint-slot-count: 6;
+$shortcut-hint-slot-percentage: math.percentage(math.div(1, $shortcut-hint-slot-count));
 
-@keyframes shortcut-hint-crossfade {
+@keyframes shortcut-hint-cycle {
   0% {
-    opacity: 0;
-    transform: translate3d(0, 2px, 0);
-  }
-
-  1.667%,
-  15% {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
   }
 
-  18.333%,
+  #{$shortcut-hint-slot-percentage},
   100% {
     opacity: 0;
-    transform: translate3d(0, -2px, 0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .shortcut-hint-text {
-    animation: none;
-  }
-
-  .shortcut-hint-text:not(:first-child) {
-    display: none;
   }
 }
 

@@ -1266,12 +1266,12 @@
                 <span class="reader-hint shortcut-hint" tabindex="0"
                   [attr.aria-label]="shortcutHintsAriaLabel"
                   [style.--shortcut-hint-cycle-duration]="shortcutHintCycleDuration">
-                  <mat-icon class="material-symbols-outlined shortcut-hint-icon" aria-hidden="true">lightbulb</mat-icon>
                   <span class="shortcut-hint-viewport" aria-hidden="true">
                     <span *ngFor="let hint of shortcutHints; let hintIndex = index"
                       class="shortcut-hint-text"
-                      [style.--shortcut-hint-delay]="(hintIndex * shortcutHintDisplaySeconds - shortcutHintFadeSeconds) + 's'">
-                      {{ hint }}
+                      [style.--shortcut-hint-delay]="(hintIndex * shortcutHintDisplaySeconds) + 's'">
+                      <mat-icon class="material-symbols-outlined shortcut-hint-icon" aria-hidden="true">lightbulb</mat-icon>
+                      <span class="shortcut-hint-label">{{ hint }}</span>
                     </span>
                   </span>
                 </span>

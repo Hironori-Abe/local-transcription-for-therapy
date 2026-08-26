@@ -48,6 +48,14 @@ PYPI_INDEX = "https://pypi.org/simple"
 PYPI_NVIDIA_INDEX = "https://pypi.nvidia.com"
 ROCM_WINDOWS_BUILD_REQUIREMENTS = ("setuptools>=70.2.0,<82",)
 
+# The bundled Linux runtime and the backend-specific development venvs are
+# Python 3.12 environments.  In particular, the ROCm 7.2 torch 2.11 graph
+# currently exposes triton_rocm 3.6.0 as a cp312 wheel only.  Letting a
+# different interpreter reach the wheel resolver produces the misleading
+# "SHA-256付きwheelが公式indexにありません" error because _wheel_compatible
+# correctly filters out a wheel for another Python ABI.
+SUPPORTED_PYTHON_VERSION = (3, 12)
+
 # A few official AMD/PyTorch artifacts are currently published without a
 # PEP 503 ``#sha256=...`` fragment.  Keep exceptions narrowly scoped to the
 # exact immutable URL/version; every other hash-less artifact remains rejected
@@ -83,6 +91,28 @@ _LAST_PIP_OUTPUT: list[str] = []
 
 class DownloadError(RuntimeError):
     """A resumable package download failed without exposing credentials."""
+
+
+def _validate_python_version(version_info=None) -> None:
+    """Fail before network resolution when the selected Python is unsupported.
+
+    Keep this check independent of ``sys.version_info`` so the behavior can be
+    tested without creating a second interpreter.  The setup command is used
+    by both the Linux app and development launchers, all of which promise the
+    Python 3.12 runtime.
+    """
+    actual = version_info if version_info is not None else sys.version_info
+    try:
+        major, minor = int(actual[0]), int(actual[1])
+    except (IndexError, TypeError, ValueError) as exc:
+        raise DownloadError("Pythonのバージョンを確認できませんでした。") from exc
+    if (major, minor) != SUPPORTED_PYTHON_VERSION:
+        actual_version = ".".join(str(part) for part in actual[:3])
+        expected = ".".join(str(part) for part in SUPPORTED_PYTHON_VERSION)
+        raise DownloadError(
+            f"Python {expected} が必要ですが、Python {actual_version} が選択されています。"
+            " backend別の .venv312-* を作成し、Python 3.12で再実行してください。"
+        )
 
 
 def _private_directory(path: Path) -> Path:
@@ -172,7 +202,78 @@ def _record_log(line: str) -> None:
         pass
 
 
-def _pip_environment() -> dict[str, str]:
+def _venv_site_packages(python: Path | None) -> Path | None:
+    """Return the site-packages directory belonging to a selected venv.
+
+    The Linux bundled interpreter ships with pip in its *base* stdlib path.
+    A venv made with ``--without-pip`` therefore imports that base pip before
+    its own site-packages directory (the normal venv layout appends the latter
+    to ``sys.path``).  Prefer the venv path explicitly for pip subprocesses so
+    an upgrade is checked against, and subsequent commands use, the pip that
+    was installed into the venv.
+
+    Do not resolve the executable symlink here: the embedded runtime's venv
+    ``bin/python3.12`` is intentionally a symlink back to the bundled binary,
+    while the lexical parent still identifies the venv root.
+    """
+    if python is None:
+        return None
+    try:
+        executable = Path(python).expanduser()
+        venv_root = executable.parent.parent
+        if not (venv_root / "pyvenv.cfg").is_file():
+            return None
+        if os.name == "nt":
+            site_packages = venv_root / "Lib" / "site-packages"
+        else:
+            version = f"{SUPPORTED_PYTHON_VERSION[0]}.{SUPPORTED_PYTHON_VERSION[1]}"
+            site_packages = venv_root / "lib" / f"python{version}" / "site-packages"
+        return site_packages
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _pip_import_paths(python: Path | None) -> list[str]:
+    """Build trusted import paths for pip subprocesses.
+
+    ``PYTHONPATH`` inherited from the desktop/session is deliberately not
+    retained: it can make pip load a foreign package tree.  Only the selected
+    venv, the Rust-provided ``PIP_TARGET`` and this interpreter's normal
+    purelib are considered.  The venv path comes first so an embedded base pip
+    cannot shadow the venv's upgraded pip.
+    """
+    candidates: list[Path] = []
+    venv_site = _venv_site_packages(python)
+    if venv_site is not None:
+        candidates.append(venv_site)
+
+    configured_target = os.environ.get("PIP_TARGET", "").strip()
+    if configured_target:
+        candidates.append(Path(configured_target).expanduser())
+
+    try:
+        candidates.append(Path(sysconfig.get_path("purelib")))
+    except (TypeError, ValueError):
+        pass
+
+    paths: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            # A target may not exist yet during the first bootstrap.  An
+            # absent path is harmless in PYTHONPATH and will become useful as
+            # soon as pip creates it, so retain it rather than silently
+            # reverting to the embedded base pip.
+            value = str(candidate)
+        except (OSError, TypeError, ValueError):
+            continue
+        if value not in seen:
+            seen.add(value)
+            paths.append(value)
+    return paths
+
+
+def _pip_environment(python: Path | None = None) -> dict[str, str]:
     """Return a controlled pip environment for official package resolution.
 
     A user's global pip configuration may point at an untrusted mirror or
@@ -190,6 +291,13 @@ def _pip_environment() -> dict[str, str]:
         environment["PIP_RESUME_RETRIES"] = str(PIP_RESUME_RETRIES)
     else:
         environment.pop("PIP_RESUME_RETRIES", None)
+    import_paths = _pip_import_paths(python)
+    if import_paths:
+        environment["PYTHONPATH"] = os.pathsep.join(import_paths)
+    else:
+        # Do not let an ambient PYTHONPATH select pip or package code from an
+        # unrelated environment when no trusted path is available.
+        environment.pop("PYTHONPATH", None)
     return environment
 
 
@@ -499,7 +607,7 @@ def _pip_version_check(python: Path):
             encoding="utf-8",
             errors="replace",
             timeout=15,
-            env=_pip_environment(),
+            env=_pip_environment(python),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return (0, 0, 0), 127, str(exc)
@@ -526,7 +634,7 @@ def _detect_pip_capabilities(python: Path) -> None:
             encoding="utf-8",
             errors="replace",
             timeout=15,
-            env=_pip_environment(),
+            env=_pip_environment(python),
         )
         version = _parse_pip_version(result.stdout + result.stderr)
         help_result = subprocess.run(
@@ -536,7 +644,7 @@ def _detect_pip_capabilities(python: Path) -> None:
             encoding="utf-8",
             errors="replace",
             timeout=15,
-            env=_pip_environment(),
+            env=_pip_environment(python),
         )
         download_help = subprocess.run(
             _pip_prefix(python, include_resume=False) + ["download", "--help"],
@@ -545,7 +653,7 @@ def _detect_pip_capabilities(python: Path) -> None:
             encoding="utf-8",
             errors="replace",
             timeout=15,
-            env=_pip_environment(),
+            env=_pip_environment(python),
         )
         supports_resume_option = "--resume-retries" in (
             help_result.stdout
@@ -686,7 +794,10 @@ def run_and_stream(cmd: list, *, label: str = "pip") -> int:
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=_pip_environment(),
+        # All production callers pass a command built by ``_pip_prefix``;
+        # deriving the interpreter here keeps the streaming helper's public
+        # call shape small while still selecting the venv-local pip.
+        env=_pip_environment(Path(cmd[0]) if cmd else None),
     )
     for raw_line in proc.stdout:
         raw_line = _sanitize_text(raw_line.rstrip("\r\n"))
@@ -721,7 +832,7 @@ def _bootstrap_pip(python: Path) -> None:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=_pip_environment(),
+                env=_pip_environment(python),
             )
             if result.returncode != 0:
                 _remember_pip_output((result.stdout or "") + (result.stderr or ""))
@@ -735,7 +846,7 @@ def _bootstrap_pip(python: Path) -> None:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=_pip_environment(),
+                env=_pip_environment(python),
             )
             if ensurepip.returncode != 0:
                 _remember_pip_output((ensurepip.stdout or "") + (ensurepip.stderr or ""))
@@ -1728,6 +1839,10 @@ def main() -> None:
 
     req_file = Path(args.requirements)
     python = Path(sys.executable)
+    # Resolve the interpreter contract before touching pip or the network.
+    # Otherwise an accidental Python 3.14 venv reaches the ROCm resolver and
+    # reports the cp312-only triton_rocm wheel as a hash problem.
+    _validate_python_version()
 
     # Durable state is initialized before any output is emitted so diagnostics
     # from bootstrap/pip are available even when the first network step fails.

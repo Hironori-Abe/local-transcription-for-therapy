@@ -11,10 +11,10 @@ SKIP_RUST=0
 ONLY_RUST=0
 CPU_TORCH=0
 ASSUME_YES=0
-VENV_DIR="${LOTT_VENV_DIR:-.venv312}"
+VENV_DIR="${LOTT_VENV_DIR:-}"
 TORCH_BACKEND_EXPLICIT=0
 if [[ -n "${LOTT_TORCH_BACKEND:-}" ]]; then TORCH_BACKEND_EXPLICIT=1; fi
-TORCH_BACKEND="${LOTT_TORCH_BACKEND:-cuda}"
+TORCH_BACKEND="${LOTT_TORCH_BACKEND:-}"
 LLAMA_CPP_BACKEND="${LOTT_LLAMA_CPP_BACKEND:-none}"
 AMD_PACKAGES=0
 INSTALL_ROCM=0
@@ -36,13 +36,15 @@ Options:
   --skip-llama-cpp       Skip optional llama-cpp-python installation.
   --skip-rust            Skip Rustup/Cargo installation and check.
   --only-rust            Only install/check Rustup/Cargo, then exit.
-  --cpu-torch            Install the default PyTorch wheels instead of CUDA 12.8 wheels.
+  --nvidia               Prepare the NVIDIA/CUDA development environment.
+  --cpu, --cpu-torch     Prepare the CPU-only development environment.
   --amd                  Prepare for AMD validation: ROCm PyTorch, Vulkan/OpenCL diagnostics,
                          and AMD runtime env checks. App-default AI proofreading uses
                          the llama.cpp ROCm/Vulkan llama-server downloaded
                          from the in-app setup tab. Use --llama-cpp-backend=hipblas or
                          --llama-cpp-backend=vulkan to build the optional llama_cpp backend.
-  --torch-backend VALUE  Python torch backend: cuda, rocm, or cpu. Default: cuda.
+  --torch-backend VALUE  Python torch backend: cuda, rocm, or cpu. Required unless a
+                         dedicated setup-dev-{nvidia,amd,cpu}.sh entry point is used.
   --llama-cpp-backend VALUE
                          llama-cpp-python backend: cuda, hipblas, vulkan, openblas, or none.
                          Default: none. Use auto to derive it from --torch-backend.
@@ -52,8 +54,10 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  LOTT_VENV_DIR          Python venv directory. Default: .venv312
-  PYTHON_BOOTSTRAP       Python command used to create the venv. Default: python3.12, then python3
+  LOTT_VENV_DIR          Python venv directory. Defaults to a backend-specific directory:
+                         .venv312-nvidia, .venv312-amd, or .venv312-cpu.
+  PYTHON_BOOTSTRAP       Python 3.12 command used to create the venv. Defaults to python3.12,
+                         then the bundled Linux Python 3.12 runtime when available.
   LOTT_TORCH_BACKEND     Same as --torch-backend.
   LOTT_LLAMA_CPP_BACKEND Same as --llama-cpp-backend.
   LOTT_ROCM_VERSION      ROCm apt repo version for --install-rocm. Default: 7.2
@@ -96,7 +100,12 @@ while [[ $# -gt 0 ]]; do
       ONLY_RUST=1
       shift
       ;;
-    --cpu-torch)
+    --nvidia)
+      TORCH_BACKEND="cuda"
+      TORCH_BACKEND_EXPLICIT=1
+      shift
+      ;;
+    --cpu|--cpu-torch)
       CPU_TORCH=1
       TORCH_BACKEND="cpu"
       TORCH_BACKEND_EXPLICIT=1
@@ -157,15 +166,19 @@ if [[ "$CPU_TORCH" == "1" ]]; then
   TORCH_BACKEND="cpu"
 fi
 
-# 明示指定なし・非 -y・インタラクティブ端末の場合にバックエンドを選択させる
+# 明示指定なし・非 -y・インタラクティブ端末の場合にバックエンドを選択させる。
+# CUDA を暗黙の既定値にしない。AMD/CPU 開発機へ NVIDIA ランタイムを混入させないため。
 if [[ "$TORCH_BACKEND_EXPLICIT" == "0" && "$ASSUME_YES" == "0" && -t 0 ]]; then
   printf '\nGPUバックエンドを選択してください:\n'
-  printf '  1) cuda   NVIDIA CUDA（デフォルト・安定版）\n'
+  printf '  1) cuda   NVIDIA CUDA\n'
   printf '  2) rocm   AMD ROCm\n'
   printf '  3) cpu    CPU のみ（GPU なし）\n'
   printf '\n'
-  read -rp "選択 [1-3] (デフォルト: 1 cuda): " _backend_choice
-  case "${_backend_choice:-1}" in
+  read -rp "選択 [1-3]（省略不可）: " _backend_choice
+  case "${_backend_choice:-}" in
+    1|cuda|CUDA)
+      TORCH_BACKEND="cuda"
+      ;;
     2|rocm|ROCm)
       TORCH_BACKEND="rocm"
       ;;
@@ -174,10 +187,20 @@ if [[ "$TORCH_BACKEND_EXPLICIT" == "0" && "$ASSUME_YES" == "0" && -t 0 ]]; then
       CPU_TORCH=1
       ;;
     *)
-      TORCH_BACKEND="cuda"
+      echo "[ERROR] GPU backend selection is required." >&2
+      exit 2
       ;;
   esac
   printf '[INFO] torch バックエンド: %s\n' "$TORCH_BACKEND"
+fi
+
+if [[ "$TORCH_BACKEND_EXPLICIT" == "0" && -z "$TORCH_BACKEND" ]]; then
+  echo "[ERROR] GPU backend was not selected; refusing to default to CUDA." >&2
+  echo "        Use one of:" >&2
+  echo "          bash scripts/setup-dev-nvidia.sh" >&2
+  echo "          bash scripts/setup-dev-amd.sh" >&2
+  echo "          bash scripts/setup-dev-cpu.sh" >&2
+  exit 2
 fi
 
 case "$TORCH_BACKEND" in
@@ -188,6 +211,14 @@ case "$TORCH_BACKEND" in
     exit 2
     ;;
 esac
+
+if [[ -z "$VENV_DIR" ]]; then
+  case "$TORCH_BACKEND" in
+    cuda) VENV_DIR=".venv312-nvidia" ;;
+    rocm) VENV_DIR=".venv312-amd" ;;
+    cpu) VENV_DIR=".venv312-cpu" ;;
+  esac
+fi
 
 if [[ "$LLAMA_CPP_BACKEND" == "auto" ]]; then
   case "$TORCH_BACKEND" in
@@ -777,39 +808,59 @@ ensure_amd_group_membership() {
 }
 
 select_python_bootstrap() {
+  local bundled_python="$ROOT_DIR/src-tauri/resources/python312-linux/bin/python3.12"
+
   if [[ -n "${PYTHON_BOOTSTRAP:-}" ]]; then
-    if have "$PYTHON_BOOTSTRAP"; then
+    if ! have "$PYTHON_BOOTSTRAP"; then
+      die "PYTHON_BOOTSTRAP was set but command was not found: $PYTHON_BOOTSTRAP"
+    fi
+    if "$PYTHON_BOOTSTRAP" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >/dev/null 2>&1; then
       printf '%s\n' "$PYTHON_BOOTSTRAP"
       return
     fi
-    die "PYTHON_BOOTSTRAP was set but command was not found: $PYTHON_BOOTSTRAP"
+    die "PYTHON_BOOTSTRAP must point to Python 3.12: $PYTHON_BOOTSTRAP"
   fi
 
-  for candidate in python3.12 python3; do
-    if have "$candidate" && "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1; then
+  for candidate in python3.12 "$bundled_python"; do
+    if have "$candidate" && "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >/dev/null 2>&1; then
       printf '%s\n' "$candidate"
       return
     fi
   done
 
-  die "Python 3.10+ was not found. Recommended: Python 3.12."
+  die "Python 3.12 was not found. Install Python 3.12 or set PYTHON_BOOTSTRAP to its executable. Python 3.13/3.14 cannot use the pinned cp312 runtime wheels."
 }
 
 ensure_python_venv() {
   local bootstrap
-  bootstrap="$(select_python_bootstrap)"
+  local venv_path
+  if [[ "$VENV_DIR" == /* ]]; then
+    venv_path="$VENV_DIR"
+  else
+    venv_path="$ROOT_DIR/$VENV_DIR"
+  fi
 
-  if [[ -x "$VENV_DIR/bin/python" ]]; then
-    PYTHON_BIN="$ROOT_DIR/$VENV_DIR/bin/python"
+  if [[ -x "$venv_path/bin/python" ]]; then
+    PYTHON_BIN="$venv_path/bin/python"
     info "Using existing Python venv: $PYTHON_BIN"
   else
-    if [[ -e "$VENV_DIR" ]]; then
-      die "$VENV_DIR exists but $VENV_DIR/bin/python was not found. Move it aside or set LOTT_VENV_DIR=.venv312-linux."
+    if [[ -e "$venv_path" ]]; then
+      die "$venv_path exists but $venv_path/bin/python was not found. Move it aside or select another backend-specific venv."
     fi
 
-    info "Creating $VENV_DIR with $bootstrap..."
-    "$bootstrap" -m venv "$VENV_DIR" || die "Failed to create Python venv."
-    PYTHON_BIN="$ROOT_DIR/$VENV_DIR/bin/python"
+    bootstrap="$(select_python_bootstrap)"
+    info "Creating $venv_path with $bootstrap..."
+    if ! "$bootstrap" -m venv "$venv_path"; then
+      # The bundled relocatable runtime can leave a usable venv even when its
+      # ensurepip subprocess returns non-zero. Accept it only after proving
+      # that both Python and pip work inside the new, isolated prefix.
+      if [[ -x "$venv_path/bin/python" ]] && "$venv_path/bin/python" -m pip --version >/dev/null 2>&1; then
+        warn "venv reported an ensurepip error, but the bundled Python/pip environment is usable; continuing."
+      else
+        die "Failed to create Python venv."
+      fi
+    fi
+    PYTHON_BIN="$venv_path/bin/python"
     ok "Created venv: $PYTHON_BIN"
   fi
 
@@ -820,13 +871,9 @@ ensure_python_venv() {
   info "Python version   : $py_ver"
 
   case "$py_ver" in
-    3.12.*|3.11.*)
-      ;;
-    3.14.*)
-      warn "Python 3.14 detected. Recommended: 3.12.x or 3.11.x."
-      ;;
+    3.12.*) ;;
     *)
-      warn "Recommended Python is 3.12.x or 3.11.x for this runtime stack."
+      die "The selected venv uses Python $py_ver, but this runtime requires Python 3.12 (the ROCm Triton wheel is cp312-only). Move $venv_path aside and rerun the backend-specific setup script."
       ;;
   esac
 }
@@ -880,7 +927,7 @@ install_python_dependencies() {
       fi
       ;;
     cpu)
-      warn "Installing default PyTorch wheels because CPU torch backend was requested. The app default remains CUDA."
+      info "Installing default CPU PyTorch wheels for the CPU development edition."
       "$PYTHON_BIN" -m pip install --upgrade --force-reinstall --prefer-binary \
         "torch==2.10.0" "torchaudio==2.10.0" || die "PyTorch install failed."
       ;;
@@ -1036,16 +1083,19 @@ PY
 }
 
 write_linux_env_file() {
-  local env_file="$ROOT_DIR/.dev-linux.env"
-  NVIDIA_LIB_PATHS="$(collect_nvidia_lib_paths || true)"
+  local env_file="$ROOT_DIR/.dev-linux-${TORCH_BACKEND}.env"
+  NVIDIA_LIB_PATHS=""
   local rocm_lib_paths=""
   local rocm_path="/opt/rocm"
 
-  if [[ -n "$NVIDIA_LIB_PATHS" ]]; then
-    export LD_LIBRARY_PATH="$NVIDIA_LIB_PATHS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    info "Added Python NVIDIA library paths to LD_LIBRARY_PATH for this setup run."
+  if [[ "$TORCH_BACKEND" == "cuda" ]]; then
+    NVIDIA_LIB_PATHS="$(collect_nvidia_lib_paths || true)"
+    if [[ -n "$NVIDIA_LIB_PATHS" ]]; then
+      export LD_LIBRARY_PATH="$NVIDIA_LIB_PATHS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      info "Added Python NVIDIA library paths to LD_LIBRARY_PATH for this setup run."
+    fi
   fi
-  if [[ -d "$rocm_path" ]]; then
+  if [[ "$TORCH_BACKEND" == "rocm" && -d "$rocm_path" ]]; then
     local rocm_paths=()
     [[ -d "$rocm_path/lib" ]] && rocm_paths+=("$rocm_path/lib")
     [[ -d "$rocm_path/lib64" ]] && rocm_paths+=("$rocm_path/lib64")
@@ -1058,7 +1108,7 @@ write_linux_env_file() {
       info "Added ROCm paths for this setup run."
     fi
   fi
-  if [[ -f /opt/xilinx/xrt/setup.sh ]]; then
+  if [[ "$TORCH_BACKEND" == "rocm" && -f /opt/xilinx/xrt/setup.sh ]]; then
     # shellcheck disable=SC1091
     source /opt/xilinx/xrt/setup.sh || warn "Failed to source /opt/xilinx/xrt/setup.sh."
     info "Sourced XRT setup for AMD NPU validation."
@@ -1079,11 +1129,12 @@ write_linux_env_file() {
       printf 'export LOTT_ROCM_LIB_PATHS=%q\n' "$rocm_lib_paths"
       printf 'export LD_LIBRARY_PATH="${LOTT_ROCM_LIB_PATHS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
     fi
-    if [[ -f /opt/xilinx/xrt/setup.sh ]]; then
+    if [[ "$TORCH_BACKEND" == "rocm" && -f /opt/xilinx/xrt/setup.sh ]]; then
       printf '[ -f /opt/xilinx/xrt/setup.sh ] && source /opt/xilinx/xrt/setup.sh\n'
     fi
     # Keep the selected backend explicit so switching from an AMD setup to a
-    # CPU setup cannot leave a stale ROCm value in .dev-linux.env.
+    # Each backend has its own env file; still record the backend so the
+    # launcher can reject a mismatched or manually edited environment.
     printf 'export LOTT_TORCH_BACKEND=%q\n' "$TORCH_BACKEND"
   } > "$env_file"
 
@@ -1443,9 +1494,20 @@ doctor_summary() {
   if ! "$PYTHON_BIN" -c "import torchaudio; print('torchaudio=', torchaudio.__version__)"; then
     warn "torchaudio is not available."
   fi
-  if ! "$PYTHON_BIN" -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())"; then
-    warn "torch CUDA summary failed."
-  fi
+  case "$TORCH_BACKEND" in
+    cuda)
+      "$PYTHON_BIN" -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())" \
+        || warn "torch CUDA summary failed."
+      ;;
+    rocm)
+      "$PYTHON_BIN" -c "import torch; print('torch_hip=', getattr(torch.version, 'hip', None)); print('torch_rocm_available=', torch.cuda.is_available()); print('torch_rocm_device_count=', torch.cuda.device_count())" \
+        || warn "torch ROCm summary failed."
+      ;;
+    cpu)
+      "$PYTHON_BIN" -c "import torch; print('torch_cpu_backend=', torch.version.cuda is None and getattr(torch.version, 'hip', None) is None)" \
+        || warn "torch CPU summary failed."
+      ;;
+  esac
   if ! "$PYTHON_BIN" -c "import importlib.metadata as m; print('pyannote.audio=', m.version('pyannote.audio'))"; then
     warn "pyannote.audio is not installed."
   fi
@@ -1541,6 +1603,11 @@ else
   echo "Completed without warnings."
 fi
 echo "[INFO] Runtime Python: $PYTHON_BIN"
-echo "[INFO] For this terminal, run: source .dev-linux.env"
+echo "[INFO] Backend env: .dev-linux-${TORCH_BACKEND}.env"
+case "$TORCH_BACKEND" in
+  cuda) echo "[INFO] Next: bash scripts/run-dev-nvidia.sh" ;;
+  rocm) echo "[INFO] Next: bash scripts/run-dev-amd.sh" ;;
+  cpu) echo "[INFO] Next: bash scripts/run-dev-cpu.sh" ;;
+esac
 echo "[INFO] For a clean rebuild, remove $VENV_DIR and rerun this script."
 print_development_reminders

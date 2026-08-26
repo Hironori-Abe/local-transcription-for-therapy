@@ -1154,7 +1154,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly proofreadTicker = new RepeatingTimer();
   private readonly diarizationTicker = new RepeatingTimer();
   private readonly llmProofreadTicker = new RepeatingTimer();
-  /** セットアップ直後だけ使う、Linux NVIDIA向けの遅延GPU再確認。 */
+  /** セットアップ直後だけ使う、Linux CUDA/ROCm向けの遅延GPU再確認。 */
   private readonly delayedGpuRecheckTimer = new OneShotTimer();
   private llmProgressOffset = 0;
   private llmTotalProcessedCount = 0;
@@ -4191,8 +4191,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   /**
    * GPU 未検出バナー上の「GPU を再確認」ボタン用。
-   * CUDA を後から入れた場合の再判定を兼ねるが、最大の効果は「クリック＝変更検知が走る」こと。
-   * eventCoalescing 構成で描画が遅延し、CUDA 導入済みでもバナーが古いまま残るケースを、
+   * CUDA/ROCm を後から入れた場合の再判定を兼ねるが、最大の効果は「クリック＝変更検知が走る」こと。
+   * eventCoalescing 構成で描画が遅延し、GPU導入済みでもバナーが古いまま残るケースを、
    * アプリ再起動なしにその場で解消できる。
    */
   async recheckGpuRuntime(notify = true): Promise<void> {
@@ -4201,18 +4201,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       await this.checkGpuAvailability(true);
       await this.checkTranscriptionRuntimeSupport(
-        this.cudaAvailable() === true
+        this.cudaAvailable() === true || this.rocmAvailable() === true
       );
     } finally {
       this.gpuRechecking.set(false);
       this.cancelDelayedGpuRecheckIfResolved();
-      const unresolvedLinuxNvidia = shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState());
-      if (notify && unresolvedLinuxNvidia) {
+      const unresolvedLinuxGpu = shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState());
+      if (notify && unresolvedLinuxGpu) {
         // 手動確認でまだ初期化中の場合だけ、次の自動確認があることを伝える。
         // 自動確認自身からは通知せず、短い再試行を連続表示しない。
         this.scheduleDelayedGpuRecheckAfterSetup();
         this.snackBar.open(
-          'まだCUDAを確認できません。セットアップ直後は約1分後に自動再確認します。',
+          `まだ${this.runtimeBuildVariant() === 'rocm' ? 'ROCm' : 'CUDA'}を確認できません。セットアップ直後は約1分後に自動再確認します。`,
           undefined,
           { duration: 5000 }
         );
@@ -4227,6 +4227,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       platform: this.runtimePlatform(),
       buildVariant: this.runtimeBuildVariant(),
       cudaAvailable: this.cudaAvailable(),
+      rocmAvailable: this.rocmAvailable(),
       transcriptionRuntimeAvailable: this.transcriptionRuntimeAvailable(),
       noCudaEmulation: this.isNoCudaEmulation(),
     };
@@ -4239,8 +4240,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   /**
-   * セットアップ完了直後のCUDA初期化遅延を吸収するための安全網。
-   * 起動時には予約せず、Linux NVIDIAで未解決の場合だけ一度だけ実行する。
+   * セットアップ完了直後のCUDA/ROCm初期化遅延を吸収するための安全網。
+   * 起動時には予約せず、Linux GPU版で未解決の場合だけ一度だけ実行する。
    */
   private scheduleDelayedGpuRecheckAfterSetup(): void {
     const state = this.delayedGpuRecheckState();
@@ -5322,7 +5323,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.checkGpuAvailability(true);
     await this.checkAllSetupStatus();
     await this.checkTranscriptionRuntimeSupport(
-      this.cudaAvailable() === true
+      this.cudaAvailable() === true || this.rocmAvailable() === true
     );
     this.ngZone.run(() => this.activeTabIndex.set(0));
     // Tauri の invoke 完了は Angular のイベントループ外で解決することがある。
@@ -5457,12 +5458,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.setupRunning.set(false);
       });
       // モデル／バックエンドの導入後にCUDA/ROCm状態も再確認する。
-      // セットアップ直後の一時的なCUDA初期化失敗はRust側で限定的に再試行し、
+      // セットアップ直後の一時的なCUDA/ROCm初期化失敗はRust側で限定的に再試行し、
       // 警告とバックエンド選択を再起動なしで更新する。
       await this.checkGpuAvailability(true);
       await this.checkAllSetupStatus();
       await this.checkTranscriptionRuntimeSupport(
-        this.cudaAvailable() === true
+        this.cudaAvailable() === true || this.rocmAvailable() === true
       );
       if (setupTaskSucceeded) {
         this.scheduleDelayedGpuRecheckAfterSetup();

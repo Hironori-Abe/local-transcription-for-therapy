@@ -50,12 +50,22 @@ AMD GPU版は、GPU世代・OS・ROCm/ドライバーの組み合わせによる
 
 AMD GPU版の文字起こし・話者分離・内蔵AI処理はGPU実行を必須とし、GPU処理に失敗した場合はCPUへフォールバックせず、そのジョブを終了してダイアログで通知します。内蔵LLMのROCm経路だけは、ROCmで起動できない場合にVulkanへフォールバックします。
 
-WindowsのAMD開発環境は、NVIDIA用`.venv312`と分離された`.venv312-amd`へROCmを導入します。
+開発環境は OS と演算バックエンドを別々に選びます。Windows は `.bat`、Ubuntu / CachyOS・Archを
+含む Linux は `.sh` を使い、その上で `nvidia` / `amd` / `cpu` 専用入口を選択してください。
+共通の `setup-dev.*` / `run-dev.*` は CUDA を暗黙選択しない内部実装です。Python 環境も
+`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu` に分離されます。
 
 ```bat
 scripts\setup-dev-amd.bat
 scripts\run-dev-amd.bat
 ```
+
+```sh
+bash scripts/setup-dev-amd.sh
+bash scripts/run-dev-amd.sh
+```
+
+全エディションの組み合わせは [開発ガイド](docs/development.md#セットアップと開発起動) を参照してください。
 
 ## 動作環境（Full CUDA 版）
 

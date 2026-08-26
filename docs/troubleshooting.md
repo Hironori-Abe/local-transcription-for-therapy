@@ -82,6 +82,15 @@ tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'CUDA_HOM
 - ROCR が先にデバイスリストを絞り込んだ後、HIP が絞り込み済みのリストにアクセスするためインデックスがずれます。
 - 修正済み（`src-tauri/src/lib.rs` で `ROCR_VISIBLE_DEVICES` を削除、`HIP_VISIBLE_DEVICES` のみ設定）。
 
+## AMD ROCm: GPUは使えるのに「AMD GPU ランタイムが検出されませんでした」が消えない
+
+- `rocminfo`、CTranslate2、PyTorchを個別に実行すると成功するのにUIだけ未検出になる場合、
+  CTranslate2とPyTorchのROCm初期化を同じPythonプロセスで連続実行したことによる競合が原因でした。
+- 実運用の文字起こしと話者分離は別サイドカープロセスです。ランタイム確認も同じ構成に合わせ、
+  CTranslate2とPyTorchを別々のPythonプロセスで検査するよう修正済みです。
+- Linux CUDA版と同様に、AMD版でも「GPUを再確認」時のbounded retryと、セットアップ直後の
+  1回限りの遅延再確認を行います。再確認後はアプリを再起動せずUIへ反映されます。
+
 ## AMD ROCm: 話者分離が非常に遅い（旧世代 iGPU / Linux）
 
 - Radeon 780M / 旧890M（gfx1103）では MIOpen の対応カーネルが未収録のため、GPU 話者分離に失敗します。
@@ -98,7 +107,7 @@ tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'CUDA_HOM
 
 ```bash
 export HSA_OVERRIDE_GFX_VERSION=11.0.0
-bash scripts/run-dev.sh
+bash scripts/run-dev-amd.sh
 # 切り分け後
 unset HSA_OVERRIDE_GFX_VERSION
 ```
@@ -116,7 +125,7 @@ unset HSA_OVERRIDE_GFX_VERSION
 
 ## Linux 開発環境: MP3の再生開始時に固まる
 
-- 症状: `scripts/run-dev.sh` で起動した開発版へMP3を読み込み、区間再生を開始すると応答しなくなる。
+- 症状: `scripts/run-dev-{nvidia,amd,cpu}.sh` で起動した開発版へMP3を読み込み、区間再生を開始すると応答しなくなる。
 - 原因: WebKitGTKが利用するホストGStreamerに `gst-plugins-good` がなく、MP3先頭のID3タグを処理する `id3demux` や、配布方針で利用するLGPLデコーダが欠落している。MP3デコーダ単体が存在してもID3タグを剥がせず、WebKitGTKが `loadedmetadata` / `error` のどちらも返さない場合がある。
 - 確認方法:
 
@@ -124,7 +133,7 @@ unset HSA_OVERRIDE_GFX_VERSION
 gst-inspect-1.0 id3demux mpg123audiodec flacdec
 ```
 
-- 対策: ディストリビューションに応じて、以下のシステムパッケージを明示的に導入する。その後 `scripts/setup-dev.sh` を再実行し、`[OK] Verified Linux audio playback dependencies` が表示されてから `scripts/run-dev.sh` を起動する。セットアップは不足を検出した場合、システムを自動変更せず、必要なコマンドを表示して停止する。
+- 対策: ディストリビューションに応じて、以下のシステムパッケージを明示的に導入する。その後、使用中のバックエンドに対応する `scripts/setup-dev-nvidia.sh` / `setup-dev-amd.sh` / `setup-dev-cpu.sh` を再実行し、`[OK] Verified Linux audio playback dependencies` が表示されてから同じバックエンドの `run-dev-*.sh` を起動する。セットアップは不足を検出した場合、システムを自動変更せず、必要なコマンドを表示して停止する。
 
 ```sh
 # CachyOS / Arch
@@ -143,10 +152,10 @@ CodexやVS Codeなど、権限昇格を禁止したサンドボックス内か�
 ```sh
 grep NoNewPrivs /proc/self/status
 cd /home/seitoku/Code/local-transcription-for-therapy
-bash scripts/setup-dev.sh
+bash scripts/setup-dev-amd.sh  # このPCがAMD開発機の場合
 ```
 
-`setup-dev.sh` は `NoNewPrivs=1` を `sudo` 実行前に検出し、実行可能な端末へ移るよう案内して停止する。
+各 `setup-dev-*.sh` の共通実装は `NoNewPrivs=1` を `sudo` 実行前に検出し、実行可能な端末へ移るよう案内して停止する。
 
 ## Linux AppImage: 音声ファイルを選んだ直後に固まる
 

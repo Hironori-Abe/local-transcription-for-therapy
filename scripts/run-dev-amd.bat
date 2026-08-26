@@ -4,8 +4,16 @@ setlocal EnableExtensions
 
 cd /d "%~dp0\.."
 
+call "%~dp0sanitize-dev-env.bat" amd
+if errorlevel 1 goto :err_environment
+
+set "LOTT_DEV_VARIANT=amd"
+set "LOTT_TORCH_BACKEND=rocm"
+set "CUDA_HOME="
+set "CUDA_PATH="
+set "CUDA_VISIBLE_DEVICES="
+set "CUDNN_PATH="
 set "FRONTEND_URL=http://127.0.0.1:4201"
-set "AMD_TAURI_CONFIG=tauri.amd.windows.override.json"
 set "AMD_TAURI_DEV_CONFIG=tauri.amd.dev.windows.override.json"
 if "%LOTT_AMD_DEV_PYTHON_BIN%"=="" (
   set "AMD_PYTHON_BIN=%cd%\.venv312-amd\Scripts\python.exe"
@@ -23,8 +31,9 @@ where cargo >nul 2>&1
 if errorlevel 1 goto :err_cargo
 
 if not exist "%AMD_PYTHON_BIN%" goto :err_python
+"%AMD_PYTHON_BIN%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >nul 2>&1
+if errorlevel 1 goto :err_python_version
 
-if not exist "%AMD_TAURI_CONFIG%" goto :err_config
 if not exist "%AMD_TAURI_DEV_CONFIG%" goto :err_config
 
 call :check_frontend
@@ -50,11 +59,11 @@ echo [OK] Angular AMD dev server is ready: %FRONTEND_URL%
 :start_tauri
 echo Starting Tauri dev for AMD...
 echo FRONTEND_URL=%FRONTEND_URL%
-echo Tauri configs=%AMD_TAURI_CONFIG%, %AMD_TAURI_DEV_CONFIG%
+echo Tauri config=%AMD_TAURI_DEV_CONFIG%
 echo PYTHON_BIN=%PYTHON_BIN%
 echo DIARIZATION_PYTHON_BIN=%DIARIZATION_PYTHON_BIN%
 echo [INFO] Select the AMD integrated GPU in Settings after launch.
-call npm run tauri:dev -- --config "%AMD_TAURI_CONFIG%" --config "%AMD_TAURI_DEV_CONFIG%"
+call npm run tauri:dev -- --config "%AMD_TAURI_DEV_CONFIG%"
 if errorlevel 1 goto :err_tauri
 exit /b 0
 
@@ -63,7 +72,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebReq
 exit /b %ERRORLEVEL%
 
 :err_npm
-echo [ERROR] npm was not found. Please run scripts\setup-dev.bat --amd first.
+echo [ERROR] npm was not found. Please run scripts\setup-dev-amd.bat first.
 exit /b 1
 
 :err_cargo
@@ -77,9 +86,19 @@ echo         Create the separate AMD environment before launching this command.
 echo         To use another path, set LOTT_AMD_DEV_PYTHON_BIN before launch.
 exit /b 1
 
+:err_python_version
+echo [ERROR] AMD development Python must be Python 3.12:
+echo         %AMD_PYTHON_BIN%
+echo         Run scripts\setup-dev-amd.bat to recreate the AMD-specific environment.
+exit /b 1
+
+:err_environment
+echo [ERROR] Could not sanitize inherited CUDA/ROCm environment for AMD.
+echo         PowerShell is required to start the isolated development backend.
+exit /b 1
+
 :err_config
 echo [ERROR] AMD Tauri override was not found.
-echo         %AMD_TAURI_CONFIG%
 echo         %AMD_TAURI_DEV_CONFIG%
 exit /b 1
 

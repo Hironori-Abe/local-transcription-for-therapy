@@ -224,8 +224,10 @@ echo.
 
 :: --- Collect third-party license texts ---
 echo [INFO] Collecting third-party license texts...
-set "LICENSE_VENV=.venv312"
+set "LICENSE_VENV=.venv312-nvidia"
 if /I "%BUILD_VARIANT%"=="amd" set "LICENSE_VENV=.venv312-amd"
+if /I "%BUILD_VARIANT%"=="cpu" set "LICENSE_VENV=.venv312-cpu"
+if /I "%BUILD_VARIANT%"=="editor" set "LICENSE_VENV=.venv312-cpu"
 if exist "%LICENSE_VENV%\Lib\site-packages" (
   "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --venv "%LICENSE_VENV%" --frontend frontend --tauri src-tauri --out licenses
   if errorlevel 1 (

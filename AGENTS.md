@@ -79,8 +79,9 @@
 推奨フロー:
 
 ```bat
-scripts\setup-dev.bat
-scripts\run-dev.bat
+scripts\setup-dev-nvidia.bat  & scripts\run-dev-nvidia.bat
+scripts\setup-dev-amd.bat     & scripts\run-dev-amd.bat
+scripts\setup-dev-cpu.bat     & scripts\run-dev-cpu.bat
 ```
 
 前提環境:
@@ -98,13 +99,14 @@ scripts\run-dev.bat
 推奨フロー:
 
 ```sh
-bash scripts/setup-dev.sh
-bash scripts/run-dev.sh
+bash scripts/setup-dev-nvidia.sh  # または setup-dev-amd.sh / setup-dev-cpu.sh
+bash scripts/run-dev-nvidia.sh    # または run-dev-amd.sh / run-dev-cpu.sh
 ```
 
 補足:
 
-- `setup-dev.sh` は Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存の準備を担う
+- 共通の `setup-dev.sh` / `run-dev.sh` は内部実装であり、直接実行時はバックエンドを暗黙選択しない。OSに対応する `*-nvidia` / `*-amd` / `*-cpu` 専用入口を使う
+- Linux の Python venv と環境ファイルはバックエンド別（`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu`、`.dev-linux-cuda.env` / `.dev-linux-rocm.env` / `.dev-linux-cpu.env`）に分離する
 - Ubuntu / Linux では Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先する
 - Linux NVIDIA版の実行時はCUDA Toolkitではなく、ホストNVIDIAドライバーと`nvidia-utils`を使う。Linux CUDA llama-serverは配布ビルド時に専用CUDA develコンテナで生成する
 - ROCm / AMD 検証は experimental。gfx1150（Radeon 890M）では文字起こし・話者分離ともに GPU 動作確認済み（50 分音声も完走）

@@ -54,12 +54,24 @@ Compatibility varies substantially across GPU generations, operating systems, RO
 
 The AMD GPU edition requires GPU execution for transcription, speaker diarization, and built-in AI processing. If GPU processing fails, the job stops and a dialog reports the failure; it does not fall back to CPU. The only permitted fallback is from ROCm to Vulkan for the built-in LLM when its ROCm path cannot start.
 
-On Windows, the AMD development setup installs ROCm into `.venv312-amd`, isolated from the NVIDIA `.venv312`.
+Choose the development entry point along two independent axes: OS and compute backend. Use
+the `.bat` scripts on Windows and the `.sh` scripts on Linux, including Ubuntu and
+CachyOS/Arch, then select the dedicated `nvidia`, `amd`, or `cpu` entry point. The shared
+`setup-dev.*` and `run-dev.*` files are internal implementations and never silently select
+CUDA. Python environments are isolated as `.venv312-nvidia`, `.venv312-amd`, and
+`.venv312-cpu`.
 
 ```bat
 scripts\setup-dev-amd.bat
 scripts\run-dev-amd.bat
 ```
+
+```sh
+bash scripts/setup-dev-amd.sh
+bash scripts/run-dev-amd.sh
+```
+
+See the [development guide](docs/development.md#セットアップと開発起動) for every edition/OS combination.
 
 ## Requirements (Full CUDA Edition)
 

@@ -4,8 +4,14 @@ setlocal EnableExtensions
 
 cd /d "%~dp0\.."
 
-set "PYTHON_BIN=py"
-if exist ".venv312\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312\Scripts\python.exe"
+call "%~dp0sanitize-dev-env.bat" nvidia
+if errorlevel 1 goto :err_environment
+
+if /I not "%LOTT_DEV_VARIANT%"=="nvidia" goto :err_entrypoint
+set "LOTT_TORCH_BACKEND=cuda"
+
+if not defined PYTHON_BIN set "PYTHON_BIN=py"
+if not defined LOTT_NVIDIA_DEV_PYTHON_BIN if exist ".venv312-nvidia\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312-nvidia\Scripts\python.exe"
 set "CUDA_HINT_1=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin"
 set "CUDA_HINT_2=C:\Program Files\NVIDIA\CUDNN\v9.20\bin\12.9\x64"
 set "EMULATION_MODE=none"
@@ -35,6 +41,11 @@ if errorlevel 1 goto :err_cargo
 echo Python preflight:
 call %PYTHON_BIN% -c "import sys; print('executable=', sys.executable); print('version=', sys.version)"
 if errorlevel 1 goto :err_py_preflight
+set "PYTHON_VERSION="
+set "PYTHON_MAJOR_MINOR="
+for /f "tokens=2" %%V in ('"%PYTHON_BIN%" -VV 2^>nul') do if not defined PYTHON_VERSION set "PYTHON_VERSION=%%V"
+for /f "tokens=1,2 delims=." %%A in ("%PYTHON_VERSION%") do set "PYTHON_MAJOR_MINOR=%%A.%%B"
+if not "%PYTHON_MAJOR_MINOR%"=="3.12" goto :err_python_version
 
 set "CUDA_READY=1"
 if /I "%EMULATION_MODE%"=="no_cuda" (
@@ -112,7 +123,7 @@ timeout /t 8 >nul
 echo Starting Tauri dev...
 echo PYTHON_BIN=%PYTHON_BIN%
 echo LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%
-call npm run tauri:dev -- --config tauri.dev.windows.override.json
+call npm run tauri:dev -- --config tauri.nvidia.dev.windows.override.json
 if errorlevel 1 goto :err_tauri
 
 echo.
@@ -120,13 +131,21 @@ echo [INFO] tauri:dev command returned without an error code.
 goto :hold_success
 
 :err_npm
-echo [ERROR] npm was not found. Please run scripts\setup-dev.bat first.
+echo [ERROR] npm was not found. Please run scripts\setup-dev-nvidia.bat first.
 goto :hold_error
+
+:err_entrypoint
+echo [ERROR] Windows development variant was not selected; refusing to default to NVIDIA/CUDA.
+echo         Use one of:
+echo           scripts\run-dev-nvidia.bat
+echo           scripts\run-dev-amd.bat
+echo           scripts\run-dev-cpu.bat
+exit /b 2
 
 :err_py
 echo [ERROR] Python launcher "%PYTHON_BIN%" was not found.
-echo         Please run scripts\setup-dev.bat first.
-echo         Recommended runtime is .venv312\Scripts\python.exe
+echo         Please run scripts\setup-dev-nvidia.bat first.
+echo         Recommended runtime is .venv312-nvidia\Scripts\python.exe
 goto :hold_error
 
 :err_cargo
@@ -150,6 +169,17 @@ goto :hold_error
 
 :err_py_preflight
 echo [ERROR] Python preflight failed.
+goto :hold_error
+
+:err_python_version
+echo [ERROR] NVIDIA development Python 3.12 is required.
+echo         Selected: %PYTHON_BIN% ^(%PYTHON_VERSION%^)
+echo         Recreate .venv312-nvidia with Python 3.12 or set LOTT_NVIDIA_DEV_PYTHON_BIN.
+goto :hold_error
+
+:err_environment
+echo [ERROR] Could not sanitize inherited CUDA/ROCm environment for NVIDIA.
+echo         PowerShell is required to start the isolated development backend.
 goto :hold_error
 
 :err_tauri

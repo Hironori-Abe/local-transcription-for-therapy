@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+set "LOTT_DEV_VARIANT=amd"
 
 REM Dedicated AMD entry point. Keep the generic venv override out of this
 REM process so ROCm packages can never be redirected into the NVIDIA venv.

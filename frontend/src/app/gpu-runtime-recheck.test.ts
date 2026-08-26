@@ -12,6 +12,7 @@ const linuxNvidia: DelayedGpuRecheckState = {
   platform: 'linux',
   buildVariant: 'cuda',
   cudaAvailable: false,
+  rocmAvailable: false,
   transcriptionRuntimeAvailable: false,
   noCudaEmulation: false
 };
@@ -31,10 +32,20 @@ test('delayed GPU recheck is a single one-minute safety net for unresolved Linux
   }), false);
 });
 
-test('delayed GPU recheck is disabled for Windows, AMD, CPU, and emulation', () => {
+test('delayed GPU recheck supports Linux AMD and is disabled for Windows, CPU, and emulation', () => {
+  assert.equal(shouldScheduleDelayedGpuRecheck({
+    ...linuxNvidia,
+    buildVariant: 'rocm',
+    rocmAvailable: false
+  }), true);
+  assert.equal(shouldScheduleDelayedGpuRecheck({
+    ...linuxNvidia,
+    buildVariant: 'rocm',
+    rocmAvailable: true,
+    transcriptionRuntimeAvailable: true
+  }), false);
   for (const state of [
     { ...linuxNvidia, platform: 'windows' as const },
-    { ...linuxNvidia, buildVariant: 'rocm' as const },
     { ...linuxNvidia, buildVariant: 'cpu' as const },
     { ...linuxNvidia, noCudaEmulation: true }
   ]) {
@@ -53,4 +64,10 @@ test('GPU runtime is resolved only when both CUDA and transcription probes succe
     ...linuxNvidia,
     transcriptionRuntimeAvailable: true
   }), false);
+  assert.equal(isGpuRuntimeResolved({
+    ...linuxNvidia,
+    buildVariant: 'rocm',
+    rocmAvailable: true,
+    transcriptionRuntimeAvailable: true
+  }), true);
 });

@@ -14,24 +14,24 @@
 #  【.deb ビルド】（GPU・GUI 不要）
 #    bash scripts/run-dev-docker-ubuntu.sh
 #    # コンテナ内で:
-#    bash scripts/setup-dev.sh --skip-gemma -y   # 初回のみ（Rust/Node/Python 導入）
+#    bash scripts/setup-dev-cpu.sh --skip-gemma -y   # 初回のみ（Rust/Node/Python 導入）
 #    bash scripts/setup-build-tools-linux.sh    # .deb を生成
 #    # → src-tauri/target/release/bundle/deb/ に .deb が出る
 #
 #  【Tauri GUI テスト】（Wayland/X11 表示転送）
 #    bash scripts/run-dev-docker-ubuntu.sh --gui
 #    # コンテナ内で:
-#    bash scripts/setup-dev.sh --skip-gemma -y   # 初回のみ
-#    bash scripts/run-dev.sh                     # Tauri dev サーバー起動
+#    bash scripts/setup-dev-cpu.sh --skip-gemma -y   # 初回のみ
+#    bash scripts/run-dev-cpu.sh                     # Tauri dev サーバー起動
 #
 #  【AMD GPU テスト込み】
 #    bash scripts/run-dev-docker-ubuntu.sh --gui --gpu
-#    # コンテナ内で setup-dev.sh --amd を実行してから run-dev.sh
+#    # コンテナ内で setup-dev-amd.sh を実行してから run-dev-amd.sh
 #
 #  【2回目以降】
 #    cargo ツールチェーンは lott-ubuntu-cargo volume に残るため
 #    setup-dev.sh の Rust インストールステップはスキップされる。
-#    .venv312・node_modules はワークスペース内に保存されるため同様に再利用可。
+#    バックエンド別 .venv312-*・node_modules はワークスペース内に保存されるため同様に再利用可。
 #
 # ──────────────────────────────────────────────────────────────────────────────
 

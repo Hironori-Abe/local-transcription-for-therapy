@@ -5177,13 +5177,20 @@ fn get_python_bin(_app: &AppHandle) -> String {
         }
     }
 
-    // 2. Windows: dev では .venv312、production では resources/python312
+    // 2. Windows: dev では edition 別 venv、production では resources/python312
     #[cfg(target_os = "windows")]
     {
         if cfg!(debug_assertions) {
+            let dev_venv = if is_amd_gpu_build(_app) {
+                ".venv312-amd"
+            } else if is_cpu_only_build(_app) {
+                ".venv312-cpu"
+            } else {
+                ".venv312-nvidia"
+            };
             let dev_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
-                .join(".venv312")
+                .join(dev_venv)
                 .join("Scripts")
                 .join("python.exe");
             if dev_candidate.exists() {
@@ -7115,20 +7122,46 @@ fn runtime_component_failure_reason(value: Option<&Value>, label: &str) -> Strin
     }
 }
 
+fn run_gpu_runtime_probe_component(
+    app: &AppHandle,
+    python_bin: &str,
+    script: &str,
+) -> Result<Value, String> {
+    let mut cmd = Command::new(python_bin);
+    apply_windows_no_window(&mut cmd);
+    configure_python_command(app, python_bin, &mut cmd);
+    cmd.env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg("-c")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_child_runtime_env(&mut cmd, "cuda", None);
+
+    let output = cmd
+        .output()
+        .map_err(|_| "GPU ランタイム確認のためのPythonを起動できませんでした。".to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_gpu_runtime_probe(&stdout).unwrap_or_else(|| {
+        serde_json::json!({
+            "available": false,
+            "error": if output.status.success() {
+                "invalid_result"
+            } else {
+                "process_failed"
+            },
+        })
+    }))
+}
+
 fn check_transcription_runtime_support_blocking(
     app: AppHandle,
     retry: bool,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
-    // A package/model install can finish while the first CUDA context
-    // initialization is still settling. Retry only on Linux, where this is a
-    // known condition for the native NVIDIA package; Windows keeps the
-    // previous single-probe behavior.
-    if retry
-        && cfg!(target_os = "linux")
-        && !is_cpu_only_build(&app)
-        && !is_amd_gpu_build(&app)
-        && !should_emulate_no_cuda()
-    {
+    // A package/model install can finish while the first CUDA/ROCm context
+    // initialization is still settling. Retry Linux GPU editions only;
+    // Windows keeps the previous single-probe behavior.
+    if retry && cfg!(target_os = "linux") && !is_cpu_only_build(&app) && !should_emulate_no_cuda() {
         // A missing/unfinished Linux Python setup is deterministic and should
         // not spend the retry budget waiting for packages that are not there.
         // Once the completion marker and required modules exist, transient
@@ -7263,88 +7296,63 @@ fn check_transcription_runtime_support_once(
         }
     }
 
-    // 文字起こし（CTranslate2）と話者分離（PyTorch）は別の GPU ランタイムを使う。
-    // 片方の import/初期化失敗だけで全体を「torch の CUDA が無い」と誤診しないよう、
-    // 各コンポーネントを独立して検査する。例外本文はJSONへ入れず、状態コードだけ返す。
-    const GPU_RUNTIME_PROBE_SCRIPT: &str = r#"
+    // 文字起こし（CTranslate2）と話者分離（PyTorch）は実運用でも別プロセスで動く。
+    // ROCmでは同一Pythonプロセス内でCTranslate2を先に初期化すると、その後の
+    // torch.cuda初期化が失敗する構成があるため、検出も別プロセスへ分離する。
+    // 片方の初期化がもう片方を汚染せず、実際のサイドカー構成と同じ条件になる。
+    const CTRANSLATE2_GPU_RUNTIME_PROBE_SCRIPT: &str = r#"
 import json
-
-result = {
-    "ctranslate2": {"available": False, "error": "not_installed"},
-    "torch": {"available": False, "error": "not_installed", "hip": False},
-}
-
+result = {"available": False, "error": "not_installed"}
 try:
     import ctranslate2 as ct
     try:
         device_count = int(ct.get_cuda_device_count())
         compute_types = sorted(str(value) for value in ct.get_supported_compute_types("cuda"))
-        result["ctranslate2"] = {
+        result = {
             "available": device_count > 0 and bool(compute_types),
             "deviceCount": device_count,
             "computeTypes": compute_types,
             "error": None if device_count > 0 and bool(compute_types) else "no_device",
         }
     except Exception:
-        result["ctranslate2"] = {"available": False, "error": "runtime_error"}
+        result = {"available": False, "error": "runtime_error"}
 except ModuleNotFoundError:
-    result["ctranslate2"] = {"available": False, "error": "not_installed"}
+    result = {"available": False, "error": "not_installed"}
 except Exception:
-    result["ctranslate2"] = {"available": False, "error": "runtime_error"}
+    result = {"available": False, "error": "runtime_error"}
+print(json.dumps(result, ensure_ascii=False))
+"#;
 
+    const TORCH_GPU_RUNTIME_PROBE_SCRIPT: &str = r#"
+import json
+result = {"available": False, "error": "not_installed", "hip": False}
 try:
     import torch
     hip = bool(getattr(torch.version, "hip", None))
     try:
         torch_available = bool(torch.cuda.is_available())
         device_count = int(torch.cuda.device_count()) if torch_available else 0
-        result["torch"] = {
+        result = {
             "available": torch_available and device_count > 0,
             "deviceCount": device_count,
             "hip": hip,
             "error": None if torch_available and device_count > 0 else "no_device",
         }
     except Exception:
-        result["torch"] = {"available": False, "error": "runtime_error", "hip": hip}
+        result = {"available": False, "error": "runtime_error", "hip": hip}
 except ModuleNotFoundError:
-    result["torch"] = {"available": False, "error": "not_installed", "hip": False}
+    result = {"available": False, "error": "not_installed", "hip": False}
 except Exception:
-    result["torch"] = {"available": False, "error": "runtime_error", "hip": False}
-
+    result = {"available": False, "error": "runtime_error", "hip": False}
 print(json.dumps(result, ensure_ascii=False))
 "#;
-    let mut cmd = Command::new(&python_bin);
-    apply_windows_no_window(&mut cmd);
-    configure_python_command(&app, &python_bin, &mut cmd);
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg("-c")
-        .arg(GPU_RUNTIME_PROBE_SCRIPT)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
 
-    apply_child_runtime_env(&mut cmd, "cuda", None);
-
-    let output = cmd.output().map_err(|e| {
-        let _ = e;
-        "GPU ランタイム確認のためのPythonを起動できませんでした。".to_string()
-    })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(parsed) = parse_gpu_runtime_probe(&stdout) else {
-        return Ok(TranscriptionRuntimeStatusResponse {
-            available: false,
-            reason: if output.status.success() {
-                "GPU ランタイム確認の結果を取得できませんでした。セットアップを再実行してください。"
-                    .to_string()
-            } else {
-                "GPU ランタイム確認の実行に失敗しました。アプリ専用Python環境を確認してください。"
-                    .to_string()
-            },
-        });
-    };
-
-    let asr = parsed.get("ctranslate2");
-    let diarization = parsed.get("torch");
+    let asr_probe =
+        run_gpu_runtime_probe_component(&app, &python_bin, CTRANSLATE2_GPU_RUNTIME_PROBE_SCRIPT)?;
+    let diarization_probe =
+        run_gpu_runtime_probe_component(&app, &python_bin, TORCH_GPU_RUNTIME_PROBE_SCRIPT)?;
+    let asr = Some(&asr_probe);
+    let diarization = Some(&diarization_probe);
     let asr_available = asr
         .and_then(|value| value.get("available"))
         .and_then(Value::as_bool)
@@ -7354,8 +7362,8 @@ print(json.dumps(result, ensure_ascii=False))
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let is_amd = is_amd_gpu_build(&app)
-        || diarization
-            .and_then(|value| value.get("hip"))
+        || diarization_probe
+            .get("hip")
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let nvidia_smi = if is_amd {
@@ -14325,13 +14333,10 @@ sys.exit(0 if ok else 1)"#,
 
     #[cfg(target_os = "windows")]
     {
-        // dev: .venv312 があれば OK
+        // dev: 専用 launcher が選んだ backend-specific Python を使う。
+        // PYTHON_BIN が無い場合も get_python_bin の identifier 別 fallback に限定する。
         if cfg!(debug_assertions) {
-            let dev_python = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join(".venv312")
-                .join("Scripts")
-                .join("python.exe");
+            let dev_python = PathBuf::from(get_python_bin(_app));
             if dev_python.exists() {
                 return (true, dev_python.to_string_lossy().to_string());
             }
@@ -14518,33 +14523,44 @@ fn setup_python_venv_blocking(_app: &AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let resource_dir = _app
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
-        let bundled_python = ["resources/python312", "python312"]
-            .iter()
-            .map(|s| resource_dir.join(s).join("python.exe"))
-            .find(|p| p.exists())
-            .ok_or_else(|| {
-                format!(
-                    "同梱 Python が見つかりません: {}",
-                    resource_dir
-                        .join("resources")
-                        .join("python312")
-                        .join("python.exe")
-                        .display()
-                )
-            })?;
-
-        strip_python312_pth_bom(_app);
+        let setup_python = if cfg!(debug_assertions) {
+            let selected = PathBuf::from(get_python_bin(_app));
+            if !selected.exists() {
+                return Err(format!(
+                    "開発用 Python が見つかりません: {}。対応する setup-dev-*.bat を先に実行してください。",
+                    selected.display()
+                ));
+            }
+            selected
+        } else {
+            let resource_dir = _app
+                .path()
+                .resource_dir()
+                .map_err(|e| format!("resource_dir 解決に失敗: {e}"))?;
+            let bundled = ["resources/python312", "python312"]
+                .iter()
+                .map(|s| resource_dir.join(s).join("python.exe"))
+                .find(|p| p.exists())
+                .ok_or_else(|| {
+                    format!(
+                        "同梱 Python が見つかりません: {}",
+                        resource_dir
+                            .join("resources")
+                            .join("python312")
+                            .join("python.exe")
+                            .display()
+                    )
+                })?;
+            strip_python312_pth_bom(_app);
+            bundled
+        };
 
         let script_path = resolve_setup_venv_script_path(_app)?;
         let req_path = resolve_requirements_runtime_path(_app)?;
 
-        let mut cmd = Command::new(&bundled_python);
+        let mut cmd = Command::new(&setup_python);
         apply_windows_no_window(&mut cmd);
-        configure_python_command(_app, &bundled_python.to_string_lossy(), &mut cmd);
+        configure_python_command(_app, &setup_python.to_string_lossy(), &mut cmd);
         let variant =
             python_setup_variant(_app.config().identifier.as_str(), is_cpu_only_build(_app));
         cmd.env("PYTHONUTF8", "1")

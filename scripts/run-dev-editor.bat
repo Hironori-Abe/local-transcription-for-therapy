@@ -4,7 +4,7 @@ setlocal EnableExtensions
 
 cd /d "%~dp0\.."
 
-set "FRONTEND_URL=http://127.0.0.1:4201"
+set "FRONTEND_URL=http://127.0.0.1:4203"
 set "EDITOR_TAURI_CONFIG=tauri.editor.windows.override.json"
 set "EDITOR_TAURI_DEV_CONFIG=tauri.editor.dev.windows.override.json"
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
@@ -25,7 +25,7 @@ if not errorlevel 1 (
 )
 
 echo Starting Angular dev server for Editor in background...
-start "LoTT Editor Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4201 --build-target offline-transcriber:build:development,editor"
+start "LoTT Editor Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4203 --build-target offline-transcriber:build:development,editor"
 
 echo Waiting for frontend startup: %FRONTEND_URL%
 for /l %%i in (1,1,60) do (

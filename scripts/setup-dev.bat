@@ -8,7 +8,7 @@ set "ASSUME_YES=0"
 set "GEMMA_OPTION_EXPLICIT=0"
 set "SKIP_GEMMA=0"
 
-REM GPU backend: cuda (default, stable) / rocm (experimental) / cpu
+REM GPU backend is fixed by setup-dev-nvidia/amd/cpu.bat.
 set "TORCH_BACKEND=%LOTT_TORCH_BACKEND%"
 REM Windows AMD defaults: ROCm 7.14 multi-arch wheels for Radeon 780M (gfx1103).
 REM These variables are consumed only by the isolated AMD/ROCm branch.
@@ -64,6 +64,19 @@ echo [ERROR] Unknown option: %~1
 goto show_help
 :args_done
 
+if not defined LOTT_DEV_VARIANT (
+  echo [ERROR] Windows development variant was not selected; refusing to default to NVIDIA/CUDA.
+  echo         Use one of:
+  echo           scripts\setup-dev-nvidia.bat
+  echo           scripts\setup-dev-amd.bat
+  echo           scripts\setup-dev-cpu.bat
+  exit /b 2
+)
+if /I "%LOTT_DEV_VARIANT%"=="nvidia" if /I not "%TORCH_BACKEND%"=="cuda" goto :variant_mismatch
+if /I "%LOTT_DEV_VARIANT%"=="amd" if /I not "%TORCH_BACKEND%"=="rocm" goto :variant_mismatch
+if /I "%LOTT_DEV_VARIANT%"=="cpu" if /I not "%TORCH_BACKEND%"=="cpu" goto :variant_mismatch
+if /I not "%LOTT_DEV_VARIANT%"=="nvidia" if /I not "%LOTT_DEV_VARIANT%"=="amd" if /I not "%LOTT_DEV_VARIANT%"=="cpu" goto :variant_mismatch
+
 echo === Local Transcription for Therapy: Safe Development Setup ===
 echo This script uses cmd.exe only.
 echo.
@@ -100,7 +113,7 @@ if /I "%TORCH_BACKEND%"=="cpu" if "%GEMMA_OPTION_EXPLICIT%"=="0" set "SKIP_GEMMA
 REM Keep the experimental AMD/ROCm Python packages isolated from the stable
 REM NVIDIA/CUDA development environment. AMD deliberately ignores the generic
 REM LOTT_DEV_VENV_DIR override so a shell-wide setting cannot redirect ROCm
-REM packages into .venv312. Use the AMD-specific override when needed.
+REM packages into .venv312-nvidia. Use the AMD-specific override when needed.
 if /I "%TORCH_BACKEND%"=="rocm" (
   if defined LOTT_AMD_DEV_VENV_DIR (
     set "DEV_VENV_DIR=%LOTT_AMD_DEV_VENV_DIR%"
@@ -109,11 +122,13 @@ if /I "%TORCH_BACKEND%"=="rocm" (
   )
 ) else if defined LOTT_DEV_VENV_DIR (
   set "DEV_VENV_DIR=%LOTT_DEV_VENV_DIR%"
+) else if /I "%TORCH_BACKEND%"=="cuda" (
+  set "DEV_VENV_DIR=.venv312-nvidia"
 ) else (
-  set "DEV_VENV_DIR=.venv312"
+  set "DEV_VENV_DIR=.venv312-cpu"
 )
 for %%I in ("!DEV_VENV_DIR!") do set "DEV_VENV_DIR_ABS=%%~fI"
-for %%I in ("%cd%\.venv312") do set "NVIDIA_VENV_DIR_ABS=%%~fI"
+for %%I in ("%cd%\.venv312-nvidia") do set "NVIDIA_VENV_DIR_ABS=%%~fI"
 if /I "%TORCH_BACKEND%"=="rocm" if /I "!DEV_VENV_DIR_ABS!"=="!NVIDIA_VENV_DIR_ABS!" (
   echo [ERROR] Refusing to install ROCm packages into the NVIDIA venv:
   echo         !NVIDIA_VENV_DIR_ABS!
@@ -125,7 +140,11 @@ REM Some development PCs no longer have Python 3.12 registered in py.exe even
 REM though the existing NVIDIA venv still uses it. For AMD setup, that Python
 REM executable may safely create a new empty venv; installed CUDA packages are
 REM not copied into the new environment.
-if /I "%TORCH_BACKEND%"=="rocm" if exist "%cd%\.venv312\Scripts\python.exe" (
+if /I "%TORCH_BACKEND%"=="rocm" if exist "%cd%\.venv312-nvidia\Scripts\python.exe" (
+  set "PYTHON_BOOTSTRAP=%cd%\.venv312-nvidia\Scripts\python.exe"
+  set "PYTHON_BOOTSTRAP_ARGS="
+)
+if /I "%TORCH_BACKEND%"=="rocm" if not exist "%cd%\.venv312-nvidia\Scripts\python.exe" if exist "%cd%\.venv312\Scripts\python.exe" (
   set "PYTHON_BOOTSTRAP=%cd%\.venv312\Scripts\python.exe"
   set "PYTHON_BOOTSTRAP_ARGS="
 )
@@ -207,7 +226,7 @@ if errorlevel 1 goto :fail
 goto :python_modules_check
 
 :torch_cpu
-echo [WARN] Installing default CPU PyTorch wheels. The app default remains CUDA.
+echo [INFO] Installing default CPU PyTorch wheels for the CPU development edition.
 set "HAS_WARN=1"
 call %PYTHON_BIN% -m pip install --upgrade --force-reinstall --prefer-binary "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
 goto :torch_done
@@ -447,9 +466,15 @@ if errorlevel 1 (
   echo [WARN] torchaudio is not available.
   set "HAS_WARN=1"
 )
-call %PYTHON_BIN% -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())"
+if /I "%TORCH_BACKEND%"=="rocm" (
+  call %PYTHON_BIN% -c "import torch; print('torch_hip=', torch.version.hip); print('torch_rocm_available=', torch.cuda.is_available()); print('torch_rocm_device_count=', torch.cuda.device_count())"
+) else if /I "%TORCH_BACKEND%"=="cpu" (
+  call %PYTHON_BIN% -c "import torch; print('torch_cpu_backend=', torch.version.cuda is None and getattr(torch.version, 'hip', None) is None)"
+) else (
+  call %PYTHON_BIN% -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())"
+)
 if errorlevel 1 (
-  echo [WARN] torch CUDA summary failed.
+  echo [WARN] torch backend summary failed.
   set "HAS_WARN=1"
 )
 call %PYTHON_BIN% -c "import importlib.metadata as m; print('pyannote.audio=', m.version('pyannote.audio'))"
@@ -466,6 +491,7 @@ if exist "python_sidecar\models\pyannote-speaker-diarization-community-1\config.
   echo       python_sidecar\models\pyannote-speaker-diarization-community-1
   echo [INFO] It will be downloaded when diarization setup is executed.
 )
+if /I not "%TORCH_BACKEND%"=="cuda" goto :after_doctor_nvidia
 where nvidia-smi >nul 2>&1
 if errorlevel 1 (
   echo [INFO] nvidia-smi not available.
@@ -482,12 +508,22 @@ if errorlevel 1 (
   echo [WARN] ctranslate2 CUDA summary failed.
   set "HAS_WARN=1"
 )
+:after_doctor_nvidia
+if /I "%TORCH_BACKEND%"=="rocm" (
+  call %PYTHON_BIN% -c "import ctranslate2 as ct; print('ct2_rocm_version=', ct.__version__)"
+  if errorlevel 1 (
+    echo [WARN] ctranslate2 ROCm summary failed.
+    set "HAS_WARN=1"
+  )
+)
 echo [INFO] LLM backend: llama.cpp llama-server direct launch.
+if /I not "%TORCH_BACKEND%"=="rocm" goto :after_doctor_amd
 where xrt-smi >nul 2>&1
 if not errorlevel 1 (
   echo [INFO] AMD NPU xrt-smi status:
   xrt-smi examine
 )
+:after_doctor_amd
 echo.
 
 echo Setup completed.
@@ -504,25 +540,28 @@ echo.
 if /I "%TORCH_BACKEND%"=="rocm" (
   echo [INFO] AMD venv is isolated from the NVIDIA venv:
   echo        AMD:    %DEV_VENV_DIR_ABS%
-  echo        NVIDIA: %cd%\.venv312
-  echo Next: npm run tauri:dev:amd
+  echo        NVIDIA: %cd%\.venv312-nvidia
+  echo Next: scripts\run-dev-amd.bat
 ) else if /I "%TORCH_BACKEND%"=="cpu" (
   echo [INFO] CPU development skips Gemma by default. Use --with-gemma to install it.
-  echo [INFO] To rebuild the venv from scratch:
-  echo        scripts\rebuild-runtime-venv.bat
+  echo [INFO] To rebuild the venv from scratch, remove %DEV_VENV_DIR_ABS% and rerun setup-dev-cpu.bat.
   echo Next: scripts\run-dev-cpu.bat
 ) else (
-  echo [INFO] To rebuild the venv from scratch:
-  echo        scripts\rebuild-runtime-venv.bat
-  echo Next: scripts\run-dev.bat
+  echo [INFO] To rebuild the venv from scratch, remove %DEV_VENV_DIR_ABS% and rerun setup-dev-nvidia.bat.
+  echo Next: scripts\run-dev-nvidia.bat
 )
 goto :hold_success
 
+:variant_mismatch
+echo [ERROR] Development entry point and GPU backend do not match.
+echo         variant=%LOTT_DEV_VARIANT% backend=%TORCH_BACKEND%
+exit /b 2
+
 :show_help
-echo Usage: scripts\setup-dev.bat [options]
+echo Internal common setup. Use setup-dev-nvidia.bat, setup-dev-amd.bat, or setup-dev-cpu.bat.
 echo.
 echo Options:
-echo   --torch-backend VALUE   GPU backend: cuda, rocm, or cpu. Default: cuda.
+echo   --torch-backend VALUE   GPU backend: cuda, rocm, or cpu.
 echo   --amd                   Shortcut for --torch-backend rocm (EXPERIMENTAL on Windows).
 echo   --cpu-torch             Shortcut for --torch-backend cpu.
 echo   --skip-gemma            Skip Gemma GGUF downloads.
@@ -534,10 +573,10 @@ echo Environment:
 echo   LOTT_TORCH_BACKEND            Same as --torch-backend.
 echo   LOTT_PYTORCH_ROCM_INDEX_URL   PyTorch ROCm wheel index for --torch-backend rocm.
 echo   LOTT_ROCM_GFX_TARGET           Windows ROCm target. Default: gfx1103 ^(Radeon 780M^).
-echo   LOTT_AMD_DEV_VENV_DIR         AMD-only venv override. Cannot be .venv312.
+echo   LOTT_AMD_DEV_VENV_DIR         AMD-only venv override. Cannot be .venv312-nvidia.
 echo                                 Default for rocm: .venv312-amd
 echo   LOTT_DEV_VENV_DIR             Non-AMD venv override. Ignored for rocm.
-echo                                 Default for cuda/cpu: .venv312
+echo                                 Defaults: .venv312-nvidia / .venv312-cpu
 goto :eof
 
 :fail

@@ -54,5 +54,6 @@
   ],
   "rust-analyzer.cargo.extraEnv": {
     "TAURI_CONFIG": "{\"build\":{\"frontendDist\":\"../frontend\",\"devUrl\":\"http://localhost:4200\"}}"
-  }
+  },
+  "python.terminal.activateEnvironment": false
 }

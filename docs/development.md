@@ -20,56 +20,79 @@ Linux NVIDIA版では、実行時にCUDA Toolkitを導入する必要はあり�
 
 ### Windows
 
-プロジェクト直下で実行:
+プロジェクト直下で、対象エディションの組だけを実行します。共通の
+`setup-dev.bat` / `run-dev.bat` は内部実装であり、直接実行しません。
 
 ```bat
-scripts\setup-dev.bat
-scripts\run-dev.bat
-```
+rem NVIDIA / CUDA
+scripts\setup-dev-nvidia.bat
+scripts\run-dev-nvidia.bat
 
-CPU版の開発確認:
+rem AMD / ROCm（experimental）
+scripts\setup-dev-amd.bat
+scripts\run-dev-amd.bat
 
-```bat
-scripts\setup-dev.bat --cpu-torch
+rem CPU
+scripts\setup-dev-cpu.bat
 scripts\run-dev-cpu.bat
 ```
 
-`--cpu-torch` ではCPU版の文字起こし・話者分離に不要なGemma 4の自動取得を
+CPU 専用セットアップでは、文字起こし・話者分離に不要なGemma 4の自動取得を
 既定でスキップします。音声入力・LLM校正も確認する場合だけ、次のように
 `--with-gemma`を追加してください。
 
 ```bat
-scripts\setup-dev.bat --cpu-torch --with-gemma
+scripts\setup-dev-cpu.bat --with-gemma
 ```
+
+Python 環境は `.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu` に分離されます。
+これにより CUDA、ROCm、CPU 用 PyTorch を相互に上書きしません。
 
 `setup-dev.bat` の実行内容（概要）:
 
 - npm install（ルート / frontend）
 - Python依存インストール
 - Rust/cargo 確認
-- CUDA/cuDNN 確認
+- 選択したバックエンドの確認（NVIDIA版のみCUDA/cuDNN、AMD版はROCm/Vulkan）
 - doctor 風の環境サマリ表示
 
-`run-dev.bat` は Angular dev server と Tauri を起動します。実行中ログが表示されたままになる設計です。
+各 `run-dev-*.bat` は対応する Angular dev server、製品 identifier、Tauri resource
+構成だけを選んで起動します。実行中ログが表示されたままになる設計です。
 
-### Ubuntu / Linux
-
-```sh
-bash scripts/setup-dev.sh
-bash scripts/run-dev.sh
-```
-
-Linux CPU版の開発確認:
+### Ubuntu / CachyOS・Arch / Linux
 
 ```sh
-bash scripts/setup-dev.sh --cpu-torch -y
+# NVIDIA / CUDA
+bash scripts/setup-dev-nvidia.sh
+bash scripts/run-dev-nvidia.sh
+
+# AMD / ROCm（この PC の開発経路）
+bash scripts/setup-dev-amd.sh
+bash scripts/run-dev-amd.sh
+
+# CPU
+bash scripts/setup-dev-cpu.sh
 bash scripts/run-dev-cpu.sh
 ```
 
-LinuxでもCPUバックエンドではGemma 4の自動取得を既定でスキップします。
-必要な場合は`--with-gemma`を追加してください。
+共通の `setup-dev.sh` / `run-dev.sh` は内部実装です。直接実行しても CUDA を
+既定選択せず、専用入口を案内して終了します。CachyOS / Arch と Ubuntu の違いは
+専用セットアップ内で `pacman` / `apt` を検出して分岐し、GPU 種別とは独立に扱います。
 
-- `setup-dev.sh` は Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存の準備を担います。
+Linux の Python 環境は `.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu`、読み込む
+環境ファイルは `.dev-linux-cuda.env` / `.dev-linux-rocm.env` / `.dev-linux-cpu.env` です。
+各 venv は Python 3.12 固定です。特に AMD/ROCm の `triton-rocm` 公式wheelは cp312 向けのため、
+Python 3.13/3.14 の venvを流用できません。LinuxでシステムのPython 3.12がない場合は、
+リポジトリ内の配布用Python 3.12ランタイムがあればsetupスクリプトがそれを使用します。
+AMD ランチャーは NVIDIA 用環境ファイルと CUDA 同梱 resource を読み込みません。
+また、Linux の各 dev override は配布用 `resources/python312-linux` を resource 対象から外し、
+バックエンド別 venv の `PYTHON_BIN` を直接使います。配布用Pythonの生成物やホスト固有symlinkに
+開発起動を依存させません。
+
+LinuxでもCPUバックエンドではGemma 4の自動取得を既定でスキップします。
+必要な場合は `bash scripts/setup-dev-cpu.sh --with-gemma` としてください。
+
+- 各 `setup-dev-*.sh` は共通実装を対象バックエンド固定で呼び、Rustup / Cargo、Node.js、Python venv、Tauri / WebKit 系依存、GPU検証用依存を準備します。
 - Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先してください。
 - CachyOS / ArchでNVIDIA版を開発する場合は、ホスト側にNVIDIAドライバーと
   `nvidia-utils`を先に導入し、`nvidia-smi -L`でGPUを確認してください。CUDA Toolkitは
@@ -101,14 +124,14 @@ CUDA なし環境や話者分離モデル未配置環境を開発機で擬似再
 Ubuntu / Linux:
 
 ```sh
-LOTT_DEV_CPU_STARTUP_SCENARIO=memory bash scripts/run-dev.sh
+LOTT_DEV_CPU_STARTUP_SCENARIO=memory bash scripts/run-dev-cpu.sh
 ```
 
 Windows:
 
 ```bat
 set LOTT_DEV_CPU_STARTUP_SCENARIO=memory
-scripts\run-dev.bat
+scripts\run-dev-cpu.bat
 ```
 
 環境変数を設定しなければ、CPU版では実際の搭載メモリ・AVX2対応・論理スレッド数を判定し、通常版の開発起動ではこのダイアログを表示しません。

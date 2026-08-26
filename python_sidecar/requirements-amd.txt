@@ -1,7 +1,7 @@
 # AMD ROCm 版 Python 依存ファイル
 #
 # torch / torchaudio: setup-dev.sh が ROCm ホイールで別途インストールする。
-#   bash scripts/setup-dev.sh --amd
+#   bash scripts/setup-dev-amd.sh
 #
 # ctranslate2: setup-dev.sh の install_rocm_ctranslate2 が GitHub Releases の
 #   ROCm ホイール (v$CTRANSLATE2_ROCM_VERSION) で別途インストールする。

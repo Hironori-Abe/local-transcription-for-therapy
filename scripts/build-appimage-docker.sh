@@ -15,6 +15,7 @@ CONFIG_EDITOR="tauri.editor.linux.override.json"
 BUILD_CONFIG="$CONFIG_NVIDIA"
 BUILD_LINE="NVIDIA CUDA"
 BUILD_OPTION=""
+BUILD_VENV_DIR="/workspace/.venv312-nvidia"
 DRY_RUN=0
 
 usage() {
@@ -41,6 +42,10 @@ select_build_line() {
   BUILD_OPTION="$option"
   BUILD_LINE="$line"
   BUILD_CONFIG="$config"
+  case "$option" in
+    --amd) BUILD_VENV_DIR="/workspace/.venv312-amd" ;;
+    --cpu|--editor) BUILD_VENV_DIR="/workspace/.venv312-cpu" ;;
+  esac
 }
 
 for arg in "$@"; do
@@ -132,7 +137,7 @@ docker run --rm \
   --volume lott-ubuntu-tauri-cache:/root/.cache/tauri \
   --workdir /workspace \
   --env CARGO_TARGET_DIR=/workspace/src-tauri/target-ubuntu24 \
-  --env LOTT_VENV_DIR=/workspace/.venv312 \
+  --env "LOTT_VENV_DIR=$BUILD_VENV_DIR" \
   --env "LOTT_BUILD_LINE_OPTION=$BUILD_OPTION" \
   --env HOST_UID="$HOST_UID" \
   --env HOST_GID="$HOST_GID" \

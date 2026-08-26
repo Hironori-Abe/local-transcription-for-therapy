@@ -139,6 +139,37 @@ class ResumableDownloadTests(unittest.TestCase):
                 else:
                     os.environ[key] = value
 
+    def test_pip_environment_puts_selected_venv_before_ambient_pythonpath(self):
+        previous_pythonpath = os.environ.get("PYTHONPATH")
+        previous_target = os.environ.get("PIP_TARGET")
+        try:
+            os.environ["PYTHONPATH"] = "/tmp/untrusted-user-packages"
+            os.environ.pop("PIP_TARGET", None)
+            with TemporaryDirectory() as tmp:
+                venv = Path(tmp) / ".venv312-amd"
+                executable = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+                executable.parent.mkdir(parents=True)
+                (venv / "pyvenv.cfg").write_text("version = 3.12.3\n", encoding="utf-8")
+
+                environment = setup._pip_environment(executable)
+                expected = (
+                    venv / "Lib/site-packages"
+                    if os.name == "nt"
+                    else venv / "lib/python3.12/site-packages"
+                )
+                paths = environment["PYTHONPATH"].split(os.pathsep)
+                self.assertEqual(paths[0], str(expected))
+                self.assertNotIn("/tmp/untrusted-user-packages", paths)
+        finally:
+            if previous_pythonpath is None:
+                os.environ.pop("PYTHONPATH", None)
+            else:
+                os.environ["PYTHONPATH"] = previous_pythonpath
+            if previous_target is None:
+                os.environ.pop("PIP_TARGET", None)
+            else:
+                os.environ["PIP_TARGET"] = previous_target
+
     def test_old_pip_upgrade_is_pinned_to_supported_range(self):
         self.assertTrue(setup._pip_requires_upgrade((24, 0, 0)))
         self.assertFalse(setup._pip_requires_upgrade((25, 2, 0)))
@@ -189,6 +220,24 @@ class ResumableDownloadTests(unittest.TestCase):
             setup._wheel_hash(link),
             "cff15082784c7056b0af9347770e034ab0a8ccbce0642723ddc8c8de1bd6af3f",
         )
+
+    def test_setup_requires_python312_before_wheel_resolution(self):
+        setup._validate_python_version((3, 12, 8))
+        with self.assertRaisesRegex(
+            setup.DownloadError,
+            r"Python 3\.12.*Python 3\.14.*\.venv312",
+        ):
+            setup._validate_python_version((3, 14, 7))
+
+    def test_rocm_triton_cp312_wheel_is_not_accepted_by_python314(self):
+        # The official ROCm 7.2 index currently has triton_rocm 3.6.0 only as
+        # cp312 on Linux.  Python 3.14 must fail the interpreter contract
+        # instead of surfacing the lower-level hashless-candidate message.
+        filename = "triton_rocm-3.6.0-cp312-cp312-linux_x86_64.whl"
+        running_python312 = tuple(sys.version_info[:2]) == setup.SUPPORTED_PYTHON_VERSION
+        self.assertEqual(setup._wheel_compatible(filename), running_python312)
+        with self.assertRaises(setup.DownloadError):
+            setup._validate_python_version((3, 14, 7))
 
     def test_windows_rocm_build_dependency_is_version_bounded(self):
         self.assertEqual(

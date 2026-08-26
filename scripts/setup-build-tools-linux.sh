@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT_DIR="$(pwd)"
 
-LICENSE_VENV_DIR="${LOTT_VENV_DIR:-.venv312}"
+LICENSE_VENV_DIR="${LOTT_VENV_DIR:-}"
 
 CONFIG_NVIDIA="tauri.nvidia.linux.override.json"
 CONFIG_AMD="tauri.amd.linux.override.json"
@@ -69,6 +69,14 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -z "$LICENSE_VENV_DIR" ]]; then
+  case "$BUILD_VARIANT" in
+    nvidia) LICENSE_VENV_DIR=".venv312-nvidia" ;;
+    amd) LICENSE_VENV_DIR=".venv312-amd" ;;
+    cpu|editor) LICENSE_VENV_DIR=".venv312-cpu" ;;
+  esac
+fi
 
 if ! command -v python3 &>/dev/null; then
   echo "[ERROR] python3 が見つかりません。" >&2
@@ -233,6 +241,15 @@ echo ""
 # 古い 8.2 を掴んで `undefined symbol: rl_print_keybinding` で即死する。
 # サイドカーも pip も readline を使わないため、同梱しないのが最も安全。
 PY_DYNLOAD_DIR="src-tauri/resources/python312-linux/lib/python3.12/lib-dynload"
+PY_SITECUSTOMIZE="src-tauri/resources/python312-linux/lib/python3.12/sitecustomize.py"
+# Ubuntu の Python 配置をコピーすると、sitecustomize.py が
+# /etc/python3.12/sitecustomize.py への絶対 symlink のまま残ることがある。
+# CachyOS 等ではリンク先が無く、Tauri の resource 収集がビルド前に失敗する。
+# 埋め込み Python はホストの /etc 設定を取り込まないため、壊れたリンクだけ除去する。
+if [[ -L "$PY_SITECUSTOMIZE" && ! -e "$PY_SITECUSTOMIZE" ]]; then
+  rm -f "$PY_SITECUSTOMIZE"
+  echo "[OK] 同梱 Python の壊れた sitecustomize.py symlink を除外しました"
+fi
 if compgen -G "$PY_DYNLOAD_DIR/readline.cpython-*.so" >/dev/null 2>&1; then
   rm -f "$PY_DYNLOAD_DIR"/readline.cpython-*.so
   echo "[OK] 同梱 Python の readline 拡張モジュールを除外しました（ホスト /bin/sh 保護）"

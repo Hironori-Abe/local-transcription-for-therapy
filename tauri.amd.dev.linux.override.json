@@ -1,8 +1,6 @@
 {
-  "productName": "Local Transcription for Therapy (AMD)",
-  "identifier": "net.gakkousya.lott-amd",
   "build": {
-    "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev-amd.bat",
+    "beforeDevCommand": "echo Frontend is managed by scripts/run-dev-amd.sh",
     "devUrl": "http://127.0.0.1:4201",
     "frontendDist": "../frontend"
   },
@@ -17,7 +15,6 @@
       "../NOTICE",
       "../THIRD_PARTY_LICENSES.md",
       "../licenses",
-      "../.venv312-amd",
       "../python_sidecar/transcribe_cli.py",
       "../python_sidecar/diarize_cli.py",
       "../python_sidecar/proofread_llm_cli.py",

@@ -74,7 +74,13 @@ pacmanの標準フックがデスクトップ情報キャッシュを更新し�
 ランチャーは`GDK_BACKEND`と`GTK_IM_MODULE`を設定せず、KDE/GNOMEなど実行中の
 デスクトップ環境が選んだWayland/X11をそのまま使います。一方、CachyOS / NVIDIA実機では
 DMA-BUF rendererが有効だと起動できなかったため、通常起動では
-`WEBKIT_DISABLE_DMABUF_RENDERER=1`を設定します。
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`を設定します。
+
+以前は`WEBKIT_DISABLE_DMABUF_RENDERER=1`を設定していましたが、この変数はWebKitの
+transport modeを空にするため、DMA-BUFだけでなくAcceleratedBackingStore（合成器）ごと
+無効化します。その結果、非アクセラレーション経路に落ちてスクロールが目に見えて
+カクつきました。`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`はDMA-BUFだけを避けて合成器を
+維持するため、起動できないGBM経路を通らずに描画性能を保てます。
 
 表示の切り分けでX11/XWaylandを明示する場合は、次のように起動します。
 
@@ -86,13 +92,22 @@ LOTT_GDK_BACKEND=x11 lott
 X11/XWaylandが利用可能と確認できた環境で比較する場合だけ、次を使用します。
 
 ```sh
-LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+LOTT_GDK_BACKEND=x11 lott
 ```
 
-新しいWebKitGTK/NVIDIA環境でDMA-BUF rendererを再検証する場合だけ、次を使用します。
+新しいWebKitGTK/NVIDIA環境でDMA-BUF rendererのハードウェア経路を再検証する場合だけ、
+次を使用します。DMA-BUFが使える環境では、共有メモリへのreadbackが無くなる分さらに
+軽くなります。起動しない場合は既定へ戻してください。
 
 ```sh
 LOTT_ENABLE_DMABUF_RENDERER=1 lott
+```
+
+旧来の非アクセラレーション経路を比較したい場合だけ、次を使用します。ランチャーは
+利用者が明示した`WEBKIT_*`を尊重します。
+
+```sh
+WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
 ```
 
 ## アンインストール

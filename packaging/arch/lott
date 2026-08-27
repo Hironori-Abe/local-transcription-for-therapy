@@ -7,12 +7,16 @@ if [ -n "${LOTT_GDK_BACKEND:-}" ]; then
   export GDK_BACKEND="$LOTT_GDK_BACKEND"
 fi
 
-# CachyOS / NVIDIA実機ではDMA-BUF rendererを有効にするとGTK/WebKitGTKが起動しない。
-# 利用者がWEBKIT_DISABLE_DMABUF_RENDERERを明示していれば尊重し、通常起動では無効化する。
-# 新しいWebKitGTK/NVIDIA環境で再検証するときだけLOTT_ENABLE_DMABUF_RENDERER=1を指定する。
+# CachyOS / NVIDIA実機ではDMA-BUF rendererを有効にするとWebKitGTKが起動しない。
+# ただしWEBKIT_DISABLE_DMABUF_RENDERERはtransport modeを空にするため、DMA-BUFだけでなく
+# AcceleratedBackingStore（合成器）ごと無効化し、スクロールが目に見えてカクつく。
+# WEBKIT_DMABUF_RENDERER_FORCE_SHMはDMA-BUFだけを避けて合成器を維持するため、こちらを既定にする。
+# 利用者がWEBKIT_*を明示していればそれを尊重する。
+# DMA-BUFのハードウェア経路を再検証するときだけLOTT_ENABLE_DMABUF_RENDERER=1を指定する。
 if [ -z "${LOTT_ENABLE_DMABUF_RENDERER:-}" ] \
-  && [ "${WEBKIT_DISABLE_DMABUF_RENDERER+x}" != x ]; then
-  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+  && [ "${WEBKIT_DISABLE_DMABUF_RENDERER+x}" != x ] \
+  && [ "${WEBKIT_DMABUF_RENDERER_FORCE_SHM+x}" != x ]; then
+  export WEBKIT_DMABUF_RENDERER_FORCE_SHM=1
 fi
 
 exec '/usr/lib/Local Transcription for Therapy/lott-bin' "$@"

@@ -163,23 +163,30 @@ where npm >nul 2>&1 || (
   echo [ERROR] npm not found. Install Node.js: https://nodejs.org/
   goto :hold_error
 )
-where %PYTHON_BIN% >nul 2>&1 || (
-  echo [ERROR] Python launcher "%PYTHON_BIN%" not found.
-  echo         Install Python for Windows: https://www.python.org/downloads/windows/
-  goto :hold_error
-)
-
+set "LOTT_TORCH_BACKEND=%TORCH_BACKEND%"
 if exist "%DEV_VENV_DIR_ABS%\Scripts\python.exe" (
   set "PYTHON_BIN=%DEV_VENV_DIR_ABS%\Scripts\python.exe"
   echo [INFO] Using existing Python 3.12 venv: !PYTHON_BIN!
 ) else (
+  if /I "%PYTHON_BOOTSTRAP%"=="py" (
+    where py >nul 2>&1
+    if errorlevel 1 (
+      echo [ERROR] Python launcher "py" not found.
+      echo         Install Python for Windows: https://www.python.org/downloads/windows/
+      goto :hold_error
+    )
+  ) else if not exist "%PYTHON_BOOTSTRAP%" (
+    echo [ERROR] Python executable "%PYTHON_BOOTSTRAP%" not found.
+    echo         Install Python for Windows: https://www.python.org/downloads/windows/
+    goto :hold_error
+  )
   call "%PYTHON_BOOTSTRAP%" %PYTHON_BOOTSTRAP_ARGS% -c "import sys; print(sys.version)" >nul 2>&1
   if errorlevel 1 (
-    echo [WARN] Python 3.12 was not found.
-    echo        Speaker diarization is most stable on Python 3.12.
-    echo        Install example: winget install Python.Python.3.12
-    echo        Fallback to current launcher: %PYTHON_BIN%
-    set "HAS_WARN=1"
+    echo [ERROR] Python 3.12 was not found; cannot create the development venv.
+    echo         Speaker diarization requires the isolated Python 3.12 environment.
+    echo         Install example: winget install Python.Python.3.12
+    echo         No packages were installed into the global Python launcher.
+    goto :fail
   ) else (
     echo [INFO] Creating !DEV_VENV_DIR_ABS! with Python 3.12...
     call "%PYTHON_BOOTSTRAP%" %PYTHON_BOOTSTRAP_ARGS% -m venv "%DEV_VENV_DIR_ABS%" || goto :fail
@@ -188,14 +195,24 @@ if exist "%DEV_VENV_DIR_ABS%\Scripts\python.exe" (
   )
 )
 
+REM Do not let a pre-existing directory with the wrong Python version silently
+REM contaminate the setup.  The run-dev entry points require Python 3.12 too,
+REM so reject it here while the problem is still actionable.
+call "%PYTHON_BIN%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Development venv must use Python 3.12.x: %PYTHON_BIN%
+  echo         Remove the venv and rerun the matching setup-dev-*.bat entry point.
+  goto :fail
+)
+
 echo [0/6] Python check...
-for /f "delims=" %%i in ('%PYTHON_BIN% -c "import sys; print(sys.executable)"') do set "PY_EXE=%%i"
-for /f "delims=" %%i in ('%PYTHON_BIN% -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"') do set "PY_VER=%%i"
+for /f "delims=" %%i in ('"%PYTHON_BIN%" -c "import sys; print(sys.executable)"') do set "PY_EXE=%%i"
+for /f "delims=" %%i in ('"%PYTHON_BIN%" -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"') do set "PY_VER=%%i"
 echo [INFO] Python executable: %PY_EXE%
 echo [INFO] Python version   : %PY_VER%
-echo %PY_VER% | findstr /b "3.14" >nul && (
-  echo [WARN] Python 3.14 detected. Recommended: 3.12.x or 3.11.x
-  set "HAS_WARN=1"
+if not "%PY_VER:~0,4%"=="3.12" (
+  echo [ERROR] Python 3.12.x is required for this development environment.
+  goto :fail
 )
 echo.
 
@@ -206,14 +223,14 @@ echo [2/6] npm install (frontend)...
 call npm --prefix frontend install || goto :fail
 
 echo [3/6] Python dependencies...
-call %PYTHON_BIN% -m pip install --upgrade pip || goto :fail
-call %PYTHON_BIN% -m pip uninstall -y torch torchaudio torchvision torchcodec >nul 2>&1
+call "%PYTHON_BIN%" -m pip install --upgrade pip || goto :fail
+call "%PYTHON_BIN%" -m pip uninstall -y torch torchaudio torchvision torchcodec >nul 2>&1
 if /I "%TORCH_BACKEND%"=="cuda" goto :torch_cuda
 if /I "%TORCH_BACKEND%"=="rocm" goto :torch_rocm
 goto :torch_cpu
 
 :torch_cuda
-call %PYTHON_BIN% -m pip install --upgrade --force-reinstall --prefer-binary --index-url https://download.pytorch.org/whl/cu128 "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
+call "%PYTHON_BIN%" -m pip install --upgrade --force-reinstall --prefer-binary --index-url https://download.pytorch.org/whl/cu128 "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
 goto :torch_done
 
 :torch_rocm
@@ -221,25 +238,25 @@ echo [WARN] Installing Windows ROCm 7.14 packages into the isolated AMD venv.
 echo        Index: %LOTT_PYTORCH_ROCM_INDEX_URL%
 echo        GFX target: %LOTT_ROCM_GFX_TARGET%
 set "HAS_WARN=1"
-call %PYTHON_BIN% python_sidecar\setup_venv_cli.py python_sidecar\requirements-amd.txt --variant rocm
+call "%PYTHON_BIN%" python_sidecar\setup_venv_cli.py python_sidecar\requirements-amd.txt --variant rocm
 if errorlevel 1 goto :fail
 goto :python_modules_check
 
 :torch_cpu
 echo [INFO] Installing default CPU PyTorch wheels for the CPU development edition.
 set "HAS_WARN=1"
-call %PYTHON_BIN% -m pip install --upgrade --force-reinstall --prefer-binary "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
+call "%PYTHON_BIN%" -m pip install --upgrade --force-reinstall --prefer-binary "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
 goto :torch_done
 
 :torch_done
-call %PYTHON_BIN% -m pip uninstall -y av imageio-ffmpeg >nul 2>&1
-call %PYTHON_BIN% -m pip install --prefer-binary --no-deps faster-whisper==1.2.1 || goto :fail
+call "%PYTHON_BIN%" -m pip uninstall -y av imageio-ffmpeg >nul 2>&1
+call "%PYTHON_BIN%" -m pip install --prefer-binary --no-deps faster-whisper==1.2.1 || goto :fail
 set "REQ_TMP=%TEMP%\lott-requirements-runtime-no-fw-%RANDOM%.txt"
 findstr /V /B /C:"faster-whisper" python_sidecar\requirements-runtime.txt > "%REQ_TMP%" || goto :fail
-call %PYTHON_BIN% -m pip install --prefer-binary --only-binary=contourpy -r "%REQ_TMP%" || goto :fail
+call "%PYTHON_BIN%" -m pip install --prefer-binary --only-binary=contourpy -r "%REQ_TMP%" || goto :fail
 del "%REQ_TMP%" >nul 2>&1
 :python_modules_check
-call %PYTHON_BIN% -c "import python_sidecar.transcribe_cli as t; t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" || (
+call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.configure_runtime_env('cuda' if '%TORCH_BACKEND%' != 'cpu' else 'cpu'); t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" || (
   echo [ERROR] Python module import failed.
   echo         Retry: %PYTHON_BIN% -m pip install --no-deps faster-whisper==1.2.1
   goto :hold_error
@@ -251,7 +268,7 @@ if exist "src-tauri\resources\ffmpeg\ffmpeg.exe" (
   echo [OK] ffmpeg already present: src-tauri\resources\ffmpeg\ffmpeg.exe
 ) else (
   echo [INFO] Downloading LGPL ffmpeg, about 170MB...
-  call %PYTHON_BIN% scripts\setup_ffmpeg_lgpl.py
+  call "%PYTHON_BIN%" scripts\setup_ffmpeg_lgpl.py
   if errorlevel 1 (
     echo [WARN] ffmpeg download failed. Transcription cannot run without it.
     echo        Retry manually: %PYTHON_BIN% scripts\setup_ffmpeg_lgpl.py
@@ -276,7 +293,7 @@ if exist "%GEMMA_FILE%" (
 ) else (
   echo [INFO] Downloading gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf, about 4.3GB
   if not exist "%GEMMA_DIR%" mkdir "%GEMMA_DIR%"
-  call %PYTHON_BIN% -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download('unsloth/gemma-4-E4B-it-qat-GGUF', 'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf', local_dir=os.environ['GEMMA_DIR'])"
+  call "%PYTHON_BIN%" -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download('unsloth/gemma-4-E4B-it-qat-GGUF', 'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf', local_dir=os.environ['GEMMA_DIR'])"
   if errorlevel 1 (
     echo [WARN] Model download failed. Download it manually later:
     echo        https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF
@@ -291,7 +308,7 @@ if exist "%GEMMA_MTP_FILE%" (
 ) else (
   echo [INFO] Downloading mtp-gemma-4-E4B-it.gguf, about 60MB
   if not exist "%GEMMA_DIR%" mkdir "%GEMMA_DIR%"
-  call %PYTHON_BIN% -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download('unsloth/gemma-4-E4B-it-qat-GGUF', 'mtp-gemma-4-E4B-it.gguf', local_dir=os.environ['GEMMA_DIR'])"
+  call "%PYTHON_BIN%" -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download('unsloth/gemma-4-E4B-it-qat-GGUF', 'mtp-gemma-4-E4B-it.gguf', local_dir=os.environ['GEMMA_DIR'])"
   if errorlevel 1 (
     echo [WARN] MTP model download failed. Download it manually later:
     echo        https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF
@@ -434,7 +451,7 @@ if errorlevel 1 (
 echo.
 
 echo [6/6] ctranslate2 CUDA runtime check...
-call %PYTHON_BIN% -c "import sys,ctranslate2 as ct; n=ct.get_cuda_device_count(); print('CUDA device count:', n); sys.exit(0 if n > 0 else 2)"
+call "%PYTHON_BIN%" -c "import sys,ctranslate2 as ct; n=ct.get_cuda_device_count(); print('CUDA device count:', n); sys.exit(0 if n > 0 else 2)"
 if errorlevel 2 (
   echo [WARN] CUDA device count is 0.
   echo        Check CUDA/cuDNN install and PATH, then reopen terminal.
@@ -451,33 +468,33 @@ echo.
 
 echo [Doctor] Environment summary...
 echo [INFO] GPU backend: %TORCH_BACKEND%
-call %PYTHON_BIN% -c "import sys; print('python_exe=', sys.executable); print('python_ver=', sys.version.split()[0])"
+call "%PYTHON_BIN%" -c "import sys; print('python_exe=', sys.executable); print('python_ver=', sys.version.split()[0])"
 if errorlevel 1 (
   echo [WARN] Python runtime summary failed.
   set "HAS_WARN=1"
 )
-call %PYTHON_BIN% -c "import torch; print('torch=', torch.__version__)"
+call "%PYTHON_BIN%" -c "import torch; print('torch=', torch.__version__)"
 if errorlevel 1 (
   echo [WARN] torch is not available.
   set "HAS_WARN=1"
 )
-call %PYTHON_BIN% -c "import torchaudio; print('torchaudio=', torchaudio.__version__)"
+call "%PYTHON_BIN%" -c "import torchaudio; print('torchaudio=', torchaudio.__version__)"
 if errorlevel 1 (
   echo [WARN] torchaudio is not available.
   set "HAS_WARN=1"
 )
 if /I "%TORCH_BACKEND%"=="rocm" (
-  call %PYTHON_BIN% -c "import torch; print('torch_hip=', torch.version.hip); print('torch_rocm_available=', torch.cuda.is_available()); print('torch_rocm_device_count=', torch.cuda.device_count())"
+  call "%PYTHON_BIN%" -c "import torch; print('torch_hip=', torch.version.hip); print('torch_rocm_available=', torch.cuda.is_available()); print('torch_rocm_device_count=', torch.cuda.device_count())"
 ) else if /I "%TORCH_BACKEND%"=="cpu" (
-  call %PYTHON_BIN% -c "import torch; print('torch_cpu_backend=', torch.version.cuda is None and getattr(torch.version, 'hip', None) is None)"
+  call "%PYTHON_BIN%" -c "import torch; print('torch_cpu_backend=', torch.version.cuda is None and getattr(torch.version, 'hip', None) is None)"
 ) else (
-  call %PYTHON_BIN% -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())"
+  call "%PYTHON_BIN%" -c "import torch; print('torch_cuda_available=', torch.cuda.is_available()); print('torch_cuda_version=', torch.version.cuda); print('torch_cuda_device_count=', torch.cuda.device_count())"
 )
 if errorlevel 1 (
   echo [WARN] torch backend summary failed.
   set "HAS_WARN=1"
 )
-call %PYTHON_BIN% -c "import importlib.metadata as m; print('pyannote.audio=', m.version('pyannote.audio'))"
+call "%PYTHON_BIN%" -c "import importlib.metadata as m; print('pyannote.audio=', m.version('pyannote.audio'))"
 if errorlevel 1 (
   echo [WARN] pyannote.audio is not installed.
   echo        Run: %PYTHON_BIN% python_sidecar\setup_venv_cli.py python_sidecar\requirements-runtime.txt
@@ -503,14 +520,14 @@ if errorlevel 1 (
   for /f "usebackq delims=" %%i in ("%TEMP%\gpu_summary.tmp") do echo [GPU] %%i
   del /q "%TEMP%\gpu_summary.tmp" >nul 2>&1
 )
-call %PYTHON_BIN% -c "import ctranslate2 as ct; print('ct2_cuda_device_count=', ct.get_cuda_device_count())"
+call "%PYTHON_BIN%" -c "import ctranslate2 as ct; print('ct2_cuda_device_count=', ct.get_cuda_device_count())"
 if errorlevel 1 (
   echo [WARN] ctranslate2 CUDA summary failed.
   set "HAS_WARN=1"
 )
 :after_doctor_nvidia
 if /I "%TORCH_BACKEND%"=="rocm" (
-  call %PYTHON_BIN% -c "import ctranslate2 as ct; print('ct2_rocm_version=', ct.__version__)"
+  call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.configure_runtime_env('cuda'); import ctranslate2 as ct; print('ct2_rocm_version=', ct.__version__); print('ct2_rocm_device_count=', ct.get_cuda_device_count())"
   if errorlevel 1 (
     echo [WARN] ctranslate2 ROCm summary failed.
     set "HAS_WARN=1"

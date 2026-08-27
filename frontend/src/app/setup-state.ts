@@ -191,12 +191,28 @@ export function browserVoiceInputPackStatus(cpuBackendRequired: boolean): Editor
 
 export function llmBackendInstallPlan(
   cudaAvailable: boolean | null | undefined,
-  rocmAvailable: boolean | null | undefined
+  rocmAvailable: boolean | null | undefined,
+  buildVariant?: 'cuda' | 'rocm' | 'cpu' | null
 ): LlmBackendInstallPlan {
+  // The packaged edition is authoritative for the proofreading engine. A
+  // hybrid PC can expose nvidia-smi while running the AMD edition; selecting
+  // CUDA there prevents the required ROCm/Vulkan downloads. Hardware support
+  // for transcription remains guarded by the separate Rust runtime probe.
+  const effectiveCudaAvailable = buildVariant === 'cuda'
+    ? true
+    : buildVariant === 'rocm'
+      ? false
+      : cudaAvailable;
+  const effectiveRocmAvailable = buildVariant === 'rocm'
+    ? true
+    : buildVariant === 'cuda'
+      ? false
+      : rocmAvailable;
+
   // CUDA is sufficient to select the NVIDIA backend even if the optional
   // ROCm probe has not completed yet.  Likewise ROCm is sufficient when its
   // own probe succeeded and CUDA is still unknown.
-  if (cudaAvailable === true) {
+  if (effectiveCudaAvailable === true) {
     return {
       status: 'bundled',
       unavailable: false,
@@ -205,7 +221,7 @@ export function llmBackendInstallPlan(
       reason: 'CUDA版のllama-serverはアプリに同梱されています。見つからない場合はアプリを再インストールしてください。'
     };
   }
-  if (rocmAvailable === true) {
+  if (effectiveRocmAvailable === true) {
     return {
       status: 'ready',
       unavailable: false,
@@ -213,7 +229,7 @@ export function llmBackendInstallPlan(
       fallbacks: ['llamacpp:vulkan']
     };
   }
-  if (cudaAvailable == null || rocmAvailable == null) {
+  if (effectiveCudaAvailable == null || effectiveRocmAvailable == null) {
     return {
       status: 'checking',
       unavailable: false,

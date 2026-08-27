@@ -622,7 +622,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    */
   readonly llmBackendSetupPlan = computed(() => llmBackendInstallPlan(
     this.cudaAvailable(),
-    this.rocmAvailable()
+    this.rocmAvailable(),
+    this.buildVariant()
   ));
   readonly llmBackendSetupLabel = computed(() => {
     const plan = this.llmBackendSetupPlan();
@@ -5390,7 +5391,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
         const backendPlan = llmBackendInstallPlan(
           this.cudaAvailable(),
-          this.rocmAvailable()
+          this.rocmAvailable(),
+          this.buildVariant()
         );
 
         // NVIDIA/CUDA版は同梱バイナリが欠落している場合に修復用ダウンロードを行わず、

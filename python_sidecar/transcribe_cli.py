@@ -15,6 +15,12 @@ SIDECAR_DIR = Path(__file__).resolve().parent
 TRANSCRIBE_TEMPLATE_DIR = SIDECAR_DIR / "prompt_templates" / "transcribe"
 DEFAULT_GLOSSARY_JSON_PATH = TRANSCRIBE_TEMPLATE_DIR / "glossary.json"
 
+# ``os.add_dll_directory`` returns a handle whose lifetime controls whether the
+# directory remains in the Windows DLL search path.  Keep the handles alive for
+# the whole sidecar process instead of relying on temporary return values.
+_WINDOWS_ROCM_DLL_DIRECTORY_HANDLES: List[object] = []
+_WINDOWS_ROCM_DLL_DIRECTORY_KEYS: set[str] = set()
+
 
 def force_utf8_stdio() -> None:
     if hasattr(sys.stdout, "reconfigure"):
@@ -430,9 +436,82 @@ def emit_progress(stage: str, message: str, progress: float | None = None) -> No
     sys.stderr.flush()
 
 
+def windows_rocm_dll_directory_candidates(search_roots: List[Path]) -> List[Path]:
+    """Return existing ROCm SDK DLL directories in stable, deduplicated order.
+
+    AMD's Windows packages have used both ``_rocm_sdk_libraries`` and
+    ``_rocm_sdk_libraries_custom``.  Supporting both layouts keeps existing
+    installations usable and avoids coupling CTranslate2 to one wheel layout.
+    """
+    relative_candidates = (
+        Path("_rocm_sdk_core") / "bin",
+        Path("_rocm_sdk_libraries") / "bin",
+        Path("_rocm_sdk_libraries_custom") / "bin",
+    )
+    result: List[Path] = []
+    seen: set[str] = set()
+    for root in search_roots:
+        for relative in relative_candidates:
+            candidate = root / relative
+            try:
+                if not candidate.is_dir():
+                    continue
+                key = os.path.normcase(str(candidate.resolve()))
+            except OSError:
+                continue
+            if key not in seen:
+                seen.add(key)
+                result.append(candidate)
+    return result
+
+
+def configure_windows_rocm_dll_search() -> List[str]:
+    """Register ROCm wheel DLL directories before importing CTranslate2.
+
+    Python 3.8+ no longer treats ``PATH`` alone as a reliable dependency search
+    path for extension modules.  Register the package directories explicitly;
+    this is needed by the Windows ROCm CTranslate2 wheel without importing
+    PyTorch first and initializing a GPU context as a side effect.
+    """
+    if os.name != "nt" or os.environ.get("LOTT_TORCH_BACKEND", "").lower() != "rocm":
+        return []
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if not callable(add_dll_directory):
+        return []
+
+    roots: List[Path] = []
+    for value in [*sys.path, str(Path(sys.prefix) / "Lib" / "site-packages")]:
+        if not value:
+            continue
+        try:
+            root = Path(value)
+        except (TypeError, ValueError):
+            continue
+        if root not in roots:
+            roots.append(root)
+
+    added: List[str] = []
+    for directory in windows_rocm_dll_directory_candidates(roots):
+        try:
+            key = os.path.normcase(str(directory.resolve()))
+        except OSError:
+            continue
+        if key in _WINDOWS_ROCM_DLL_DIRECTORY_KEYS:
+            continue
+        try:
+            handle = add_dll_directory(str(directory))
+        except OSError:
+            continue
+        _WINDOWS_ROCM_DLL_DIRECTORY_HANDLES.append(handle)
+        _WINDOWS_ROCM_DLL_DIRECTORY_KEYS.add(key)
+        added.append(str(directory))
+    return added
+
+
 def configure_runtime_env(device: str) -> None:
     # Must be set before importing native libs using OpenMP runtime.
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    configure_windows_rocm_dll_search()
     if device == "cuda":
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("MKL_NUM_THREADS", "1")

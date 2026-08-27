@@ -6,6 +6,7 @@ import hashlib
 import http.server
 import io
 import os
+import platform
 import sys
 import threading
 import unittest
@@ -234,8 +235,12 @@ class ResumableDownloadTests(unittest.TestCase):
         # cp312 on Linux.  Python 3.14 must fail the interpreter contract
         # instead of surfacing the lower-level hashless-candidate message.
         filename = "triton_rocm-3.6.0-cp312-cp312-linux_x86_64.whl"
-        running_python312 = tuple(sys.version_info[:2]) == setup.SUPPORTED_PYTHON_VERSION
-        self.assertEqual(setup._wheel_compatible(filename), running_python312)
+        running_python312_linux_x64 = (
+            tuple(sys.version_info[:2]) == setup.SUPPORTED_PYTHON_VERSION
+            and sys.platform.startswith("linux")
+            and platform.machine().lower() in {"x86_64", "amd64"}
+        )
+        self.assertEqual(setup._wheel_compatible(filename), running_python312_linux_x64)
         with self.assertRaises(setup.DownloadError):
             setup._validate_python_version((3, 14, 7))
 
@@ -357,11 +362,14 @@ class ResumableDownloadTests(unittest.TestCase):
 
     def test_wheel_compatibility_rejects_foreign_linux_architecture(self):
         python_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-        self.assertTrue(
-            setup._wheel_compatible(
-                f"MarkupSafe-3.0.2-{python_tag}-{python_tag}-manylinux_2_17_x86_64.whl"
-            )
+        x86_64_wheel = (
+            f"MarkupSafe-3.0.2-{python_tag}-{python_tag}-manylinux_2_17_x86_64.whl"
         )
+        host_accepts_linux_x64 = (
+            sys.platform.startswith("linux")
+            and platform.machine().lower() in {"x86_64", "amd64"}
+        )
+        self.assertEqual(setup._wheel_compatible(x86_64_wheel), host_accepts_linux_x64)
         self.assertFalse(
             setup._wheel_compatible(
                 f"MarkupSafe-3.0.2-{python_tag}-{python_tag}-manylinux_2_17_aarch64.whl"
@@ -374,7 +382,11 @@ class ResumableDownloadTests(unittest.TestCase):
             "torch-2.10.0%2Bcu128-"
             f"{python_tag}-{python_tag}-manylinux_2_28_x86_64.whl"
         )
-        self.assertTrue(setup._wheel_compatible(filename))
+        host_accepts_linux_x64 = (
+            sys.platform.startswith("linux")
+            and platform.machine().lower() in {"x86_64", "amd64"}
+        )
+        self.assertEqual(setup._wheel_compatible(filename), host_accepts_linux_x64)
         try:
             from pip._vendor.packaging.version import Version
         except ImportError:

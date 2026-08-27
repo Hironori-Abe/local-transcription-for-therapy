@@ -3,6 +3,12 @@ chcp 65001 > nul
 setlocal EnableExtensions
 set "HAS_WARN=0"
 set "HOLD_ON_EXIT=1"
+
+REM Capture the project root before parsing options.  The parser uses SHIFT,
+REM which changes %0; resolving %~dp0 after that point can otherwise move the
+REM build into the caller's parent directory when options are supplied.
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
+
 if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
 if /I "%~2"=="--trace" echo on
 
@@ -63,7 +69,7 @@ goto unknown_option
 
 :args_done
 
-cd /d "%~dp0\.."
+cd /d "%PROJECT_ROOT%"
 
 echo === Build NSIS Installer: %BUILD_LINE% (venv excluded) ===
 echo [INFO] Tauri override: %BUILD_CONFIG%

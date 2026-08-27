@@ -115,6 +115,13 @@ test('LLM backend install plan preserves primary and optional fallback ordering'
     status: 'ready', unavailable: false,
     primary: 'llamacpp:rocm', fallbacks: ['llamacpp:vulkan']
   });
+  assert.deepEqual(llmBackendInstallPlan(true, false, 'rocm'), {
+    status: 'ready', unavailable: false,
+    primary: 'llamacpp:rocm', fallbacks: ['llamacpp:vulkan']
+  });
+  const cudaEditionOnRocmHost = llmBackendInstallPlan(false, true, 'cuda');
+  assert.equal(cudaEditionOnRocmHost.status, 'bundled');
+  assert.equal(cudaEditionOnRocmHost.primary, null);
   assert.deepEqual(llmBackendInstallPlan(null, null), {
     status: 'checking', unavailable: false, primary: null, fallbacks: [],
     reason: 'CUDA / ROCm GPUランタイムを確認中です。判定が終わるまでダウンロードできません。'

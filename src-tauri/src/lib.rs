@@ -5303,7 +5303,12 @@ fn python_sidecar_ld_library_path(
 /// app_local_data_dir配下の専用site-packagesだけを参照する。Windowsと開発時の
 /// system/venv Pythonの動作は従来どおり維持する。
 fn configure_python_command(app: &AppHandle, python_bin: &str, cmd: &mut Command) {
-    cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env(
+            "LOTT_TORCH_BACKEND",
+            python_setup_variant(app.config().identifier.as_str(), is_cpu_only_build(app)),
+        );
 
     #[cfg(target_os = "windows")]
     let _ = python_bin;
@@ -7136,7 +7141,7 @@ fn run_gpu_runtime_probe_component(
         .arg(script)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_child_runtime_env(&mut cmd, "cuda", None);
+    apply_child_runtime_env(app, &mut cmd, "cuda", None);
 
     let output = cmd
         .output()
@@ -7302,6 +7307,29 @@ fn check_transcription_runtime_support_once(
     // 片方の初期化がもう片方を汚染せず、実際のサイドカー構成と同じ条件になる。
     const CTRANSLATE2_GPU_RUNTIME_PROBE_SCRIPT: &str = r#"
 import json
+import os
+import sys
+
+# Windows ROCm wheels keep HIP/BLAS DLLs beside the Python packages.  Register
+# both the current and legacy layouts explicitly so CTranslate2 can be probed
+# in its own process without importing/initializing PyTorch first.
+_rocm_dll_handles = []
+if os.name == "nt" and os.environ.get("LOTT_TORCH_BACKEND", "").lower() == "rocm":
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if callable(add_dll_directory):
+        for root in list(dict.fromkeys([p for p in sys.path if p])):
+            for relative in (
+                os.path.join("_rocm_sdk_core", "bin"),
+                os.path.join("_rocm_sdk_libraries", "bin"),
+                os.path.join("_rocm_sdk_libraries_custom", "bin"),
+            ):
+                candidate = os.path.join(root, relative)
+                if os.path.isdir(candidate):
+                    try:
+                        _rocm_dll_handles.append(add_dll_directory(candidate))
+                    except OSError:
+                        pass
+
 result = {"available": False, "error": "not_installed"}
 try:
     import ctranslate2 as ct
@@ -10849,6 +10877,17 @@ mod tests {
     }
 
     #[test]
+    fn windows_cuda_paths_are_injected_only_for_nvidia_builds() {
+        assert!(should_inject_windows_cuda_paths(true, false, false, false));
+        assert!(!should_inject_windows_cuda_paths(true, false, true, false));
+        assert!(!should_inject_windows_cuda_paths(true, false, false, true));
+        assert!(!should_inject_windows_cuda_paths(true, true, false, false));
+        assert!(!should_inject_windows_cuda_paths(
+            false, false, false, false
+        ));
+    }
+
+    #[test]
     fn proofread_segment_serialization_preserves_speaker_labels() {
         let serialized = serialize_proofread_segments(&[ProofreadSegmentInput {
             id: 7,
@@ -12739,7 +12778,7 @@ fn execute_transcription(
         }
     }
 
-    apply_child_runtime_env(&mut cmd, device, hip_device_index);
+    apply_child_runtime_env(app, &mut cmd, device, hip_device_index);
     apply_diarization_model_env(&mut cmd, app, script_path);
     apply_ffmpeg_bin_env(&mut cmd, app);
     // 文字起こしは事前取得済みモデルをキャッシュから読む。実行時のネット取得を禁止する。
@@ -12896,7 +12935,7 @@ fn execute_diarization(
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    apply_child_runtime_env(&mut cmd, device, hip_device_index);
+    apply_child_runtime_env(app, &mut cmd, device, hip_device_index);
     apply_diarization_model_env(&mut cmd, app, script_path);
     apply_ffmpeg_bin_env(&mut cmd, app);
     // 話者分離モデルはローカル配置。実行時のネット取得を禁止する。
@@ -13093,7 +13132,12 @@ fn apply_private_tmp_env(cmd: &mut Command, app: &AppHandle) {
     }
 }
 
-fn apply_child_runtime_env(cmd: &mut Command, device: &str, _hip_device_index: Option<i32>) {
+fn apply_child_runtime_env(
+    app: &AppHandle,
+    cmd: &mut Command,
+    device: &str,
+    _hip_device_index: Option<i32>,
+) {
     let emulate_no_cuda = should_emulate_no_cuda();
     if cfg!(target_os = "windows") {
         cmd.env("KMP_DUPLICATE_LIB_OK", "TRUE");
@@ -13112,7 +13156,15 @@ fn apply_child_runtime_env(cmd: &mut Command, device: &str, _hip_device_index: O
         }
     }
 
-    if cfg!(target_os = "windows") && !emulate_no_cuda {
+    // Do not undo the variant launcher's isolation by injecting NVIDIA CUDA
+    // directories into AMD or CPU children.  AMD resolves its ROCm DLLs from
+    // the selected Python environment; CPU children need neither GPU stack.
+    if should_inject_windows_cuda_paths(
+        cfg!(target_os = "windows"),
+        emulate_no_cuda,
+        is_amd_gpu_build(app),
+        is_cpu_only_build(app),
+    ) {
         if let Some(extra_path) = collect_windows_cuda_paths() {
             let current = env::var("PATH").unwrap_or_default();
             let merged = if current.is_empty() {
@@ -13157,6 +13209,15 @@ fn apply_child_runtime_env(cmd: &mut Command, device: &str, _hip_device_index: O
             cmd.env("HIP_VISIBLE_DEVICES", &idx);
         }
     }
+}
+
+fn should_inject_windows_cuda_paths(
+    is_windows: bool,
+    emulate_no_cuda: bool,
+    amd_build: bool,
+    cpu_build: bool,
+) -> bool {
+    is_windows && !emulate_no_cuda && !amd_build && !cpu_build
 }
 
 fn should_emulate_no_cuda() -> bool {

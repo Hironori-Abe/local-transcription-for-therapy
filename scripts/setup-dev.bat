@@ -17,6 +17,24 @@ if not defined LOTT_ROCM_GFX_TARGET set "LOTT_ROCM_GFX_TARGET=gfx1103"
 
 cd /d "%~dp0\.."
 
+REM Keep backend-specific setup isolated from an activated/global Python or
+REM user pip configuration. Indexes are selected explicitly below; a shell-wide
+REM PIP_NO_INDEX/PIP_TARGET/PYTHONPATH must not redirect or disable installs.
+set "VIRTUAL_ENV="
+set "PYTHONHOME="
+set "PYTHONPATH="
+set "PIP_CONFIG_FILE="
+set "PIP_INDEX_URL="
+set "PIP_EXTRA_INDEX_URL="
+set "PIP_NO_INDEX="
+set "PIP_FIND_LINKS="
+set "PIP_TRUSTED_HOST="
+set "PIP_TARGET="
+set "PIP_PREFIX="
+set "PIP_USER="
+set "PIP_REQUIRE_VIRTUALENV="
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+
 REM ---- Parse arguments ----
 :parse_args
 if "%~1"=="" goto args_done
@@ -198,21 +216,40 @@ if exist "%DEV_VENV_DIR_ABS%\Scripts\python.exe" (
 REM Do not let a pre-existing directory with the wrong Python version silently
 REM contaminate the setup.  The run-dev entry points require Python 3.12 too,
 REM so reject it here while the problem is still actionable.
-call "%PYTHON_BIN%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >nul 2>&1
+call "%PYTHON_BIN%" -c "import os,sys; expected=os.path.normcase(os.path.abspath(os.environ['DEV_VENV_DIR_ABS'])); actual=os.path.normcase(os.path.abspath(sys.prefix)); ok=sys.version_info[:2] == (3,12) and not sys.prefix == sys.base_prefix and actual == expected; raise SystemExit(0 if ok else 1)" >nul 2>&1
 if errorlevel 1 (
-  echo [ERROR] Development venv must use Python 3.12.x: %PYTHON_BIN%
-  echo         Remove the venv and rerun the matching setup-dev-*.bat entry point.
+  echo [ERROR] Development Python must be an isolated 3.12 venv at:
+  echo         %DEV_VENV_DIR_ABS%
+  echo         Selected executable: %PYTHON_BIN%
+  echo         Recreate this backend-specific venv and rerun the matching setup script.
   goto :fail
 )
 
 echo [0/6] Python check...
-for /f "delims=" %%i in ('"%PYTHON_BIN%" -c "import sys; print(sys.executable)"') do set "PY_EXE=%%i"
-for /f "delims=" %%i in ('"%PYTHON_BIN%" -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"') do set "PY_VER=%%i"
-echo [INFO] Python executable: %PY_EXE%
-echo [INFO] Python version   : %PY_VER%
-if not "%PY_VER:~0,4%"=="3.12" (
-  echo [ERROR] Python 3.12.x is required for this development environment.
-  goto :fail
+call "%PYTHON_BIN%" -c "import sys; print('[INFO] Python executable:', sys.executable); print('[INFO] Python version   :', '.'.join(map(str, sys.version_info[:3])))"
+if errorlevel 1 goto :fail
+
+REM A cancelled `python -m venv` can leave python.exe and pyvenv.cfg behind
+REM before ensurepip and the activation scripts are installed.  Treating that
+REM directory as a complete existing venv makes every later import look like a
+REM CUDA failure.  Repair pip in-place first; all project packages are still
+REM installed only into the selected backend-specific venv.
+call "%PYTHON_BIN%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+  echo [WARN] Existing venv is incomplete ^(pip is missing^). Repairing with ensurepip...
+  call "%PYTHON_BIN%" -m ensurepip --upgrade --default-pip
+  if errorlevel 1 (
+    echo [ERROR] Could not repair pip in the development venv:
+    echo         %DEV_VENV_DIR_ABS%
+    echo         Recreate this backend-specific venv and rerun the matching setup script.
+    goto :fail
+  )
+  call "%PYTHON_BIN%" -m pip --version >nul 2>&1
+  if errorlevel 1 (
+    echo [ERROR] ensurepip completed but pip is still unavailable: %PYTHON_BIN%
+    goto :fail
+  )
+  echo [OK] pip was restored in the development venv.
 )
 echo.
 
@@ -223,14 +260,14 @@ echo [2/6] npm install (frontend)...
 call npm --prefix frontend install || goto :fail
 
 echo [3/6] Python dependencies...
-call "%PYTHON_BIN%" -m pip install --upgrade pip || goto :fail
-call "%PYTHON_BIN%" -m pip uninstall -y torch torchaudio torchvision torchcodec >nul 2>&1
+call "%PYTHON_BIN%" -m pip --isolated install --upgrade "pip>=25.2,<26" "setuptools<81" wheel || goto :fail
+call "%PYTHON_BIN%" -m pip --isolated uninstall -y torch torchaudio torchvision torchcodec >nul 2>&1
 if /I "%TORCH_BACKEND%"=="cuda" goto :torch_cuda
 if /I "%TORCH_BACKEND%"=="rocm" goto :torch_rocm
 goto :torch_cpu
 
 :torch_cuda
-call "%PYTHON_BIN%" -m pip install --upgrade --force-reinstall --prefer-binary --index-url https://download.pytorch.org/whl/cu128 "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
+call "%PYTHON_BIN%" -m pip --isolated install --upgrade --force-reinstall --prefer-binary --index-url https://download.pytorch.org/whl/cu128 "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
 goto :torch_done
 
 :torch_rocm
@@ -245,18 +282,18 @@ goto :python_modules_check
 :torch_cpu
 echo [INFO] Installing default CPU PyTorch wheels for the CPU development edition.
 set "HAS_WARN=1"
-call "%PYTHON_BIN%" -m pip install --upgrade --force-reinstall --prefer-binary "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
+call "%PYTHON_BIN%" -m pip --isolated install --upgrade --force-reinstall --prefer-binary "torch==2.10.0" "torchaudio==2.10.0" || goto :fail
 goto :torch_done
 
 :torch_done
-call "%PYTHON_BIN%" -m pip uninstall -y av imageio-ffmpeg >nul 2>&1
-call "%PYTHON_BIN%" -m pip install --prefer-binary --no-deps faster-whisper==1.2.1 || goto :fail
+call "%PYTHON_BIN%" -m pip --isolated uninstall -y av imageio-ffmpeg >nul 2>&1
+call "%PYTHON_BIN%" -m pip --isolated install --prefer-binary --no-deps faster-whisper==1.2.1 || goto :fail
 set "REQ_TMP=%TEMP%\lott-requirements-runtime-no-fw-%RANDOM%.txt"
 findstr /V /B /C:"faster-whisper" python_sidecar\requirements-runtime.txt > "%REQ_TMP%" || goto :fail
-call "%PYTHON_BIN%" -m pip install --prefer-binary --only-binary=contourpy -r "%REQ_TMP%" || goto :fail
+call "%PYTHON_BIN%" -m pip --isolated install --prefer-binary --only-binary=contourpy -r "%REQ_TMP%" || goto :fail
 del "%REQ_TMP%" >nul 2>&1
 :python_modules_check
-call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.configure_runtime_env('cuda' if '%TORCH_BACKEND%' != 'cpu' else 'cpu'); t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" || (
+call "%PYTHON_BIN%" -c "import python_sidecar.transcribe_cli as t; t.configure_runtime_env('cpu' if '%TORCH_BACKEND%' == 'cpu' else 'cuda'); t.install_pyav_import_stub(); import faster_whisper, ctranslate2, requests; print('python modules OK')" || (
   echo [ERROR] Python module import failed.
   echo         Retry: %PYTHON_BIN% -m pip install --no-deps faster-whisper==1.2.1
   goto :hold_error
@@ -603,18 +640,22 @@ goto :hold_error
 
 :hold_error
 echo.
+if "%ASSUME_YES%"=="1" exit /b 1
 echo Window is held because an error occurred.
 echo Type Q and press Enter to close.
+set "_HOLD_EXIT_CODE=1"
 goto :hold_loop
 
 :hold_success
 echo.
+if "%ASSUME_YES%"=="1" exit /b 0
 echo Window is held for log review.
 echo Type Q and press Enter to close.
+set "_HOLD_EXIT_CODE=0"
 goto :hold_loop
 
 :hold_loop
 set "_HOLD_INPUT="
 set /p "_HOLD_INPUT=> "
-if /I "%_HOLD_INPUT%"=="Q" exit /b 0
+if /I "%_HOLD_INPUT%"=="Q" exit /b %_HOLD_EXIT_CODE%
 goto :hold_loop

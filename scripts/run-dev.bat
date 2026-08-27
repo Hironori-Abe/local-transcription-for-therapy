@@ -39,7 +39,7 @@ where cargo >nul 2>&1
 if errorlevel 1 goto :err_cargo
 
 echo Python preflight:
-call %PYTHON_BIN% -c "import sys; print('executable=', sys.executable); print('version=', sys.version)"
+call "%PYTHON_BIN%" -c "import sys; print('executable=', sys.executable); print('version=', sys.version)"
 if errorlevel 1 goto :err_py_preflight
 set "PYTHON_VERSION="
 set "PYTHON_MAJOR_MINOR="
@@ -85,12 +85,12 @@ if /I "%EMULATION_MODE%"=="no_cuda" (
   )
 
   echo ctranslate2 preflight:
-  call %PYTHON_BIN% -c "import ctranslate2 as ct; n=ct.get_cuda_device_count(); print('cuda_device_count=', n); exit(0 if n > 0 else 2)"
+  call "%PYTHON_BIN%" -c "import ctranslate2 as ct; n=ct.get_cuda_device_count(); print('cuda_device_count=', n); exit(0 if n > 0 else 2)"
   if errorlevel 1 (
     echo [WARN] ctranslate2 CUDA preflight failed in this terminal.
     echo        Transcription tab may be hidden; Read/Edit mode still works.
     echo        Recovery:
-    echo          %PYTHON_BIN% python_sidecar\setup_venv_cli.py python_sidecar\requirements-runtime.txt
+    echo          scripts\setup-dev-nvidia.bat
     set "CUDA_READY=0"
   )
 )

@@ -13,6 +13,10 @@ tqdm>=4.64,<5
 # Runtime core (pin to avoid resolver drift)
 torch==2.10.0
 torchaudio==2.10.0
+# TorchCodec uses PyTorch's native ABI.  0.10 is the release line matched to
+# torch 2.10; newer TorchCodec wheels require torch >=2.11 and can trigger a
+# Windows loader dialog while pyannote.audio is imported.
+torchcodec==0.10.0
 sympy>=1.13.3,<2
 protobuf>=5,<6
 

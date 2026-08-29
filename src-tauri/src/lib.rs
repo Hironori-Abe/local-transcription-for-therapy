@@ -4000,6 +4000,7 @@ static DIARIZATION_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static TRANSCRIPTION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static DIARIZATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static LLM_PROOFREAD_ACTIVE: AtomicBool = AtomicBool::new(false);
+static SETUP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 二重起動ガードの RAII ハンドル。
 /// `try_acquire` 成功時のみ生成され、Drop 時にフラグを解放する。
@@ -6735,8 +6736,62 @@ struct DevDeleteModelsResponse {
     errors: Vec<String>,
 }
 
+fn dev_python_runtime_site_packages(app: &AppHandle) -> Result<PathBuf, String> {
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .map_err(|e| format!("プロジェクトディレクトリを確認できませんでした: {e}"))?;
+    let python_bin = PathBuf::from(get_python_bin(app));
+    let runtime_root = python_bin.parent().and_then(Path::parent).ok_or_else(|| {
+        format!(
+            "開発用 Python の配置を確認できません: {}",
+            python_bin.display()
+        )
+    })?;
+    let runtime_root = runtime_root
+        .canonicalize()
+        .map_err(|e| format!("開発用 Python ランタイムを確認できませんでした: {e}"))?;
+
+    let allowed_names = [
+        ".venv312",
+        ".venv312-nvidia",
+        ".venv312-amd",
+        ".venv312-cpu",
+    ];
+    let runtime_name = runtime_root
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("");
+    let parent = runtime_root.parent().and_then(|p| p.canonicalize().ok());
+    if !allowed_names.contains(&runtime_name) || parent.as_deref() != Some(project_root.as_path()) {
+        return Err(format!(
+            "安全のため、プロジェクト直下の開発用 Python ランタイム以外は削除できません: {}",
+            runtime_root.display()
+        ));
+    }
+
+    let candidates = [
+        runtime_root.join("Lib").join("site-packages"),
+        runtime_root
+            .join("lib")
+            .join("python3.12")
+            .join("site-packages"),
+    ];
+    Ok(candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "windows") {
+                candidates[0].clone()
+            } else {
+                candidates[1].clone()
+            }
+        }))
+}
+
 #[tauri::command]
-fn dev_delete_downloaded_models(target: Option<String>) -> DevDeleteModelsResponse {
+fn dev_delete_downloaded_models(app: AppHandle, target: Option<String>) -> DevDeleteModelsResponse {
     if !cfg!(debug_assertions) {
         return DevDeleteModelsResponse {
             deleted: vec![],
@@ -6754,6 +6809,57 @@ fn dev_delete_downloaded_models(target: Option<String>) -> DevDeleteModelsRespon
     let delete_whisper_large_v3 = target == "all" || target == "whisper_large_v3";
     let delete_diarization = target == "all" || target == "diarization";
     let delete_llm = target == "all" || target == "llm";
+    let delete_python_runtime = target == "all" || target == "python_runtime";
+
+    if delete_python_runtime {
+        if TRANSCRIPTION_ACTIVE.load(Ordering::SeqCst)
+            || DIARIZATION_ACTIVE.load(Ordering::SeqCst)
+            || LLM_PROOFREAD_ACTIVE.load(Ordering::SeqCst)
+            || SETUP_ACTIVE.load(Ordering::SeqCst)
+            || TRANSCRIPTION_PID.load(Ordering::SeqCst) != 0
+            || PROOFREAD_PID.load(Ordering::SeqCst) != 0
+            || LLM_PROOFREAD_PID.load(Ordering::SeqCst) != 0
+            || DIARIZATION_PID.load(Ordering::SeqCst) != 0
+        {
+            errors.push(
+                "処理またはセットアップの実行中はPythonランタイムを削除できません。完了または中止後に再試行してください。"
+                    .to_string(),
+            );
+            return DevDeleteModelsResponse {
+                deleted,
+                not_found,
+                errors,
+            };
+        }
+        match dev_python_runtime_site_packages(&app) {
+            Ok(path) if path.exists() => {
+                let runtime_root = path
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(|p| p.canonicalize().ok());
+                let resolved = path.canonicalize().ok();
+                if runtime_root.is_none()
+                    || resolved
+                        .as_deref()
+                        .zip(runtime_root.as_deref())
+                        .map(|(site, root)| !site.starts_with(root) || site == root)
+                        .unwrap_or(true)
+                {
+                    errors.push(format!(
+                        "安全でないPythonパッケージ保存先のため削除しませんでした: {}",
+                        path.display()
+                    ));
+                } else {
+                    match fs::remove_dir_all(&path) {
+                        Ok(_) => deleted.push(path.to_string_lossy().into_owned()),
+                        Err(e) => errors.push(format!("{}: {e}", path.display())),
+                    }
+                }
+            }
+            Ok(path) => not_found.push(path.to_string_lossy().into_owned()),
+            Err(e) => errors.push(e),
+        }
+    }
 
     let hub = get_hf_hub_cache();
 
@@ -14399,7 +14505,25 @@ sys.exit(0 if ok else 1)"#,
         if cfg!(debug_assertions) {
             let dev_python = PathBuf::from(get_python_bin(_app));
             if dev_python.exists() {
-                return (true, dev_python.to_string_lossy().to_string());
+                let runtime_root = dev_python.parent().and_then(Path::parent);
+                let site_packages = runtime_root.and_then(|root| {
+                    [
+                        root.join("Lib").join("site-packages"),
+                        root.join("lib").join("python3.12").join("site-packages"),
+                    ]
+                    .into_iter()
+                    .find(|p| p.exists())
+                });
+                let packages_ok = site_packages
+                    .as_ref()
+                    .map(|site| {
+                        site.join("faster_whisper").join("__init__.py").is_file()
+                            && site.join("torch").is_dir()
+                            && !site.join("av").exists()
+                            && !site.join("imageio_ffmpeg").exists()
+                    })
+                    .unwrap_or(false);
+                return (packages_ok, dev_python.to_string_lossy().to_string());
             }
         }
 
@@ -14867,6 +14991,8 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
 
 #[tauri::command]
 async fn run_full_setup(app: AppHandle, hf_token: Option<String>) -> Result<bool, String> {
+    let _run_guard = TaskRunGuard::try_acquire(&SETUP_ACTIVE)
+        .ok_or_else(|| "セットアップは既に実行中です。完了するまでお待ちください。".to_string())?;
     tauri::async_runtime::spawn_blocking(move || run_full_setup_blocking(app, hf_token))
         .await
         .map_err(|e| format!("セットアップタスクの実行に失敗しました: {e}"))?

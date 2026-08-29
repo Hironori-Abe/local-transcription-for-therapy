@@ -873,7 +873,33 @@ def _bootstrap_pip(python: Path) -> None:
             _remember_pip_output(output)
             raise DownloadError(_pip_failure_message("pipの更新後確認", returncode or 1))
 
+    # If site-packages itself was removed by the development runtime reset,
+    # it did not exist when this interpreter ran site.py and is therefore not
+    # present in sys.path.  ensurepip/get-pip run in a child process and can
+    # recreate the directory, but this long-lived setup process must publish
+    # that newly-created import path before the direct resolver imports pip's
+    # vendored packaging metadata helpers.
+    _refresh_current_python_packages(python)
     emit("progress", f"pip {'.'.join(map(str, version))} を確認しました")
+
+
+def _refresh_current_python_packages(python: Path) -> None:
+    """Make packages installed by a bootstrap child visible in this process."""
+    try:
+        selected = python.resolve()
+        current = Path(sys.executable).resolve()
+    except OSError:
+        selected = python.absolute()
+        current = Path(sys.executable).absolute()
+    if selected != current:
+        return
+    package_dir = Path(
+        sysconfig.get_paths().get("purelib", sysconfig.get_paths()["platlib"])
+    )
+    package_text = str(package_dir)
+    if package_text not in sys.path:
+        sys.path.insert(0, package_text)
+    importlib.invalidate_caches()
 
 
 def _report_artifacts(report: dict, wheelhouse: Path) -> list[dict]:
@@ -1053,6 +1079,24 @@ def _index_candidates_for_package(package: str, primary_index: str) -> list[str]
             return list(dict.fromkeys([primary_index, PYPI_NVIDIA_INDEX, PYPI_INDEX]))
         return list(dict.fromkeys([primary_index, PYPI_INDEX]))
     return [PYPI_INDEX]
+
+
+def _use_direct_backend_resolver(variant: str, platform_name: str | None = None) -> bool:
+    """Select backend graphs that must keep generic wheels on PyPI.
+
+    The PyTorch CUDA/CPU indexes mirror ordinary dependencies such as Jinja2,
+    MarkupSafe, and setuptools, but their mirrored wheel links may omit the
+    PEP 503 SHA-256 fragment.  The direct resolver queries backend wheels from
+    the selected PyTorch index and ordinary dependencies from PyPI, preserving
+    the resumable wheelhouse's hash requirement on Windows as well as Linux.
+
+    Windows ROCm remains on its dedicated pip-report path because its package
+    graph uses backend-specific extras and a source archive.
+    """
+    platform_name = os.name if platform_name is None else platform_name
+    if platform_name == "nt":
+        return variant in {"cuda", "cpu"}
+    return variant in {"cuda", "rocm"}
 
 
 def _fetch_simple_links(package: str, index_url: str) -> list[dict[str, str]]:
@@ -1677,6 +1721,9 @@ def _validate_python_environment(python: Path, variant: str, req_file: Path) -> 
         from transcribe_cli import install_pyav_import_stub
 
         install_pyav_import_stub()
+        from diarize_cli import install_torchcodec_import_stub
+
+        install_torchcodec_import_stub()
     except Exception:
         pass
 
@@ -1860,10 +1907,11 @@ def main() -> None:
     _detect_pip_capabilities(python)
     _remove_gpl_ffmpeg_packages(python)
 
-    # PyTorch とその CUDA/ROCm runtime 依存を、LinuxではPEP 503/658の
-    # メタデータ（ROCm wheelに658が無い場合はremote ZIP metadata）から
-    # 先に固定し、wheelhouseへ取得する。アプリ再起動後は各ファイルの
-    # .partから再開する。Windowsは既存のpip report経路を維持する。
+    # PyTorch とその backend runtime 依存をPEP 503/658のメタデータ
+    # （ROCm wheelに658が無い場合はremote ZIP metadata）から先に固定し、
+    # wheelhouseへ取得する。アプリ再起動後は各ファイルの.partから再開する。
+    # Windows CUDA/CPUでもこの経路を使い、PyTorch index上のハッシュ無し
+    # 汎用wheelではなく、SHA-256付きのPyPI公式wheelを選ぶ。
     if args.variant == "rocm" and os.name == "nt":
         gfx_target = os.environ.get("LOTT_ROCM_GFX_TARGET", "gfx1103").strip() or "gfx1103"
         rocm_index = os.environ.get(
@@ -1949,7 +1997,7 @@ def main() -> None:
         ]
         label = "PyTorch (CPU)"
 
-    if args.variant in {"cuda", "rocm"} and os.name != "nt":
+    if _use_direct_backend_resolver(args.variant):
         # Do not let pip inspect backend wheels in /tmp while generating a
         # report.  CUDA generally has PEP658 metadata; ROCm torch 2.11 wheels
         # are multi-gigabyte files without it, so _fetch_wheel_metadata falls
@@ -1959,7 +2007,11 @@ def main() -> None:
             if args.variant == "rocm"
             else ["torch==2.10.0", "torchaudio==2.10.0"]
         )
-        direct_index = PYTORCH_ROCM_INDEX if args.variant == "rocm" else PYTORCH_CUDA_INDEX
+        direct_index = {
+            "cuda": PYTORCH_CUDA_INDEX,
+            "rocm": PYTORCH_ROCM_INDEX,
+            "cpu": PYTORCH_CPU_INDEX,
+        }[args.variant]
         direct_artifacts = _resolve_direct_wheels(
             direct_requirements,
             primary_index=direct_index,

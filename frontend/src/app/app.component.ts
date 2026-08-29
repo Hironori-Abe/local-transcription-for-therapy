@@ -374,7 +374,7 @@ interface OverallProofreadResultData {
 
 type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory' | 'deletePythonRuntime';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 interface ConfirmDialogState {
   actionKind: ConfirmDialogActionKind;
@@ -1205,7 +1205,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private devDemoDataDir: string | null | undefined = undefined;
   readonly devDeletingModels = signal(false);
   readonly devDeleteModelsResult = signal<{ deleted: string[]; notFound: string[]; errors: string[] } | null>(null);
-  readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'whisper_large_v3' | 'diarization' | 'llm'>('all');
+  readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'whisper_large_v3' | 'diarization' | 'llm' | 'python_runtime'>('all');
   private readonly estimateMinRequired = 5;
   private readonly estimateStorageKey = 'offline_transcriber_runtime_estimate_samples_v2';
   private readonly appSettingsStorageKey = 'offline_transcriber_app_settings_v1';
@@ -3473,6 +3473,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
+    if (dialog.actionKind === 'deletePythonRuntime') {
+      await this.performDevDeleteModels();
+      return;
+    }
+
     if (dialog.actionKind === 'cancelRun') {
       if (dialog.cancelRunKind === 'transcription') {
         await this.cancelTranscriptionRun();
@@ -5100,7 +5105,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.devEmulationLabel.set(`開発用エミュレーション: ${flags.join(' / ')}`);
   }
 
-  async devDeleteModels(): Promise<void> {
+  devDeleteModels(): void {
+    if (this.devDeleteTarget() === 'python_runtime' || this.devDeleteTarget() === 'all') {
+      const deletesAll = this.devDeleteTarget() === 'all';
+      this.openConfirmDialog({
+        actionKind: 'deletePythonRuntime',
+        title: deletesAll ? 'すべて削除の確認' : 'Pythonランタイム削除の確認',
+        message: deletesAll
+          ? 'すべてのAIモデルと、現在の開発環境のPython依存パッケージを削除します。再び利用するには数GBの再ダウンロードが必要です。続行しますか？'
+          : '現在の開発環境からPython依存パッケージを削除します。再び文字起こし・話者分離を使うには、セットアップタブから数GBの再ダウンロードが必要です。続行しますか？',
+        confirmLabel: deletesAll ? 'すべて削除' : 'ランタイムを削除',
+        cancelLabel: 'キャンセル',
+        confirmColor: 'warn',
+        cancelColor: null
+      });
+      return;
+    }
+    void this.performDevDeleteModels();
+  }
+
+  private async performDevDeleteModels(): Promise<void> {
     this.devDeletingModels.set(true);
     this.devDeleteModelsResult.set(null);
     try {

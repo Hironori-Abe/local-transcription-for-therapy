@@ -1,4 +1,5 @@
 import argparse
+import importlib.machinery
 import json
 import os
 import shutil
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import types
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
@@ -54,6 +56,47 @@ def no_window_subprocess_kwargs() -> Dict[str, object]:
     if os.name != "nt":
         return {}
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+
+
+def install_torchcodec_import_stub() -> None:
+    """Keep pyannote on LoTT's pre-decoded in-memory audio path.
+
+    pyannote.audio 4 imports TorchCodec even when callers always provide a
+    ``{"waveform", "sample_rate"}`` mapping.  LoTT deliberately decodes audio
+    with its LGPL ffmpeg CLI and soundfile instead, so loading TorchCodec's
+    native DLLs is unnecessary.  In particular, an ABI-mismatched TorchCodec
+    wheel can make Windows display a modal loader error before pyannote catches
+    the import failure.
+
+    The placeholders fail explicitly if a future code path tries to use
+    TorchCodec decoding rather than the supported in-memory waveform path.
+    """
+    if "torchcodec" in sys.modules:
+        return
+
+    class _TorchCodecDisabled:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError(
+                "TorchCodec decoding is disabled; pass pre-decoded waveform audio."
+            )
+
+    torchcodec = types.ModuleType("torchcodec")
+    torchcodec.__path__ = []
+    torchcodec.__spec__ = importlib.machinery.ModuleSpec(
+        "torchcodec", loader=None, is_package=True
+    )
+    torchcodec.AudioSamples = _TorchCodecDisabled
+
+    decoders = types.ModuleType("torchcodec.decoders")
+    decoders.__spec__ = importlib.machinery.ModuleSpec(
+        "torchcodec.decoders", loader=None
+    )
+    decoders.AudioDecoder = _TorchCodecDisabled
+    decoders.AudioStreamMetadata = _TorchCodecDisabled
+    torchcodec.decoders = decoders
+
+    sys.modules["torchcodec"] = torchcodec
+    sys.modules["torchcodec.decoders"] = decoders
 
 
 def patch_torch_load_default_weights_only_false(torch_module) -> None:
@@ -359,6 +402,7 @@ def main() -> int:
 
     try:
         import torch
+        install_torchcodec_import_stub()
         from pyannote.audio import Pipeline
         patch_torch_load_default_weights_only_false(torch)
     except BaseException as exc:

@@ -9,11 +9,13 @@ import os
 import platform
 import sys
 import threading
+import types
 import unittest
 import urllib.request
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 try:
     from . import setup_venv_cli as setup
@@ -85,6 +87,50 @@ class _WheelMetadataRangeHandler(_RangeHandler):
 
 
 class ResumableDownloadTests(unittest.TestCase):
+    def test_refresh_current_python_packages_adds_recreated_site_packages(self):
+        recreated = Path("C:/temporary/recreated-site-packages")
+        filtered_path = [entry for entry in sys.path if entry != str(recreated)]
+        with patch.object(sys, "path", filtered_path), patch.object(
+            setup.sysconfig,
+            "get_paths",
+            return_value={"purelib": str(recreated), "platlib": str(recreated)},
+        ), patch.object(setup.importlib, "invalidate_caches") as invalidate:
+            setup._refresh_current_python_packages(Path(sys.executable))
+            self.assertEqual(sys.path[0], str(recreated))
+            invalidate.assert_called_once_with()
+
+    def test_runtime_requirements_pin_torchcodec_to_torch_210_line(self):
+        requirements = (
+            Path(__file__).with_name("requirements-runtime.txt").read_text(encoding="utf-8")
+        )
+        self.assertRegex(requirements, r"(?m)^torch==2\.10\.0$")
+        self.assertRegex(requirements, r"(?m)^torchcodec==0\.10\.0$")
+
+    def test_torchcodec_stub_exposes_only_predecoded_audio_import_shape(self):
+        try:
+            from .diarize_cli import install_torchcodec_import_stub
+        except ImportError:
+            from diarize_cli import install_torchcodec_import_stub
+
+        names = ("torchcodec", "torchcodec.decoders")
+        previous = {name: sys.modules.get(name) for name in names}
+        try:
+            for name in names:
+                sys.modules.pop(name, None)
+            install_torchcodec_import_stub()
+            torchcodec = sys.modules["torchcodec"]
+            decoders = sys.modules["torchcodec.decoders"]
+            self.assertIsInstance(torchcodec, types.ModuleType)
+            self.assertIs(torchcodec.decoders, decoders)
+            with self.assertRaisesRegex(RuntimeError, "pre-decoded waveform"):
+                decoders.AudioDecoder("audio.wav")
+        finally:
+            for name, module in previous.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
     def test_interrupted_download_resumes_with_range_and_hash(self):
         payload = bytes((index % 251 for index in range(3 * 1024 * 1024 + 17)))
         _RangeHandler.payload = payload
@@ -323,6 +369,19 @@ class ResumableDownloadTests(unittest.TestCase):
             setup._index_candidates_for_package("MarkupSafe", setup.PYTORCH_ROCM_INDEX),
             [setup.PYPI_INDEX],
         )
+        for package in ("Jinja2", "MarkupSafe", "setuptools"):
+            self.assertEqual(
+                setup._index_candidates_for_package(package, setup.PYTORCH_CUDA_INDEX),
+                [setup.PYPI_INDEX],
+            )
+
+    def test_windows_cuda_and_cpu_use_hash_pinned_direct_resolver(self):
+        self.assertTrue(setup._use_direct_backend_resolver("cuda", "nt"))
+        self.assertTrue(setup._use_direct_backend_resolver("cpu", "nt"))
+        self.assertFalse(setup._use_direct_backend_resolver("rocm", "nt"))
+        self.assertTrue(setup._use_direct_backend_resolver("cuda", "posix"))
+        self.assertTrue(setup._use_direct_backend_resolver("rocm", "posix"))
+        self.assertFalse(setup._use_direct_backend_resolver("cpu", "posix"))
 
     def test_pip_failure_categories_are_actionable(self):
         self.assertEqual(setup._classify_pip_failure("No space left on device"), "容量不足")

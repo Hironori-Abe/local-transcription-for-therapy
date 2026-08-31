@@ -50,7 +50,7 @@
     <mat-tab [label]="getTranscriptionTabLabel()" *ngIf="canShowTranscriptionTab()">
       <div class="tab-content">
         <!-- GPU未検出バナー（CUDA/ROCm未インストール時） -->
-        <!-- 開発用プレビュー: OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda で表示 -->
+        <!-- 開発用プレビュー: LOTT_DEV_EMULATION_MODE=no_cuda で表示 -->
         <div *ngIf="!runtimeCpuOnlyBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>

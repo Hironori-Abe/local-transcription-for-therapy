@@ -3,6 +3,9 @@
 ; インストーラーから追加ランタイムの導入を促すことはない。
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; v0.9.8より前の実行ファイル名を上書きインストール後に残さない。
+  Delete "$INSTDIR\offline-transcriber.exe"
+
   ; Editor版は追加LLMランタイムやPythonパッケージを必要としないため、
   ; インストール時の追加処理は行わない。
 !macroend

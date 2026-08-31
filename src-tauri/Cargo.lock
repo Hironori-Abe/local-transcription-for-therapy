@@ -1905,6 +1905,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "lott"
+version = "0.9.8"
+dependencies = [
+ "chrono",
+ "encoding_rs",
+ "regex",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "webkit2gtk",
+ "windows-sys 0.59.0",
+ "zip",
+]
+
+[[package]]
 name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2216,23 +2233,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "offline-transcriber"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "encoding_rs",
- "regex",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "webkit2gtk",
- "windows-sys 0.59.0",
- "zip",
 ]
 
 [[package]]

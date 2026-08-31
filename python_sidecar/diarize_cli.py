@@ -108,7 +108,7 @@ def patch_torch_load_default_weights_only_false(torch_module) -> None:
     original_load = getattr(torch_module, "load", None)
     if original_load is None:
         return
-    if getattr(torch_module, "_offline_transcriber_torch_load_patched", False):
+    if getattr(torch_module, "_lott_torch_load_patched", False):
         return
 
     def patched_load(*args, **kwargs):
@@ -118,7 +118,7 @@ def patch_torch_load_default_weights_only_false(torch_module) -> None:
         return original_load(*args, **kwargs)
 
     torch_module.load = patched_load
-    torch_module._offline_transcriber_torch_load_patched = True
+    torch_module._lott_torch_load_patched = True
 
 
 def resolve_model_path(cli_value: str) -> Path:
@@ -203,7 +203,7 @@ def to_wav_if_possible(audio_path: Path) -> Path:
     if audio_path.suffix.lower() == ".wav":
         return audio_path
 
-    fd, tmp_path = tempfile.mkstemp(prefix="offline_transcriber_diar_", suffix=".wav")
+    fd, tmp_path = tempfile.mkstemp(prefix="lott_diar_", suffix=".wav")
     os.close(fd)
     tmp_file = Path(tmp_path)
 

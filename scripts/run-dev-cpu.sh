@@ -10,7 +10,7 @@ cd "$ROOT_DIR"
 export LOTT_FRONTEND_HOST=127.0.0.1
 export LOTT_FRONTEND_PORT=4202
 export LOTT_FRONTEND_URL=http://127.0.0.1:4202
-export LOTT_FRONTEND_BUILD_TARGET=offline-transcriber:build:development,cpu
+export LOTT_FRONTEND_BUILD_TARGET=lott:build:development,cpu
 export LOTT_DEV_VARIANT=cpu
 export LOTT_TORCH_BACKEND=cpu
 unset LOTT_DEV_ENV_FILE LOTT_TAURI_CONFIGS

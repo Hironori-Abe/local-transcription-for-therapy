@@ -25,7 +25,7 @@ if not errorlevel 1 (
 )
 
 echo Starting Angular dev server for Editor in background...
-start "LoTT Editor Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4203 --build-target offline-transcriber:build:development,editor"
+start "LoTT Editor Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4203 --build-target lott:build:development,editor"
 
 echo Waiting for frontend startup: %FRONTEND_URL%
 for /l %%i in (1,1,60) do (

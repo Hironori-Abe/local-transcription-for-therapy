@@ -7,7 +7,7 @@
     "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev.bat",
     "beforeBuildCommand": "npm.cmd --prefix frontend run build",
     "devUrl": "http://localhost:4200",
-    "frontendDist": "../frontend/dist/offline-transcriber/browser"
+    "frontendDist": "../frontend/dist/lott/browser"
   },
   "app": {
     "windows": [

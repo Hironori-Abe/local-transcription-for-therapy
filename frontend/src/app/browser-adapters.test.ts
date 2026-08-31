@@ -37,6 +37,27 @@ test('browser storage reads and writes text, JSON objects, and flags', () => {
   assert.equal(storage.readFlag('enabled'), true);
 });
 
+test('browser storage migrates legacy values without overriding current values', () => {
+  const memory = new MemoryStorage();
+  const storage = new BestEffortBrowserStorage(memory);
+  memory.values.set('legacy-settings', JSON.stringify({ theme: 'dark' }));
+  memory.values.set('legacy-flag', '1');
+
+  assert.deepEqual(
+    storage.readObjectWithLegacy('settings', 'legacy-settings'),
+    { theme: 'dark' }
+  );
+  assert.equal(memory.values.get('settings'), JSON.stringify({ theme: 'dark' }));
+  assert.equal(storage.readFlagWithLegacy('flag', 'legacy-flag'), true);
+  assert.equal(memory.values.get('flag'), '1');
+
+  memory.values.set('settings', JSON.stringify({ theme: 'light' }));
+  assert.deepEqual(
+    storage.readObjectWithLegacy('settings', 'legacy-settings'),
+    { theme: 'light' }
+  );
+});
+
 class FakeSeekableAudio {
   private value = 0;
   readonly listeners = new Set<() => void>();

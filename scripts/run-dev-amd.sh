@@ -7,7 +7,7 @@ export LOTT_TORCH_BACKEND=rocm
 export LOTT_FRONTEND_HOST=127.0.0.1
 export LOTT_FRONTEND_PORT=4201
 export LOTT_FRONTEND_URL=http://127.0.0.1:4201
-export LOTT_FRONTEND_BUILD_TARGET=offline-transcriber:build:development
+export LOTT_FRONTEND_BUILD_TARGET=lott:build:development
 unset LOTT_DEV_ENV_FILE LOTT_TAURI_CONFIGS
 
 if [[ -n "${LOTT_AMD_DEV_PYTHON_BIN:-}" ]]; then

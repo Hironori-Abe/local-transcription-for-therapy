@@ -26,8 +26,33 @@ export class BestEffortBrowserStorage {
     }
   }
 
+  readTextWithLegacy(key: string, legacyKey: string): string | null {
+    const current = this.readText(key);
+    if (current !== null) {
+      return current;
+    }
+    const legacy = this.readText(legacyKey);
+    if (legacy !== null) {
+      this.writeText(key, legacy);
+    }
+    return legacy;
+  }
+
   readObject<T extends object>(key: string): T | null {
     const raw = this.readText(key);
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return parsed !== null && typeof parsed === 'object' ? parsed as T : null;
+    } catch {
+      return null;
+    }
+  }
+
+  readObjectWithLegacy<T extends object>(key: string, legacyKey: string): T | null {
+    const raw = this.readTextWithLegacy(key, legacyKey);
     if (!raw) {
       return null;
     }
@@ -61,6 +86,10 @@ export class BestEffortBrowserStorage {
 
   readFlag(key: string): boolean {
     return this.readText(key) === '1';
+  }
+
+  readFlagWithLegacy(key: string, legacyKey: string): boolean {
+    return this.readTextWithLegacy(key, legacyKey) === '1';
   }
 
   writeFlag(key: string): boolean {

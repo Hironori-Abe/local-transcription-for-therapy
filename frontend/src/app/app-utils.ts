@@ -397,7 +397,7 @@ export function gpuSetupHintValue(fallbackUsed: boolean, errorMessage: string): 
     return [
       'GPU 実行が不安定だったため、GPU内フォールバックが発生しました。',
       'Windows の「設定 > システム > ディスプレイ > グラフィック」で',
-      'offline-transcriber.exe / python.exe / py.exe を',
+      'lott.exe / python.exe / py.exe を',
       '「高パフォーマンス (RTX)」に設定すると安定する場合があります。'
     ].join('\n');
   }
@@ -405,7 +405,7 @@ export function gpuSetupHintValue(fallbackUsed: boolean, errorMessage: string): 
     return [
       'GPU 実行に失敗しています。',
       'Windows のグラフィック設定および NVIDIA コントロールパネルで',
-      'offline-transcriber.exe / python.exe / py.exe を',
+      'lott.exe / python.exe / py.exe を',
       'RTX 側へ固定してください。'
     ].join('\n');
   }

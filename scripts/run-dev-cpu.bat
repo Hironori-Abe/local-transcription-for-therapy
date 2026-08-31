@@ -43,7 +43,7 @@ if not errorlevel 1 (
 )
 
 echo Starting Angular dev server for CPU in background...
-start "LoTT CPU Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4202 --build-target offline-transcriber:build:development,cpu"
+start "LoTT CPU Angular" /b cmd /c "npm.cmd --prefix frontend run start -- --host 127.0.0.1 --port 4202 --build-target lott:build:development,cpu"
 
 echo Waiting for frontend startup: %FRONTEND_URL%
 for /l %%i in (1,1,60) do (

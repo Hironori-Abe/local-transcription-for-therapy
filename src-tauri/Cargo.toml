@@ -1,12 +1,12 @@
 [package]
-name = "offline-transcriber"
-version = "0.1.0"
+name = "lott"
+version = "0.9.8"
 description = "Local Japanese transcription desktop app"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "offline_transcriber_lib"
+name = "lott_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

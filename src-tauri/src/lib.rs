@@ -6043,7 +6043,7 @@ fn cleanup_stale_private_temp_files(app: &AppHandle) {
             "lott_overall_system_prompt_",
             "lott-retranscribe-",
             "lott-playback-",
-            "offline_transcriber_diar_",
+            "lott_diar_",
         ]),
     );
 }
@@ -7307,7 +7307,7 @@ fn check_transcription_runtime_support_once(
         return Ok(TranscriptionRuntimeStatusResponse {
             available: false,
             reason:
-                "開発用エミュレーションで CUDA を無効化しています（OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda）。"
+                "開発用エミュレーションで CUDA を無効化しています（LOTT_DEV_EMULATION_MODE=no_cuda）。"
                     .to_string(),
         });
     }
@@ -7327,7 +7327,7 @@ fn check_transcription_runtime_support_once(
         return Ok(TranscriptionRuntimeStatusResponse {
             available: true,
             reason:
-                "開発用エミュレーションで community-1 未配置のみを再現しています（OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=missing_community1）。"
+                "開発用エミュレーションで community-1 未配置のみを再現しています（LOTT_DEV_EMULATION_MODE=missing_community1）。"
                     .to_string(),
         });
     }
@@ -13355,7 +13355,7 @@ impl DevEmulationMode {
 }
 
 fn read_dev_emulation_mode() -> DevEmulationMode {
-    if let Ok(raw) = env::var("OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE") {
+    if let Ok(raw) = env::var("LOTT_DEV_EMULATION_MODE") {
         let normalized = raw.trim().to_ascii_lowercase();
         if normalized == "no_cuda" {
             return DevEmulationMode::NoCuda;

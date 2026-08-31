@@ -16,6 +16,11 @@ python_sidecar/models/
 scripts/a
 reports/
 .angular/
+.tmp-installs/*
+.tmp-runtime/*
+.tmp-python-tests/
+.tmp-python-tests-runtime-reset/
+.tmp-venv-temp/
 *.log
 *.tmp
 *.bak

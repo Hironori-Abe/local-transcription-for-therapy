@@ -1,12 +1,12 @@
 {
-  "name": "offline-transcriber",
+  "name": "lott",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.9.8",
   "scripts": {
     "setup": "npm install && npm --prefix frontend install && py python_sidecar/setup_venv_cli.py python_sidecar/requirements-runtime.txt",
     "frontend:dev": "npm --prefix frontend run start",
-    "frontend:dev:amd": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4201 --build-target offline-transcriber:build:development",
-    "frontend:dev:cpu": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4202 --build-target offline-transcriber:build:development,cpu",
+    "frontend:dev:amd": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4201 --build-target lott:build:development",
+    "frontend:dev:cpu": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4202 --build-target lott:build:development,cpu",
     "frontend:build": "npm --prefix frontend run build",
     "frontend:build:editor": "cmd /c npm --prefix frontend run build -- --configuration editorProduction",
     "frontend:build:cpu": "cmd /c npm --prefix frontend run build -- --configuration cpuProduction",

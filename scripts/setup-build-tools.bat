@@ -85,7 +85,7 @@ if "%DRY_RUN%"=="1" (
 )
 echo.
 echo Included in installer:
-echo   - App executable (offline-transcriber.exe)
+echo   - App executable (lott.exe)
 echo   - Python 3.12 Embeddable runtime (resources/python312/)
 echo   - Python scripts (transcribe_cli.py, diarize_cli.py, prompt_templates)
 echo   - LGPL FFmpeg CLI (resources/ffmpeg/)

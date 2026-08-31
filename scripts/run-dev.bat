@@ -15,16 +15,16 @@ if not defined LOTT_NVIDIA_DEV_PYTHON_BIN if exist ".venv312-nvidia\Scripts\pyth
 set "CUDA_HINT_1=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin"
 set "CUDA_HINT_2=C:\Program Files\NVIDIA\CUDNN\v9.20\bin\12.9\x64"
 set "EMULATION_MODE=none"
-if not "%OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE%"=="" set "EMULATION_MODE=%OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE%"
+if not "%LOTT_DEV_EMULATION_MODE%"=="" set "EMULATION_MODE=%LOTT_DEV_EMULATION_MODE%"
 if not "%RUN_DEV_EMULATION_MODE%"=="" set "EMULATION_MODE=%RUN_DEV_EMULATION_MODE%"
 if /I not "%EMULATION_MODE%"=="no_cuda" if /I not "%EMULATION_MODE%"=="missing_community1" set "EMULATION_MODE=none"
-set "OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=%EMULATION_MODE%"
+set "LOTT_DEV_EMULATION_MODE=%EMULATION_MODE%"
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
 set "EMULATION_STATE_FILE=%cd%\.dev-runtime-emulation.env"
 
 (
-  echo # offline-transcriber dev emulation flags
-  echo OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=%EMULATION_MODE%
+  echo # LoTT dev emulation flags
+  echo LOTT_DEV_EMULATION_MODE=%EMULATION_MODE%
 ) > "%EMULATION_STATE_FILE%"
 
 where npm >nul 2>&1
@@ -49,7 +49,7 @@ if not "%PYTHON_MAJOR_MINOR%"=="3.12" goto :err_python_version
 
 set "CUDA_READY=1"
 if /I "%EMULATION_MODE%"=="no_cuda" (
-  echo [INFO] OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda
+  echo [INFO] LOTT_DEV_EMULATION_MODE=no_cuda
   echo [INFO] Emulating a machine without CUDA support.
   set "CUDA_READY=0"
 ) else (
@@ -101,7 +101,7 @@ if "%CUDA_READY%"=="1" (
   echo [INFO] CUDA preflight failed or emulated-off. Launching in Read/Edit-oriented mode.
 )
 if /I "%EMULATION_MODE%"=="missing_community1" (
-  echo [INFO] OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=missing_community1
+  echo [INFO] LOTT_DEV_EMULATION_MODE=missing_community1
   echo [INFO] Emulating missing diarization model: community-1.
 )
 echo [INFO] Emulation state saved: %EMULATION_STATE_FILE%

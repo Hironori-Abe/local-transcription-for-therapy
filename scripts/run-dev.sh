@@ -42,7 +42,7 @@ FRONTEND_URL="${LOTT_FRONTEND_URL:-http://${FRONTEND_HOST}:${FRONTEND_PORT}}"
 FRONTEND_BUILD_TARGET="${LOTT_FRONTEND_BUILD_TARGET:-}"
 DEV_ENV_FILE="$DEFAULT_ENV_FILE"
 TAURI_CONFIGS_STRING="$DEFAULT_TAURI_CONFIGS"
-EMULATION_MODE="${OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE:-${RUN_DEV_EMULATION_MODE:-none}}"
+EMULATION_MODE="${LOTT_DEV_EMULATION_MODE:-${RUN_DEV_EMULATION_MODE:-none}}"
 EMULATION_STATE_FILE="$ROOT_DIR/.dev-runtime-emulation.env"
 export LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS="${LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS:-1800}"
 
@@ -172,11 +172,11 @@ case "$EMULATION_MODE" in
     EMULATION_MODE="none"
     ;;
 esac
-export OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE="$EMULATION_MODE"
+export LOTT_DEV_EMULATION_MODE="$EMULATION_MODE"
 
 cat > "$EMULATION_STATE_FILE" <<EOF
-# offline-transcriber dev emulation flags
-OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=$EMULATION_MODE
+# LoTT dev emulation flags
+LOTT_DEV_EMULATION_MODE=$EMULATION_MODE
 EOF
 
 if [[ -f "$DEV_ENV_FILE" ]]; then
@@ -236,7 +236,7 @@ info "Python preflight:"
   || die "Python preflight failed."
 
 if [[ "$EMULATION_MODE" == "no_cuda" ]]; then
-  info "OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=no_cuda"
+  info "LOTT_DEV_EMULATION_MODE=no_cuda"
   info "Emulating a machine without CUDA support."
 elif [[ "${LOTT_TORCH_BACKEND:-}" == "rocm" ]]; then
   info "ROCm/PyTorch preflight:"
@@ -254,7 +254,7 @@ else
 fi
 
 if [[ "$EMULATION_MODE" == "missing_community1" ]]; then
-  info "OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE=missing_community1"
+  info "LOTT_DEV_EMULATION_MODE=missing_community1"
   info "Emulating missing diarization model: community-1."
 fi
 info "Emulation state saved: $EMULATION_STATE_FILE"

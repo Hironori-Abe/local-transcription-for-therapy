@@ -89,7 +89,7 @@ package() {
   local sidecar_dir="$app_dir/_up_/python_sidecar"
   local cargo_target_dir="$srcdir/cargo-target-x86-64"
 
-  install -Dm755 "$cargo_target_dir/release/offline-transcriber" \
+  install -Dm755 "$cargo_target_dir/release/lott" \
     "$app_dir/lott-bin"
   install -Dm755 "$startdir/lott" \
     "$pkgdir/usr/bin/lott"

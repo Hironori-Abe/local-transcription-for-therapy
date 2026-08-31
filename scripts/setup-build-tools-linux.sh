@@ -128,7 +128,7 @@ appdir_is_current_build() {
     return 0
   fi
 
-  if [[ -e "$candidate/usr/bin/offline-transcriber" && "$candidate/usr/bin/offline-transcriber" -nt "$BUILD_MARKER" ]] \
+  if [[ -e "$candidate/usr/bin/lott" && "$candidate/usr/bin/lott" -nt "$BUILD_MARKER" ]] \
       || [[ "$candidate" -nt "$BUILD_MARKER" ]]; then
     APPDIR_MATCH_REASON="productName 一致（BUILD_MARKER より新しい AppDir）"
     return 0
@@ -169,7 +169,7 @@ echo ""
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[DRY-RUN] Tauri: build --config $BUILD_CONFIG --bundles deb appimage"
-  echo "[DRY-RUN] AppDir 選別規則: productName 一致を必須とし、別の配布ラインはスキップ。同一ラインは AppDir または offline-transcriber が BUILD_MARKER より新しければ対象、古くても WARN 付きで再梱包。BUILD_MARKER なしは mtime 比較せず対象"
+  echo "[DRY-RUN] AppDir 選別規則: productName 一致を必須とし、別の配布ラインはスキップ。同一ラインは AppDir または lott が BUILD_MARKER より新しければ対象、古くても WARN 付きで再梱包。BUILD_MARKER なしは mtime 比較せず対象"
   print_appdir_selection
   python3 scripts/collect_release_artifacts.py \
     --platform linux \
@@ -286,8 +286,8 @@ until [[ $build_attempt -ge 3 ]]; do
   # 必須構造が揃っていれば後段のappimagetoolで安全に再梱包できるため、再コンパイルしない。
   complete_appdir=""
   for candidate in "$APPIMAGE_DIR"/*.AppDir; do
-    if [[ -x "$candidate/AppRun" && -x "$candidate/usr/bin/offline-transcriber" \
-          && "$candidate/usr/bin/offline-transcriber" -nt "$BUILD_MARKER" \
+    if [[ -x "$candidate/AppRun" && -x "$candidate/usr/bin/lott" \
+          && "$candidate/usr/bin/lott" -nt "$BUILD_MARKER" \
           && "$(basename "$candidate" .AppDir)" == "$PRODUCT_NAME" ]]; then
       complete_appdir="$candidate"
       break

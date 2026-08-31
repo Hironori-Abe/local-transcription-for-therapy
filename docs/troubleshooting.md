@@ -61,7 +61,7 @@ nvidia-smi -L
 - 確認:
 
 ```bash
-tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'CUDA_HOME|LD_LIBRARY_PATH'
+tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'CUDA_HOME|LD_LIBRARY_PATH'
 ```
 
 ## 文字起こしが「モデルが見つからない」「オフライン」エラーで失敗する
@@ -195,8 +195,8 @@ for name in (b"playbin3", b"filesrc", b"wavparse"):
 - 手元での再現（GPU 不要）:
 
 ```bash
-# 実行中の offline-transcriber の環境をそのまま使う
-APP_PID=$(pgrep -n offline-transcriber)
+# 実行中の LoTT の環境をそのまま使う
+APP_PID=$(pgrep -n lott)
 APP_LD=$(tr '\0' '\n' < "/proc/$APP_PID/environ" | sed -n 's/^LD_LIBRARY_PATH=//p')
 LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
 ```
@@ -242,7 +242,7 @@ LOTT_GDK_BACKEND=x11 "/path/to/Local Transcription for Therapy_0.9.8_amd64.AppIm
 - これで直る場合は表示バックエンド側の問題です。X11 に戻しても直らない場合は、実行中の設定を控えて報告してください。
 
 ```bash
-tr '\0' '\n' < /proc/$(pgrep -n offline-transcriber)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
+tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
 ```
 
 ## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（履歴・暫定調査）

@@ -1,6 +1,6 @@
 {
-  "name": "offline-transcriber-frontend",
-  "version": "0.1.0",
+  "name": "lott-frontend",
+  "version": "0.9.8",
   "private": true,
   "scripts": {
     "start": "ng serve --host 0.0.0.0 --port 4200",

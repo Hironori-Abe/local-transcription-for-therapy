@@ -21,6 +21,14 @@ import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.co
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration, waitForAudioSeek } from './browser-adapters';
+import {
+  APP_SETTINGS_STORAGE_KEY,
+  EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY,
+  LEGACY_APP_SETTINGS_STORAGE_KEY,
+  LEGACY_EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY,
+  LEGACY_RUNTIME_ESTIMATE_STORAGE_KEY,
+  RUNTIME_ESTIMATE_STORAGE_KEY
+} from './storage-keys';
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
 import {
@@ -870,7 +878,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly editorInstalledMemoryBytes = signal<number | null>(null);
   readonly editorInstalledMemoryChecked = signal<boolean>(false);
   readonly editorLowMemoryVoiceInputOptIn = signal<boolean>(false);
-  private readonly editorLowMemoryVoiceInputOptInStorageKey = 'offline_transcriber_editor_low_memory_voice_input_opt_in_v1';
+  private readonly editorLowMemoryVoiceInputOptInStorageKey = EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY;
   private readonly editorVoiceInputMinimumMemoryBytes = 16 * 1024 ** 3;
   private readonly editorVoiceInputRecommendedMemoryBytes = 24 * 1024 ** 3;
   readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTierValue>(() =>
@@ -1207,8 +1215,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly devDeleteModelsResult = signal<{ deleted: string[]; notFound: string[]; errors: string[] } | null>(null);
   readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'whisper_large_v3' | 'diarization' | 'llm' | 'python_runtime'>('all');
   private readonly estimateMinRequired = 5;
-  private readonly estimateStorageKey = 'offline_transcriber_runtime_estimate_samples_v2';
-  private readonly appSettingsStorageKey = 'offline_transcriber_app_settings_v1';
+  private readonly estimateStorageKey = RUNTIME_ESTIMATE_STORAGE_KEY;
+  private readonly appSettingsStorageKey = APP_SETTINGS_STORAGE_KEY;
   private readonly browserStorage = new BestEffortBrowserStorage();
   private readonly fixedProofreadChunkSize = 12;
   private readonly fixedProofreadChunkMaxChars = 1200;
@@ -1573,7 +1581,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private loadEstimateSamples(): void {
-    const raw = this.browserStorage.readText(this.estimateStorageKey);
+    const raw = this.browserStorage.readTextWithLegacy(
+      this.estimateStorageKey,
+      LEGACY_RUNTIME_ESTIMATE_STORAGE_KEY
+    );
     this.estimateSamples = parseRuntimeEstimateSamplesValue(raw, this.runtimeCpuOnlyBuild());
   }
 
@@ -1582,7 +1593,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private loadAppSettings(): void {
-    this.appSettings = this.browserStorage.readObject<AppSettingsV1>(this.appSettingsStorageKey) ?? {};
+    this.appSettings = this.browserStorage.readObjectWithLegacy<AppSettingsV1>(
+      this.appSettingsStorageKey,
+      LEGACY_APP_SETTINGS_STORAGE_KEY
+    ) ?? {};
   }
 
   private persistAppSettings(): void {
@@ -5265,7 +5279,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private loadEditorLowMemoryVoiceInputOptIn(): void {
     if (!this.runtimeCpuVoiceInputBuild()) return;
     this.editorLowMemoryVoiceInputOptIn.set(
-      this.browserStorage.readFlag(this.editorLowMemoryVoiceInputOptInStorageKey)
+      this.browserStorage.readFlagWithLegacy(
+        this.editorLowMemoryVoiceInputOptInStorageKey,
+        LEGACY_EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY
+      )
     );
   }
 

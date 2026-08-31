@@ -11,7 +11,7 @@
   - `no_cuda`
   - `missing_community1`
 
-`scripts/run-dev.bat` 実行時に、内部では `OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE` に引き継がれます。
+`scripts/run-dev.bat` 実行時に、内部では `LOTT_DEV_EMULATION_MODE` に引き継がれます。
 
 ## 1. CUDA なし環境をエミュレート
 
@@ -46,7 +46,7 @@ PowerShell:
 
 ```powershell
 Remove-Item Env:RUN_DEV_EMULATION_MODE -ErrorAction SilentlyContinue
-Remove-Item Env:OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE -ErrorAction SilentlyContinue
+Remove-Item Env:LOTT_DEV_EMULATION_MODE -ErrorAction SilentlyContinue
 ```
 
 ## 状態の保存先
@@ -54,7 +54,7 @@ Remove-Item Env:OFFLINE_TRANSCRIBER_DEV_EMULATION_MODE -ErrorAction SilentlyCont
 - 起動時の env 保存ファイル:
   - `.dev-runtime-emulation.env`
 - UI 側の設定保存（localStorage）:
-  - key: `offline_transcriber_app_settings_v1`
+  - key: `lott_app_settings_v1`
   - field: `devEmulation`
     - `mode` (`none` / `no_cuda` / `missing_community1`)
     - `noCuda`

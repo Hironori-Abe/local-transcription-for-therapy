@@ -5,6 +5,9 @@
 ; Called by Tauri NSIS template via NSIS_HOOK_POSTINSTALL / NSIS_HOOK_POSTUNINSTALL
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; v0.9.8より前の実行ファイル名を上書きインストール後に残さない。
+  Delete "$INSTDIR\offline-transcriber.exe"
+
   ; AI校正は同梱llama-server (CUDA)を直接起動するため、追加LLMランタイムの導入処理は行わない。
   ; Python パッケージ・各種モデルは初回起動後にセットアップ UI から導入する。
 

@@ -1,28 +1,25 @@
 # Local Transcription for Therapy (LoTT) v0.9.8
 
-臨床心理・カウンセリング会話のための、ローカル完結の日本語文字起こしデスクトップアプリです。
-文字起こし・話者分離・文章校正を、会話データをPCの外へ送ることなく実行できます。
+臨床心理・カウンセリング会話の文字起こし、話者分離、文章校正を、会話データをPCの外へ送らずに実行するデスクトップアプリです。
 
-v0.9.8では、文字起こし後の操作を整理するとともに、Linux NVIDIA版の配布を追加しました。
-また、LinuxでのCUDA初期化、音声再生、ファイル選択、デスクトップ環境との互換性と、
-大容量セットアップの再開性を重点的に改善しています。
+v0.9.8では、Linux NVIDIA版の配布を開始しました。あわせて、文字起こしから句読点付与までの操作、初回セットアップとGPU検出、Linuxでの音声再生・ファイル選択・画面描画を見直しています。Windows版でも、CPU版の案内、大容量パッケージの取得、バックエンド管理などを改善しました。
 
 ## ダウンロード
 
 | ファイル | 対象 | 備考 |
 | --- | --- | --- |
 | `LoTT-v0.9.8-windows-x64-cuda-setup.exe` | Windows 10 / 11・NVIDIA GPU | 主配布。CUDA 12.x / cuDNN 9.xが必要 |
-| `LoTT-v0.9.8-windows-x64-cpu-setup.exe` | Windows 10 / 11・GPU不要 | 動作確認・試用向け（常用非推奨） |
+| `LoTT-v0.9.8-windows-x64-cpu-setup.exe` | Windows 10 / 11・GPU不要 | 動作確認・試用向け |
 | `LoTT-v0.9.8-windows-x64-editor-setup.exe` | Windows 10 / 11・GPU不要 | JSONの読込・編集・書き出しに特化 |
 | `LoTT-v0.9.8-linux-x64-cuda.AppImage` | Linux x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
 | `LoTT-v0.9.8-linux-x64-cuda.deb` | Ubuntu系 x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
-| `LoTT-v0.9.8-linux-x64-cuda-cachyos.pkg.tar.zst` | CachyOS / Arch x86-64・NVIDIA GPU | ホストのWebKitGTK / GStreamerを利用する汎用x86-64版 |
-| `LoTT-v0.9.8-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst` | CachyOS・x86-64-v3対応CPU・NVIDIA GPU | スクロール応答を優先した実験版。AVX2 / BMI2対応CPU専用 |
-| `SHA256SUMS.txt` | — | 各配布ディレクトリ内のファイルに対応するSHA-256チェックサム |
+| `LoTT-v0.9.8-linux-x64-cuda-cachyos.pkg.tar.zst` | CachyOS / Arch x86-64・NVIDIA GPU | ホストのWebKitGTK / GStreamerを利用する汎用版 |
+| `LoTT-v0.9.8-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst` | CachyOS・x86-64-v3対応CPU・NVIDIA GPU | AVX2 / BMI2対応CPU用の実験版 |
+| `SHA256SUMS.txt` | — | 配布ファイルのSHA-256チェックサム |
 
 AMD GPU版は引き続きexperimental／自己ビルド向けで、一般向けReleaseには添付しません。
 
-ダウンロード後の検証（任意）:
+ダウンロード後は、配布ディレクトリにあるチェックサムを任意で確認できます。
 
 ```sh
 sha256sum -c SHA256SUMS.txt
@@ -30,89 +27,80 @@ sha256sum -c SHA256SUMS.txt
 
 ## 主な変更点
 
-### Linux NVIDIA CUDA版を追加
+### Linux NVIDIA版を追加
 
 - NVIDIA GPU向けのAppImage、`.deb`、CachyOS / Archパッケージを追加しました。
-- Linux用CUDA `llama-server`は、公式llama.cpp b10075の固定commitから再現ビルドし、CUDA再頒布ランタイムとともにアプリへ同梱します。実行時にCUDA Toolkitは不要で、ホストのNVIDIAドライバーと`nvidia-utils`を使用します。
-- Linux NVIDIA版は文字起こし・話者分離・Gemma 4による校正をCUDAで実行し、Vulkanへ暗黙にフォールバックしません。
-- Python 3.12基本ランタイムとLGPL構成のffmpegを配布物へ同梱し、ホストのPython環境への依存を減らしました。
-- Ubuntu 24.04コンテナによるAppImage / `.deb`ビルド、CachyOS / Arch向けの再現可能なパッケージ作成、成果物名の統一と`SHA256SUMS.txt`生成に対応しました。
+- Linux版も、文字起こし、話者分離、Gemma 4による句読点付与・校正をCUDAで実行します。CUDAが使えない場合にVulkanへ暗黙に切り替えることはありません。
+- 校正用CUDA `llama-server`は、llama.cpp b10075の固定commitから再現ビルドして同梱します。実行時にCUDA Toolkitは不要で、ホストのNVIDIAドライバーを利用します。
+- Python 3.12基本ランタイム、LGPL構成のffmpeg、必要なCUDA再頒布ランタイムを配布物へ同梱し、ホスト環境への依存を抑えました。
+- Ubuntu 24.04コンテナによるAppImage / `.deb`作成と、CachyOS / Arch上でのネイティブパッケージ作成に対応しました。
 
-### LinuxでのCUDA検出と初回セットアップを改善
+### 文字起こし後の流れを簡素化
 
-- CTranslate2とPyTorchのCUDA初期化を個別に確認し、片方の失敗を別のランタイムの失敗として誤表示しないようにしました。
-- セットアップ直後にCUDA初期化が間に合わない場合は、短い再試行と約1分後の遅延再確認を行います。「GPUを再確認」ボタンでも、画面を再読み込みせず状態を更新できます。
-- Linux NVIDIA環境では、NVIDIAカーネルモジュール、`nvidia_uvm`、`/dev/nvidia-uvm`を個別に診断します。可能な場合はNVIDIA標準ヘルパーによるUVM初期化を試し、直らない場合はドライバーとカーネルの不整合を具体的に案内します。
-- モデルのダウンロード完了とCUDA利用可能状態を分離し、モデルだけ取得できた状態を「GPU準備完了」と誤判定しないようにしました。
-- Gemma 4の初回ロードでは、TCPポートが開いただけで準備完了とせず、Linuxでは`llama-server`のhealth状態がreadyになるまで待機します。ロード中の短間隔なAPI再試行を抑えました。
+- 句読点付与方式を手動で選んで実行する操作を廃止しました。Full GPU版は話者分離後にGemma 4 E4B、CPU版はローカルルールで自動的に句読点を付与します。
+- Editor版は既存JSONの読込・編集・書き出しに整理しました。Editor版単体では文字起こし・話者分離・自動句読点付与を行いません。
+- 文字起こし、話者分離、句読点付与の一括処理を、実行中の同じボタンから途中で中止できるようにしました。
+- 結果画面の重複した説明と操作を削除し、話者名設定を2列化しました。「計算方式」と「再試行の理由」は関連する設定の近くへ移動しています。
 
-### Linuxの音声再生・ファイル選択・デスクトップ互換性を改善
+### 初回セットアップとGPU検出を堅牢化
 
-- AppImageへLGPLのGStreamer base / good / ALSA / PulseAudioプラグインを同梱し、ホスト側にデコーダーがない環境でもWAV / MP3 / FLAC / Ogg / WebMを再生できるようにしました。GPLプラグインは同梱しません。
-- AAC系のM4A / MP4 / AACは、再生時だけ同梱LGPL ffmpegでFLACキャッシュへ変換します。文字起こしと区間聞き直しには常に元ファイルを使用します。
-- 音声時間をffmpegから取得し、WebViewのメディアメタデータが返らない場合にも画面が待ち続けないようにしました。
-- Linuxのファイル選択をXDG Desktop Portal経由にし、ホストの言語設定と`xdg-user-dirs`の日本語フォルダー名を利用します。
-- AppImageから`xdg-open`、`nvidia-smi`などのホストコマンドを起動するとき、AppImage内の`LD_LIBRARY_PATH`等を引き継がないようにし、Arch系ホストでのreadline競合を修正しました。
-- Wayland / X11とGTK IMEは、ユーザーの環境変数と実行中のデスクトップ環境を尊重します。CachyOSランチャーはX11を強制せず、実機で起動障害を起こしたWebKitGTKのDMA-BUF rendererだけを既定で無効化します。
+- 文字起こし用CTranslate2と話者分離用PyTorchのGPU初期化を別プロセスで確認し、一方の初期化がもう一方へ影響しないようにしました。
+- Linux GPU版では、セットアップ直後の初期化遅延に対して短い再試行と一度だけの遅延再確認を行います。「GPUを再確認」から画面を再読み込みせずに状態を更新できます。
+- Linux NVIDIA版では、NVIDIAカーネルモジュール、`nvidia_uvm`、デバイスノードを個別に診断し、ドライバーとカーネルの不整合を具体的に案内します。
+- モデルの取得完了とGPUの利用可否を分離し、モデルがあるだけで「GPU準備完了」と判定しないようにしました。
+- CPU版でPythonランタイムが未導入の場合、JSONの読込・編集は利用できることと、文字起こしにはセットアップが必要なことを画面上に表示します。
+- Gemma 4の初回起動は、ポートが開いただけでなく`llama-server`のhealth状態がreadyになるまで待機します。
 
-### 文字起こし後の処理と画面を整理
+### 大容量ダウンロードとバックエンド管理を改善
 
-- 句読点付与の手動選択・実行を廃止しました。Full GPU版は話者分離後にGemma 4 E4Bで、CPU版はローカルルールで句読点を自動付与します。
-- Editor版は既存JSONの読込・編集・書き出しに整理し、文字起こし・話者分離・自動句読点付与は行いません。
-- 文字起こし、話者分離、AI句読点付与の一括パイプラインを、同じ実行ボタンから途中で中止できるようにしました。
-- 結果画面上部の重複した校正操作を削除し、話者名設定を2列化しました。「計算方式」と「再試行の理由」も関連する設定の近くへ移動しました。
-- フォントをOS既定の`system-ui`へ変更し、ショートカットヒントの更新処理やAngularのイベント集約を見直して、大きな結果表のスクロール負荷を軽減しました。
-
-### Gemma 4 12Bと音声再生操作を改善
-
-- 「全体校正（with 12B）」の選択時に12Bモデルが未導入なら、その画面で約7GBのダウンロードを確認・開始できるようにしました。
-- ダウンロード進捗を全体校正ボタンの下と設定タブへ表示し、完了後は選択していた12B全体校正を自動開始します。
-- 連続再生スナックバーの操作を完全停止から一時停止へ変更し、再生位置・対象行・残りの再生キューを保持します。
-- 一時停止中にスナックバーを閉じた後、ショートカットで再開しても表示が戻らない問題を修正しました。
-- ライトモードで再生速度の選択肢が読みにくい問題を修正し、各音声再生アイコンへ「ループ再生」「連続再生」の説明を追加しました。
-
-### セットアップとバックエンド取得を堅牢化
-
-- 大容量Python wheelの取得を、Range / ETag / Last-Modifiedを使って中断位置から再開できるようにしました。取得後はSHA-256を検証し、URLのqueryや認証情報をログへ残しません。
-- pipの依存メタデータ確認時に巨大wheel本体を先に取得しないようにし、セットアップ失敗時の再ダウンロード量を抑えました。
+- 大容量Python wheelを、Range / ETag / Last-Modifiedを使って中断位置から再開できるようにしました。取得後はSHA-256を検証し、認証情報を含みうるURL情報をログへ残しません。
+- 依存メタデータの確認だけのために巨大wheel本体を先に取得する処理を避け、再試行時のダウンロード量を抑えました。Windows CUDA / CPUでも、汎用依存はハッシュ付きのPyPI公式wheelを選びます。
+- llama.cppのROCm / Vulkan / CPUバックエンド取得をRust側へ移しました。一時領域で`llama-server`を検証してから差し替えるため、取得や展開に失敗しても導入済みのバックエンドを保持します。
+- 新しいバックエンド保存先は`llm-engine`です。旧`lemonade`キャッシュは、以前に取得したllama.cppバイナリを再利用する場合だけ読み取ります。
 - Hugging Faceトークン欄に表示／非表示ボタンを追加し、セットアップ処理へ渡した直後に入力値と表示状態をリセットするようにしました。
-- CPU版は配布識別子からCPU専用構成を確定し、初回セットアップで不要なGemmaモデルやGPU用バックエンドを要求しないようにしました。
-- llama.cppのROCm / Vulkan / CPUバックエンド取得をPythonサイドカーからRustへ移しました。一時展開先で`llama-server`を検証してから差し替え、失敗時は導入済みのバックエンドを保持します。
-- 内蔵校正エンジンの内部名を`llama_server`へ統一し、旧ランタイム向け設定・UI・誤ったライセンス表示と生成済みバイナリの残骸を削除しました。
-- 新しいバックエンド保存先を`llm-engine`へ変更しました。旧`lemonade`キャッシュは、旧版で取得済みのllama.cppバイナリを再利用する読み取り互換としてだけ参照します。
+- 12B全体校正を選んだときにモデルが未導入なら、その場で約7GBのダウンロードを開始できます。進捗を表示し、完了後は選択していた処理を自動的に開始します。
 
-### 内部品質と診断性を改善
+### Linuxの音声再生とデスクトップ互換性を改善
 
-- 文字起こし実行ごとにrun IDを付け、各処理段階の時間とエラーを追跡しやすくしました。
-- 既存の所要時間ログについて、日時の検証、並べ替え、CSV組み立て、Shift-JIS保存をRust側へ集約しました。
-- 設定、セットアップ状態、音声再生、編集、音声入力、入出力、校正メタデータ等の処理をAngularコンポーネントから純粋関数へ分離し、オフラインで実行できるフロントエンド単体テストを追加しました。
-- Rust側にもCUDA診断、バックエンド取得・展開、旧キャッシュ互換、所要時間CSV等のテストを追加し、Python側には再開可能ダウンロードとpip環境分離のテストを追加しました。
+- AppImageへLGPLのGStreamer base / good / ALSA / PulseAudioプラグインを同梱しました。WAV / MP3 / FLAC / Ogg / WebMを、ホスト側のデコーダー構成に依存せず再生できます。GPL系プラグインは同梱しません。
+- M4A / MP4 / AACは、再生時だけ同梱LGPL ffmpegでFLACキャッシュへ変換します。文字起こしと区間聞き直しには常に元ファイルを使用します。
+- 音声時間をffmpegから取得し、WebView側にデコーダーがない場合にも音声選択後の画面が待ち続けないようにしました。
+- ファイル選択をXDG Desktop Portal経由に変更し、ホストの言語設定と`xdg-user-dirs`を利用します。
+- AppImageから`xdg-open`や`nvidia-smi`等を起動するとき、AppImage内のライブラリ環境をホストコマンドへ引き継がないようにし、Arch系ホストでのreadline競合を防ぎました。
+- Wayland / X11とGTK IMEは、利用者の環境変数とデスクトップセッションを尊重します。CachyOS / Arch版はX11を強制しません。
+- CachyOS / Archの一部NVIDIA環境では、`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`を既定にしました。動作しないDMA-BUF経路を避けながらWebKitGTKの合成器を維持し、起動不能と結果一覧のカクつきを同時に回避します。
+
+### 編集・再生画面を改善
+
+- 連続再生の操作を完全停止から一時停止へ変更し、再生位置、対象行、残りの再生キューを保持するようにしました。
+- 一時停止中に通知を閉じた後、ショートカットで再開しても通知が戻らない問題を修正しました。
+- ライトモードで再生速度の選択肢が読みにくい問題を修正し、音声再生アイコンの説明を追加しました。
+- フォントをOS既定の`system-ui`へ変更し、ショートカットヒントの更新と大きな結果表の描画負荷を軽減しました。
 
 ## 動作要件
 
 ### Windows NVIDIA GPU版
 
 - Windows 10 / 11 64bit
-- NVIDIA GPU（RTX推奨）
-- CUDA Toolkit 12.x（13以上は非対応）とcuDNN 9.x
-- VRAM 8GB以上
+- NVIDIA GPU（RTX推奨、VRAM 8GB以上）
+- CUDA Toolkit 12.x（13以上は非対応）
+- cuDNN 9.x
 
 ### Linux NVIDIA GPU版
 
 - x86-64 Linux
 - 使用中のカーネルに対応するNVIDIAドライバー
 - `nvidia-utils`（`nvidia-smi`と`libcuda.so.1`）
-- CUDA Toolkitは実行時不要
 - AppImageでは、ホストに`xdg-desktop-portal`、対応するportal backend、`zenity`が必要
-- CachyOS / Archパッケージでは必要なWebKitGTK、GStreamer、Portal関連パッケージを依存として導入
+- CachyOS / Archパッケージでは、WebKitGTK、GStreamer、Portal関連パッケージを依存として導入
 
-導入後、次のコマンドでGPU名が表示されることを確認してください。
+CUDA Toolkitは実行時には不要です。導入後、次のコマンドでGPU名が表示されることを確認してください。
 
 ```sh
 nvidia-smi -L
 ```
 
-### CPU版
+### Windows CPU版
 
 | 項目 | 最低要件 | 推奨要件 |
 | --- | --- | --- |
@@ -122,33 +110,37 @@ nvidia-smi -L
 | ディスク空き容量 | 約10GB | 約15GB以上 |
 | GPU | 不要 | 不要 |
 
+### Windows Editor版
+
+- Windows 10 / 11 64bit
+- JSONの読込・編集・書き出しにはGPUとPythonセットアップは不要
+- 後付けの音声入力・区間聞き直しを利用する場合は、設定タブから音声入力パックの導入が必要
+
 ## インストールと初回セットアップ
 
-1. 使用する環境に対応するインストーラーまたはパッケージを導入します。
-2. アプリを起動し、セットアップタブからPythonパッケージと必要なモデルをインストールします。
+1. 使用するOSとGPUに対応するインストーラーまたはパッケージを導入します。
+2. Full版またはCPU版では、アプリのセットアップタブからPythonパッケージと必要なモデルを導入します。
    - 初回セットアップ、追加モデル、AMD / CPU用バックエンドの取得時だけインターネット接続が必要です。
    - 話者分離モデルの取得にはHugging Faceトークンが必要です。
-   - 大容量Pythonパッケージのダウンロードは、中断後の再実行時に可能な範囲で続きから再開します。
-3. セットアップ完了後はオフラインで動作します。
-4. Linux NVIDIA版でCUDA未検出の表示が残る場合は、`nvidia-smi -L`を確認してから「GPUを再確認」を押してください。モデル取得の完了だけではCUDA利用可能とは判定されません。
+   - 大容量Pythonパッケージは、中断後にセットアップを再実行すると可能な範囲で続きから取得します。
+3. セットアップ完了後の文字起こし・話者分離・校正はオフラインで動作します。
+4. Linux NVIDIA版でCUDA未検出の表示が残る場合は、`nvidia-smi -L`を確認してから「GPUを再確認」を押してください。
 
-> **SmartScreenについて:** Windowsインストーラーはコード署名されていないため、初回実行時に
-> Windows SmartScreenの警告が表示されることがあります。「詳細情報」→「実行」で続行できます。
-> 配布元から取得したファイルか、SHA-256で確認してください。
+> **SmartScreenについて:** Windowsインストーラーはコード署名されていないため、初回実行時にWindows SmartScreenの警告が表示されることがあります。「詳細情報」→「実行」で続行できます。配布元から取得したファイルか、SHA-256で確認してください。
 
 ## プライバシー
 
 - 通常運用時はインターネット上のサービスへ接続しません。
 - 会話データ・音声データをPC外のAPIへ送信しません。
 - 文字起こし、話者分離、校正、音声入力、区間聞き直しを含む推論はPC内で完結します。
-- 内蔵`llama-server`の接続先はRustが管理する`127.0.0.1`へ固定し、保存設定や画面から外部URLへ変更できません。
+- 内蔵`llama-server`はRustが管理する`127.0.0.1`へだけ接続し、画面や保存設定から外部URLへ変更できません。
 - インターネット接続を使用するのは、初回セットアップや追加モデル・バックエンドの取得時だけです。取得元はHugging Face、PyPI、ggml-orgのGitHub Releases等です。
 
 ## 既知の注意事項
 
-- Linux NVIDIA版では、NVIDIAユーザー空間ライブラリとカーネルモジュールの組み合わせが一致している必要があります。ドライバー更新後に`nvidia_uvm`が準備できない場合は、OS再起動が必要になることがあります。
-- CachyOS実機では`WEBKIT_DISABLE_DMABUF_RENDERER=1`を既定にしています。`LOTT_GDK_BACKEND=x11`はX11/XWaylandが利用可能と確認できた環境での診断時だけ使用してください。
-- CachyOS experimental x86-64-v3版は、AVX2 / BMI2に対応しないCPUでは起動できません。互換性を優先する場合は汎用x86-64版を使用してください。
+- Linux NVIDIA版では、NVIDIAユーザー空間ライブラリとカーネルモジュールの版が一致している必要があります。ドライバー更新後に`nvidia_uvm`が準備できない場合は、OS再起動が必要になることがあります。
+- CachyOS / Arch版でDMA-BUFのハードウェア経路を再検証する場合だけ、`LOTT_ENABLE_DMABUF_RENDERER=1 lott`を使用してください。通常起動では共有メモリ経路を使い、WebKitGTKの合成器を維持します。
+- CachyOS x86-64-v3 experimental版は、AVX2 / BMI2に対応しないCPUでは起動できません。互換性を優先する場合は汎用x86-64版を使用してください。
 
 ## ライセンス
 

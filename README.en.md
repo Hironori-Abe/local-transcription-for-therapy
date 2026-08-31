@@ -43,7 +43,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 
 | Edition | Description |
 | --- | --- |
-| **LoTT Full CUDA** | Main distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
+| **LoTT Full CUDA** | Main Windows and Linux distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
 | LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. After diarization, punctuation is added automatically with Gemma 4 E4B (the LLM prefers ROCm with Vulkan fallback) |
 | LoTT CPU | Trial edition. Runs transcription and speaker diarization on the CPU, then automatically applies simple rule-based punctuation. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
 | LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription, diarization, automatic punctuation, and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
@@ -54,22 +54,29 @@ Compatibility varies substantially across GPU generations, operating systems, RO
 
 The AMD GPU edition requires GPU execution for transcription, speaker diarization, and built-in AI processing. If GPU processing fails, the job stops and a dialog reports the failure; it does not fall back to CPU. The only permitted fallback is from ROCm to Vulkan for the built-in LLM when its ROCm path cannot start.
 
-Choose the development entry point along two independent axes: OS and compute backend. Use
-the `.bat` scripts on Windows and the `.sh` scripts on Linux, including Ubuntu and
-CachyOS/Arch, then select the dedicated `nvidia`, `amd`, or `cpu` entry point. The shared
-`setup-dev.*` and `run-dev.*` files are internal implementations and never silently select
-CUDA. Python environments are isolated as `.venv312-nvidia`, `.venv312-amd`, and
-`.venv312-cpu`.
+### Isolated Development Environments
+
+Development environments are separated by both OS and compute backend. Use the `.bat` scripts on Windows and the `.sh` scripts on Linux, including Ubuntu and CachyOS/Arch, then select the dedicated `nvidia`, `amd`, or `cpu` entry point. The shared `setup-dev.*` and `run-dev.*` files are internal implementations and do not silently select CUDA when run directly.
 
 ```bat
+scripts\setup-dev-nvidia.bat
+scripts\run-dev-nvidia.bat
 scripts\setup-dev-amd.bat
 scripts\run-dev-amd.bat
+scripts\setup-dev-cpu.bat
+scripts\run-dev-cpu.bat
 ```
 
 ```sh
+bash scripts/setup-dev-nvidia.sh
+bash scripts/run-dev-nvidia.sh
 bash scripts/setup-dev-amd.sh
 bash scripts/run-dev-amd.sh
+bash scripts/setup-dev-cpu.sh
+bash scripts/run-dev-cpu.sh
 ```
+
+Python environments are isolated as `.venv312-nvidia`, `.venv312-amd`, and `.venv312-cpu`. On Linux, runtime settings are also separated into `.dev-linux-cuda.env`, `.dev-linux-rocm.env`, and `.dev-linux-cpu.env`, preventing libraries and settings from different backends from being mixed.
 
 See the [development guide](docs/development.md#セットアップと開発起動) for every edition/OS combination.
 
@@ -82,6 +89,8 @@ See the [development guide](docs/development.md#セットアップと開発起�
 - About 1 GB for the installer, plus space for downloaded models
 
 ### Linux / CachyOS NVIDIA Edition
+
+The Linux NVIDIA edition is distributed as a general AppImage, a `.deb` package for Ubuntu-family systems, and packages for CachyOS / Arch. An experimental x86-64-v3 package is also available for CachyOS systems with AVX2- and BMI2-capable CPUs. Use the general x86-64 package when compatibility is more important.
 
 The CachyOS / Arch NVIDIA package uses the host NVIDIA driver and CUDA driver runtime.
 It requires `nvidia-utils` (`nvidia-smi` and the NVIDIA user-space runtime); install the
@@ -103,6 +112,8 @@ builds llama.cpp b10075 from its pinned official source and bundles the resultin
 with the redistributable CUDA runtime libraries. The app does not fall back to Vulkan.
 See the
 [CachyOS / Arch distribution README](packaging/arch/README.md) for installation details.
+
+The CachyOS / Arch package does not force X11 and respects the existing Wayland / X11 and GTK IME environment. On affected NVIDIA systems, normal startup applies `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, avoiding a non-working DMA-BUF path while keeping the WebKitGTK compositor enabled. Use `LOTT_ENABLE_DMABUF_RENDERER=1 lott` only when retesting the hardware DMA-BUF path. The former `WEBKIT_DISABLE_DMABUF_RENDERER=1` setting is not used as a default because it also disables the compositor and degrades scrolling performance.
 
 ## CPU Edition (Trial Use)
 
@@ -126,8 +137,8 @@ LoTT CPU provides fully local transcription on PCs without a supported GPU. Afte
 
 ## Installation and Initial Setup
 
-1. Run the NSIS installer, `*_x64-setup.exe`
-2. After launching the app, run "Install Python packages" from the Setup tab. This requires an internet connection
+1. Install the package that matches your OS, GPU, and intended use. On Windows, run the NSIS installer, `*_x64-setup.exe`
+2. In a Full or CPU edition, launch the app and run "Install Python packages" from the Setup tab. This requires an internet connection. The distribution includes the basic Python 3.12 runtime, but this step installs the packages used for transcription and diarization
 3. Download the required models from the same Setup tab
    - Transcription model: Whisper turbo (the higher-accuracy large-v3 model can optionally be added later)
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
@@ -135,7 +146,9 @@ LoTT CPU provides fully local transcription on PCs without a supported GPU. Afte
    - Higher-accuracy proofreading LLM: Gemma 4 12B QAT+MTP, approximately 7 GB (optional; Full editions only)
    - Voice input pack (optional, required for voice input and segment re-listen)
 
-After the models are downloaded, the app can be used offline.
+If a large Python-package download is interrupted, run setup again to resume as far as possible. The CPU edition can import and edit JSON before its Python packages are installed, but transcription requires setup. The Editor edition needs no Python packages or AI models for JSON import, editing, and export; install only the optional voice input pack if you want voice input or segment re-listen.
+
+After setup and model downloads are complete, transcription, diarization, and proofreading can be used offline. If the Linux NVIDIA edition still reports that CUDA is unavailable, confirm `nvidia-smi -L` works and then use "Check GPU again" in Settings.
 
 ## Usage
 

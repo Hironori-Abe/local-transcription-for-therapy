@@ -39,7 +39,7 @@
 
 | エディション | 内容 |
 | --- | --- |
-| **LoTT Full CUDA** | 主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離後にGemma 4 E4Bで句読点を自動付与し、校正機能も利用可能 |
+| **LoTT Full CUDA** | Windows / Linuxの主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離後にGemma 4 E4Bで句読点を自動付与し、校正機能も利用可能 |
 | LoTT Full AMD (ROCm / Vulkan) | experimental / 自己ビルド向け。AMD GPU 向け。話者分離後にGemma 4 E4Bで句読点を自動付与（LLM は ROCm 優先・Vulkan フォールバック） |
 | LoTT CPU | お試し版。CPUで文字起こし・話者分離を行い、その後に単純な句読点を自動付与する。全体校正は非搭載。音声入力パックを導入すると音声入力・区間聞き直しも利用可能。処理時間の目安は音声時間の約1.5〜2.5倍 |
 | LoTT Editor | JSONの校正・編集に特化した軽量版。文字起こし・話者分離・自動句読点付与・LLM 校正ランタイムは非搭載。音声入力パック（任意ダウンロード）を導入すると CPU 版ローカル AI による音声入力・区間聞き直しを利用可能（メモリ 16GB 未満では非推奨） |
@@ -50,20 +50,29 @@ AMD GPU版は、GPU世代・OS・ROCm/ドライバーの組み合わせによる
 
 AMD GPU版の文字起こし・話者分離・内蔵AI処理はGPU実行を必須とし、GPU処理に失敗した場合はCPUへフォールバックせず、そのジョブを終了してダイアログで通知します。内蔵LLMのROCm経路だけは、ROCmで起動できない場合にVulkanへフォールバックします。
 
-開発環境は OS と演算バックエンドを別々に選びます。Windows は `.bat`、Ubuntu / CachyOS・Archを
-含む Linux は `.sh` を使い、その上で `nvidia` / `amd` / `cpu` 専用入口を選択してください。
-共通の `setup-dev.*` / `run-dev.*` は CUDA を暗黙選択しない内部実装です。Python 環境も
-`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu` に分離されます。
+### 開発環境の分離
+
+開発環境はOSと演算バックエンドの組み合わせごとに分離しています。Windowsでは`.bat`、Ubuntu / CachyOS・Archを含むLinuxでは`.sh`を使い、それぞれ`nvidia` / `amd` / `cpu`専用入口を選択してください。共通の`setup-dev.*` / `run-dev.*`は内部実装であり、直接実行してもCUDAを暗黙に選択しません。
 
 ```bat
+scripts\setup-dev-nvidia.bat
+scripts\run-dev-nvidia.bat
 scripts\setup-dev-amd.bat
 scripts\run-dev-amd.bat
+scripts\setup-dev-cpu.bat
+scripts\run-dev-cpu.bat
 ```
 
 ```sh
+bash scripts/setup-dev-nvidia.sh
+bash scripts/run-dev-nvidia.sh
 bash scripts/setup-dev-amd.sh
 bash scripts/run-dev-amd.sh
+bash scripts/setup-dev-cpu.sh
+bash scripts/run-dev-cpu.sh
 ```
+
+Python環境は`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu`に分離されます。さらにLinuxでは、実行時設定も`.dev-linux-cuda.env` / `.dev-linux-rocm.env` / `.dev-linux-cpu.env`に分け、別バックエンドのライブラリや設定が混在しないようにしています。
 
 全エディションの組み合わせは [開発ガイド](docs/development.md#セットアップと開発起動) を参照してください。
 
@@ -76,6 +85,8 @@ bash scripts/run-dev-amd.sh
 - インストーラー約 1GB 前後 + モデルダウンロード分の空き容量
 
 ### Linux / CachyOS NVIDIA版
+
+Linux NVIDIA版は、汎用AppImage、Ubuntu系向け`.deb`、CachyOS / Arch向けパッケージを配布します。CachyOS向けには、AVX2 / BMI2対応CPU用のx86-64-v3 experimental版もあります。互換性を優先する場合は汎用x86-64版を使用してください。
 
 CachyOS / Arch向けのNVIDIA版は、ホストのNVIDIAドライバーとCUDAドライバーランタイムを使用します。
 `nvidia-utils`（`nvidia-smi`・NVIDIAユーザー空間ランタイム）を必須とし、使用中のカーネルに合う
@@ -96,6 +107,8 @@ XDG Desktop Portal経由です。AppImageを使う場合も、`xdg-desktop-porta
 CUDA再頒布ランタイムとともにパッケージへ同梱します。実行時に必要なのはNVIDIAドライバーだけで、
 Vulkanへのフォールバックは行いません。詳しい導入手順は
 [CachyOS / Arch向け配布README](packaging/arch/README.md)を参照してください。
+
+CachyOS / Arch版はX11を強制せず、Wayland / X11とGTK IMEに関する既存の環境設定を尊重します。一部のNVIDIA環境では、通常起動時に`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`を適用し、動作しないDMA-BUF経路を避けながらWebKitGTKの合成器を維持します。DMA-BUFのハードウェア経路を再検証するときだけ`LOTT_ENABLE_DMABUF_RENDERER=1 lott`を使用してください。旧設定の`WEBKIT_DISABLE_DMABUF_RENDERER=1`は合成器まで無効にしてスクロール性能を低下させるため、既定設定には使用しません。
 
 ## CPU 版（お試し用）
 
@@ -119,8 +132,8 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 
 ## インストールと初回セットアップ
 
-1. NSIS インストーラー（`*_x64-setup.exe`）を実行します
-2. アプリ起動後、セットアップタブから「Python パッケージをインストール」を実行します（要ネット接続）
+1. 使用するOS・GPU・用途に合うインストーラーまたはパッケージを導入します。WindowsではNSISインストーラー（`*_x64-setup.exe`）を実行します
+2. Full版またはCPU版では、アプリ起動後にセットアップタブから「Python パッケージをインストール」を実行します（要ネット接続）。配布物にはPython 3.12の基本ランタイムが含まれますが、文字起こし・話者分離用パッケージはこの手順で導入します
 3. 同じセットアップタブから必要なモデルをダウンロードします
    - 文字起こしモデル（Whisper turbo。高精度の large-v3 は任意で後から追加可能）
    - 話者分離モデル（`pyannote-speaker-diarization-community-1`、Hugging Face トークンが必要）
@@ -128,7 +141,9 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
    - 高精度校正用 LLM（Gemma 4 12B QAT+MTP、約7GB。Full版で12B校正を使う場合のみ）
    - 音声入力パック（任意。音声入力・区間聞き直しを使う場合）
 
-モデル取得後はオフラインで運用できます。
+大容量Pythonパッケージの取得が中断した場合は、セットアップを再実行すると可能な範囲で続きから取得します。CPU版はPythonパッケージの導入前でもJSONの読込・編集を利用できますが、文字起こしにはセットアップが必要です。Editor版はJSONの読込・編集・書き出しだけならPythonパッケージやAIモデルの導入は不要で、音声入力・区間聞き直しを使う場合だけ音声入力パックを追加します。
+
+セットアップとモデル取得の完了後、文字起こし・話者分離・校正はオフラインで運用できます。Linux NVIDIA版でCUDA未検出の表示が残る場合は、`nvidia-smi -L`を確認してから設定画面の「GPUを再確認」を実行してください。
 
 ## 使い方
 

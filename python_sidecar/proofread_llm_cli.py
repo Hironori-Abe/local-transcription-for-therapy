@@ -11,7 +11,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 SKIP_THRESHOLD = 1        # この文字数以下のセグメントはLLM処理をスキップ
 TRAILING_PUNCTUATION = set("、。！？…・")  # 末尾句読点判定用
@@ -759,6 +759,16 @@ def _normalize_local_openai_base_url(base_url: str) -> str:
     host = (parsed.hostname or "").lower()
     if not _is_loopback_local_openai_host(host):
         raise RuntimeError("PC外への送信防止のため、ローカルOpenAI互換APIは localhost / 127.x.x.x / ::1 のみ指定できます。")
+    if host == "localhost":
+        # hosts ファイル等で localhost が loopback 以外へ解決される余地をなくす。
+        # 設定値として localhost は引き続き受け付け、実接続だけを固定する（Rust 側の
+        # validate_local_openai_base_url と同じ扱い）。
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise RuntimeError("ローカルOpenAI互換APIのポート指定が不正です。") from exc
+        netloc = "127.0.0.1" if port is None else f"127.0.0.1:{port}"
+        normalized = urlunparse(parsed._replace(netloc=netloc))
     return normalized
 
 

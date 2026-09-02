@@ -9,7 +9,7 @@ use std::{
     ffi::OsStr,
     fs,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -383,6 +383,23 @@ fn decode_chunked_http_body(body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
+/// 検証済みターゲットの接続先を解決し、ループバック以外は接続する前に弾く。
+///
+/// `validate_local_openai_base_url` が host をループバック表記に限定し、`localhost` は
+/// `127.0.0.1` へ書き換えているため、通常運用でここに引っかかることはない。名前解決の
+/// 「結果」そのものを見る最終段のガードを置くことで、hosts ファイルや DNS の状態に関わらず
+/// PC 外へ接続しないことを構造的に保証する。
+fn resolve_loopback_socket_addr(target: &LocalOpenAiHttpTarget) -> Result<SocketAddr, String> {
+    (target.host.as_str(), target.port)
+        .to_socket_addrs()
+        .map_err(|e| format!("ローカルOpenAI互換APIのアドレス解決に失敗しました: {e}"))?
+        .find(|addr| addr.ip().is_loopback())
+        .ok_or_else(|| {
+            "PC外への送信防止のため、ローカルOpenAI互換APIはループバックアドレスにのみ接続します。"
+                .to_string()
+        })
+}
+
 fn local_openai_http_get_json(
     target: &LocalOpenAiHttpTarget,
     path: &str,
@@ -393,11 +410,7 @@ fn local_openai_http_get_json(
     } else {
         format!("/{path}")
     };
-    let addr = (target.host.as_str(), target.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("ローカルOpenAI互換APIのアドレス解決に失敗しました: {e}"))?
-        .next()
-        .ok_or_else(|| "ローカルOpenAI互換APIの接続先を解決できませんでした。".to_string())?;
+    let addr = resolve_loopback_socket_addr(target)?;
     let mut stream = TcpStream::connect_timeout(&addr, timeout)
         .map_err(|e| format!("ローカルOpenAI互換APIに接続できませんでした: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
@@ -449,11 +462,7 @@ fn local_openai_http_post_json_body(
     } else {
         format!("/{path}")
     };
-    let addr = (target.host.as_str(), target.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("アドレス解決に失敗: {e}"))?
-        .next()
-        .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
+    let addr = resolve_loopback_socket_addr(target)?;
     let mut stream =
         TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
@@ -486,11 +495,7 @@ fn local_openai_http_post_json_with_response(
     } else {
         format!("/{path}")
     };
-    let addr = (target.host.as_str(), target.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("アドレス解決に失敗: {e}"))?
-        .next()
-        .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
+    let addr = resolve_loopback_socket_addr(target)?;
     let mut stream =
         TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
@@ -551,11 +556,7 @@ fn local_openai_http_get_status_body(
     } else {
         format!("/{path}")
     };
-    let addr = (target.host.as_str(), target.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("アドレス解決に失敗: {e}"))?
-        .next()
-        .ok_or_else(|| "接続先を解決できませんでした。".to_string())?;
+    let addr = resolve_loopback_socket_addr(target)?;
     let mut stream =
         TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("接続に失敗: {e}"))?;
     let _ = stream.set_read_timeout(Some(timeout));
@@ -6560,6 +6561,13 @@ fn transcode_for_playback(
     let _ = fs::remove_file(&partial);
     let mut guard = TempFileGuard::new();
     guard.push(partial.clone());
+    // 変換先を 0600 で先に作ってから ffmpeg に上書きさせる（extract_segment_wav_base64 と
+    // 同じ手順）。ffmpeg 任せだと umask 次第で 0644 になり、臨床音声のデコード済みコピーが
+    // 他ユーザーから読める権限で残りうる。
+    // ここは best-effort。前回のクラッシュで残った .part を消せない等で作成に失敗しても、
+    // ffmpeg の `-y` で上書きできるので変換自体は止めない（最終ファイルの権限はリネーム前に
+    // もう一度 0600 へ寄せる）。
+    let _ = write_private_temp_file(&partial, b"");
 
     let mut cmd = Command::new(&ffmpeg);
     // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
@@ -6642,6 +6650,12 @@ fn transcode_for_playback(
         let result = Err(format!("再生用の音声変換に失敗しました: {}", stderr.trim()));
         finish(&result);
         return result;
+    }
+    // ffmpeg が出力先を作り直した場合に備え、リネーム前にもう一度 0600 へ寄せる。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&partial, fs::Permissions::from_mode(0o600));
     }
     let result =
         fs::rename(&partial, dest).map_err(|e| format!("変換した音声の保存に失敗しました: {e}"));
@@ -6994,19 +7008,30 @@ fn read_file_size(request: ReadFileSizeRequest) -> Result<ReadFileSizeResponse, 
     })
 }
 
+/// UI から `open_external_url` で開けるページ。ここに無い URL は開かない。
+/// フロント側（app.component.html / app.component.ts）のリンクと一対一で対応させる。
+const EXTERNAL_URL_ALLOWLIST: &[&str] = &[
+    "https://huggingface.co/pyannote/speaker-diarization-community-1",
+    "https://huggingface.co/settings/tokens",
+    "https://developer.nvidia.com/cuda-12-9-2-download-archive",
+    "https://developer.nvidia.com/cudnn-downloads",
+    "https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html",
+    "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/install/install.html",
+    "https://rocm.docs.amd.com/en/latest/install/rocm.html",
+    "https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html",
+];
+
+/// 前方一致ではなく完全一致で許可する。前方一致だと `https://huggingface.co/` 配下の
+/// 任意のパス・クエリが通り、万一 WebView 側が侵害された場合にデータの持ち出し先として
+/// 使えてしまう。UI から開くページは固定なので、URL そのものを列挙する。
+fn external_url_is_allowed(url: &str) -> bool {
+    EXTERNAL_URL_ALLOWLIST.contains(&url)
+}
+
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     let normalized = url.trim();
-    let allowed_prefixes = [
-        "https://huggingface.co/",
-        "https://developer.nvidia.com/cuda-12-9-2-download-archive",
-        "https://developer.nvidia.com/cudnn-downloads",
-        "https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html",
-        "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/install/install.html",
-        "https://rocm.docs.amd.com/en/latest/install/rocm.html",
-        "https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html",
-    ];
-    if !allowed_prefixes.iter().any(|p| normalized.starts_with(p)) {
+    if !external_url_is_allowed(normalized) {
         return Err("許可されていない URL です。".to_string());
     }
     // cmd /C start に渡す前にシェルメタキャラクターを拒否する
@@ -9309,14 +9334,27 @@ async fn download_whisper_model(app: AppHandle, model_name: String) -> Result<bo
         .map_err(|e| format!("ダウンロードタスクの実行に失敗しました: {e}"))?
 }
 
+/// ダウンロード対象の文字起こしモデル名を検証し、進捗コンポーネント名を返す。
+///
+/// 取得先の HF リポジトリはモデル名から組み立てられる（download_whisper_model_cli.py の
+/// フォールバックが `Systran/faster-whisper-{model_name}` を作る）。呼び出し側が渡すのは
+/// "turbo"（run_full_setup）と "large-v3"（UI）の2つだけなので、ここで明示的に限定し、
+/// 想定外のリポジトリを取りに行かないようにする。
+fn whisper_model_progress_component(model_name: &str) -> Result<&'static str, String> {
+    match model_name {
+        "large-v3" => Ok("whisper_large_v3"),
+        "turbo" => Ok("whisper_turbo"),
+        other => Err(format!(
+            "未サポートの文字起こしモデル名です: {other}（turbo / large-v3 のみ対応）"
+        )),
+    }
+}
+
 fn download_whisper_model_blocking(app: AppHandle, model_name: String) -> Result<bool, String> {
     let script_path = resolve_download_whisper_model_script_path(&app)
         .map_err(|e| format!("ダウンロードスクリプトが見つかりません: {e}"))?;
     let python_bin = get_python_bin(&app);
-    let component = match model_name.as_str() {
-        "large-v3" => "whisper_large_v3",
-        _ => "whisper_turbo",
-    };
+    let component = whisper_model_progress_component(&model_name)?;
     let hf_hub_cache = get_app_hf_hub_cache(&app);
     let mut cmd = Command::new(&python_bin);
     apply_windows_no_window(&mut cmd);
@@ -11596,6 +11634,62 @@ mod tests {
             validate_local_openai_base_url("http://localhost:1234/v1").unwrap(),
             "http://127.0.0.1:1234/v1"
         );
+    }
+
+    #[test]
+    fn local_openai_connection_target_must_resolve_to_loopback() {
+        // 検証済みの表記はそのまま解決できる。
+        for host in ["127.0.0.1", "127.5.5.5", "::1"] {
+            let target = LocalOpenAiHttpTarget {
+                host: host.to_string(),
+                authority: format!("{host}:1234"),
+                port: 1234,
+                path_prefix: String::new(),
+            };
+            let addr = resolve_loopback_socket_addr(&target)
+                .unwrap_or_else(|e| panic!("{host} should resolve: {e}"));
+            assert!(addr.ip().is_loopback(), "{host} resolved to {addr}");
+        }
+
+        // 入力検証をすり抜けた場合でも、名前解決の結果がループバックでなければ接続しない。
+        let external = LocalOpenAiHttpTarget {
+            host: "93.184.216.34".to_string(),
+            authority: "93.184.216.34:1234".to_string(),
+            port: 1234,
+            path_prefix: String::new(),
+        };
+        assert!(resolve_loopback_socket_addr(&external).is_err());
+    }
+
+    #[test]
+    fn external_url_allowlist_is_exact_match_only() {
+        assert!(external_url_is_allowed(
+            "https://huggingface.co/settings/tokens"
+        ));
+        assert!(external_url_is_allowed(
+            "https://huggingface.co/pyannote/speaker-diarization-community-1"
+        ));
+        // 前方一致だった頃に通ってしまっていた形。クエリはデータの持ち出しに使えるため塞ぐ。
+        assert!(!external_url_is_allowed("https://huggingface.co/"));
+        assert!(!external_url_is_allowed(
+            "https://huggingface.co/settings/tokens?leak=secret"
+        ));
+        assert!(!external_url_is_allowed("https://example.com/"));
+    }
+
+    #[test]
+    fn whisper_download_rejects_unknown_model_names() {
+        assert_eq!(
+            whisper_model_progress_component("turbo").unwrap(),
+            "whisper_turbo"
+        );
+        assert_eq!(
+            whisper_model_progress_component("large-v3").unwrap(),
+            "whisper_large_v3"
+        );
+        // 以前は既定へ丸めていたため、未知の名前が HF リポジトリ名の組み立てに流れていた。
+        assert!(whisper_model_progress_component("evil-repo").is_err());
+        assert!(whisper_model_progress_component("").is_err());
     }
 
     #[test]

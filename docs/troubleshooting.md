@@ -245,7 +245,9 @@ LOTT_GDK_BACKEND=x11 "/path/to/Local Transcription for Therapy_0.9.8_amd64.AppIm
 tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODULE|XMODIFIERS'
 ```
 
-## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（履歴・暫定調査）
+## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（原因確定済み）
+
+> **結論から読む場合:** 原因と恒久対策は本節末尾の[原因の確定と恒久対策](#原因の確定と恒久対策2026-08-28確定)にあります。以下は確定に至るまでの履歴で、当時「可能性が低い」と判断した候補の記録として残しています。
 
 > **暫定結果（2026-08-14の履歴）:** 以下は Ryzen 7 3700X / RTX 2070 Super / CachyOS / KDE Plasma Wayland の1環境を中心に行った比較結果です。当時その実機で最も良かった条件と、可能性が低くなった原因候補を記録したもので、現在の通常起動設定を示すものではありません。根本原因を確定した最終結論でもなく、`x86-64-v3`での改善も利用者による体感比較で、フレーム時間を計測した定量結果ではありません。
 
@@ -267,7 +269,7 @@ tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODU
 | 直近リファクタリング前のフロントエンドを、現在のネイティブ側と組み合わせる | 変化なし | 2026-08-12〜13頃のフロントエンド変更は主因ではなさそう。旧成果物の`main-O57AABPQ.js`と一致するビルドでも確認した |
 | AppImageではなくホストWebKitGTKへリンクしたpacman版 | AppImageより改善したが、カクつきは残った | AppImage同梱ランタイムの影響はあるが、WebKitGTKの同梱有無だけが原因ではない |
 | `LOTT_GDK_BACKEND=wayland` | X11より悪化 | この環境ではGTK WaylandよりXWayland経路の方が良い |
-| DMA-BUF rendererを有効化 | `Failed to create GBM buffer ...: 無効な引数です`が再発 | このNVIDIA環境ではDMA-BUFのハードウェア経路を使えない（後述の2026-08-28更新で、回避策は`WEBKIT_DISABLE_DMABUF_RENDERER`ではなく`WEBKIT_DMABUF_RENDERER_FORCE_SHM`が正しいと判明） |
+| DMA-BUF rendererを有効化 | `Failed to create GBM buffer ...: 無効な引数です`が再発 | このNVIDIA環境ではDMA-BUFのハードウェア経路を使えない（後述の確定内容のとおり、回避策は`WEBKIT_DISABLE_DMABUF_RENDERER`ではなく`WEBKIT_DMABUF_RENDERER_FORCE_SHM`が正しい） |
 | 互換性優先の`x86-64`から、AVX-512を含まない`x86-64-v3`へ変更 | 完全には消えないが「これまでよりだいぶマシ」 | CPU最適化レベルが描画応答へ影響している可能性が高まった。ただし単独の根本原因とは未確定 |
 
 JSONの大きさ、GPU負荷、校正後のVRAM残留、表示行数、および上記のAngular実装3点は、少なくともこの再現条件における主因としては可能性が低くなりました。一方、ホストWebKitGTK、NVIDIAドライバー、KDE Plasma Wayland/XWayland、DMA-BUFを無効にした共有メモリ描画、CPU最適化レベルの組み合わせには未分離の要因が残っています。
@@ -308,7 +310,9 @@ lott
 - 文字起こし後半（句読点追加付近）のUI停止は、結果表示直後に先頭の話者名入力へ自動フォーカスしていた処理を外し、段階ログを追加した版で、文字起こしから句読点追加まで完走を確認した。これはスクロールのカクつきとは別問題として扱う。
 - pacmanインストール後にアプリアイコンが出ない問題は、hicolorテーマの標準サイズへアイコンを配置し、ウィンドウアイコンも設定することで修正した。これも描画性能とは直接関係しない。
 
-### 未確定事項と今後の確認候補
+### 未確定事項と今後の確認候補（当時）
+
+> このリストは2026-08-14時点のものです。主要な項目は後述の確定内容で解決しました。`x86-64-v3`で改善した理由も、非アクセラレーション経路がCPU側の処理に強く依存していたためと説明がつきます（ただしArchパッケージはホストのWebKitGTKにリンクするため、`x86-64-v3`が変えたのはLoTT本体のコードだけである点に注意）。
 
 - `x86-64-v3`のどの最適化が差を生んだかは未特定。Rust本体、WebKitとのイベント処理、タイマー精度などを分離できていない。
 - ネイティブのPlasma X11セッションは未比較。現在の`GDK_BACKEND=x11`はWaylandセッション上のXWaylandである。
@@ -318,69 +322,119 @@ lott
 
 当時の運用上の暫定回答は「対象のCachyOS / NVIDIA機では、ホストWebKitGTK + X11 + DMA-BUF無効 + `x86-64-v3`が最も良かった」でした。ただし、これは**単一実機での暫定的な回避構成であり、カクつきの根本原因や恒久対策を確定したものではありません**。現在の通常運用は、次の更新に記載したOS・デスクトップ環境の既定値です。
 
-### Archパッケージの通常起動設定（2026-08-23更新）
+### Archパッケージの通常起動設定（履歴。現在の既定は次節）
 
-その後の実機確認で、NVIDIA向けにランチャーが設定していたファイルや環境変数が
-カクつきの一因になり得ることが分かりました。Arch/CachyOSパッケージのランチャーは現在、
+2026-08-23の実機確認で、NVIDIA向けにランチャーが設定していたファイルや環境変数が
+カクつきの一因になり得ることが分かりました。Arch/CachyOSパッケージのランチャーは現在も、
 `GDK_BACKEND`と`GTK_IM_MODULE`を追加せず、OS・デスクトップ環境の既定値を使用します。
-その後の実機確認では、`WEBKIT_DISABLE_DMABUF_RENDERER=1 lott`だけなら起動する一方、
+当時の確認では、`WEBKIT_DISABLE_DMABUF_RENDERER=1 lott`だけなら起動する一方、
 DMA-BUF rendererが有効な通常起動は失敗し、`LOTT_GDK_BACKEND=x11`を加えるとGTK初期化に
-失敗しました。このため通常起動ではDMA-BUF rendererだけを無効化し、X11は強制しません。
+失敗しました。このため当時は通常起動でDMA-BUF rendererを無効化していました。
 
-X11/XWaylandが利用可能な別環境で旧構成との比較が必要な場合だけ、次を使ってください。
+> **この`WEBKIT_DISABLE_DMABUF_RENDERER=1`は現在の既定ではありません。** 次節のとおり、
+> これ自体がカクつきの原因だったため、既定は`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`へ
+> 変更しました。X11を強制しない方針は変わりません。
+
+X11/XWaylandが利用可能な別環境で比較が必要な場合だけ、次を使ってください。
 
 ```sh
-LOTT_GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+LOTT_GDK_BACKEND=x11 lott
 ```
 
-DMA-BUF rendererを再検証する場合だけ、次を使って通常の無効化を抑止できます。
+DMA-BUFのハードウェア経路を再検証する場合だけ、次を使って既定の設定を抑止できます。
 
 ```sh
 LOTT_ENABLE_DMABUF_RENDERER=1 lott
 ```
 
+旧来の非アクセラレーション経路と比較したい場合だけ、次を使います。ランチャーは利用者が
+明示した`WEBKIT_*`を尊重します。
+
+```sh
+WEBKIT_DISABLE_DMABUF_RENDERER=1 lott
+```
+
 この変更はCachyOS/ArchのホストGTK/WebKitGTKパッケージのランチャーだけが対象です。
 AppImageのGTKフック、Windows版、CUDAの検出・推論経路は変更しません。
 
-### 原因の確定と恒久対策（2026-08-28更新）
+### 原因の確定と恒久対策（2026-08-28確定）
 
-**カクつきの原因は、回避策の副作用でした。** 対象実機（CachyOS / RTX 2070 SUPER /
-nvidia-open 610.57.04 / Plasma Wayland / webkit2gtk-4.1 2.52.6）で確定しています。
+**カクつきの原因は、起動不能を避けるための回避策そのものでした。** 対象実機（CachyOS /
+RTX 2070 SUPER / nvidia-open 610.57.04 / KDE Plasma Wayland / webkit2gtk-4.1 2.52.6）で
+確定しています。
 
 原因は2段構えです。
 
-1. この環境ではWebKitのDMA-BUF経路が動作しない。非rootの通常ユーザーで起動すると
+1. **この環境ではWebKitのDMA-BUF経路が動作しない。** GUIセッションの通常ユーザーで起動すると
    `AcceleratedSurface was unable to construct a complete framebuffer` と
    `Error 71 dispatching to Wayland display`（EPROTO）が出る。失敗しているのはGBMの
    バッファ確保そのものではなく、確保したバッファをGLのフレームバッファへ結びつける段階。
-   `nvidia-drm_gbm.so`の存在、`modeset=Y`、カーネルモジュールとユーザー空間の版一致
-   （すべて610.57.04）はいずれも正常で、`WEBKIT_DMABUF_RENDERER_BUFFER_FORMAT`で
-   FourCC（`XR24` / `AR24` / `XB24` / `AB24`）を総当たりしても回避できない。
-2. その回避に使っていた`WEBKIT_DISABLE_DMABUF_RENDERER=1`が広すぎた。この変数は
-   WebKitのtransport modeを空にするため、DMA-BUFだけでなく`AcceleratedBackingStore`
+   `nvidia-drm_gbm.so` の存在、`/sys/module/nvidia_drm/parameters/modeset=Y`、
+   カーネルモジュールとユーザー空間のバージョン一致（`/proc/driver/nvidia/version`・
+   `modinfo`・`nvidia-utils`・`nvidia-smi` すべて 610.57.04）はいずれも正常で、
+   `WEBKIT_DMABUF_RENDERER_BUFFER_FORMAT` でFourCC（`XR24` / `AR24` / `XB24` / `AB24`）を
+   総当たりしても回避できない。
+2. **その回避に使っていた `WEBKIT_DISABLE_DMABUF_RENDERER=1` が広すぎた。** この変数は
+   WebKitのtransport modeを空にするため、DMA-BUFだけでなく `AcceleratedBackingStore`
    （合成器）ごと生成しない。結果として非アクセラレーション経路へ落ち、スクロールが
    「一旦止まってから一気に飛ぶ」挙動になっていた。
 
-**対策は`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`です。** DMA-BUFだけを避けて合成器は維持する
-ため、起動できないGBM経路を通らずに描画性能を保てます。実機で滑らかになること、および
-`WEBKIT_SHOW_DAMAGE=1`の赤い矩形が表示されるようになることを確認済みです。
-`packaging/arch/lott`の既定をこれに変更しました。通常版とexperimental版は同じPKGBUILDを
-使うため、この1箇所で両方に反映されます。
+**なぜこの変数がここまで効くのか:** WebKitは**2.43.xでX11 / Wayland用の
+accelerated backing storeを削除**しました。それ以前は、DMA-BUFを切っても別の加速経路が
+残っていたため、この変数は比較的無害でした。削除後はDMA-BUFが唯一の加速経路になったため、
+**同じ変数が「加速合成をすべて切る」意味に変わりました**。ネット上で広く推奨されている
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` は、この変更以前に確立された回避策です。
+
+#### 段階の整理
+
+| 段階 | 設定 | この実機での結果 |
+| --- | --- | --- |
+| 1 ハードウェアDMA-BUF | `LOTT_ENABLE_DMABUF_RENDERER=1` + `__NV_DISABLE_EXPLICIT_SYNC=1` | 起動する・滑らか・描画の乱れなし |
+| 2 SHM転送 | `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` | 起動する・滑らか（**採用**） |
+| 3 非アクセラレーション | `WEBKIT_DISABLE_DMABUF_RENDERER=1` | 起動するがカクつく（修正前の状態） |
+| — | 設定なし | 起動しない（framebuffer不完全 → Error 71） |
+
+**段階1と2に体感差はありませんでした。** 共有メモリへのreadbackコストは、通常のデスクトップ
+UIでは知覚できるレベルではありません。そのうえで段階2を採用した理由は次のとおりです。
+
+- **ベンダー非依存**。`FORCE_SHM` はWebKit側の設定なので、NVIDIA以外でDMA-BUFが壊れている
+  環境でも同じように効く。`__NV_DISABLE_EXPLICIT_SYNC` はNVIDIA専用で他を救わない
+- **副作用の報告がある**。`__NV_DISABLE_EXPLICIT_SYNC=1` はゴースト（前の描画が残る）の
+  報告があり、得るものが無いのにリスクだけ取る形になる
+- 段階1は `LOTT_ENABLE_DMABUF_RENDERER=1 __NV_DISABLE_EXPLICIT_SYNC=1 lott` でいつでも
+  再検証できる
+
+`packaging/arch/lott` の既定を `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` に変更しました。通常版と
+x86-64-v3 experimental版は同じPKGBUILDを使うため、この1箇所で両方に反映されます。利用者が
+`WEBKIT_*` を明示した場合はそれを尊重します。
 
 ### 調査時の注意点
 
 同じ調査を繰り返さないために、今回つまずいた点を残します。
 
-- **非アクセラレーション経路ではWebKitのチューニング・計測用変数が軒並み無効になる。**
-  `WEBKIT_SKIA_CPU_PAINTING_THREADS`、`WEBKIT_FORCE_VBLANK_TIMER`、`WEBKIT_SHOW_DAMAGE`は
-  いずれも合成器側の機能で、合成器が動いていなければ無反応になる。「変化がない」ことを
-  仮説の否定と読んではいけない。`WEBKIT_SHOW_DAMAGE=1`で赤い矩形が出るかどうかが、
-  合成器が生きているかの確認になる。
-- **`su -`したrootシェルでlottを起動しない。** `XDG_RUNTIME_DIR`が引き継がれないため、
-  描画に到達する前に一時領域の作成に失敗して終了する。起動テストはGUIセッション内の
-  通常ユーザーで行い、毎回まず素の`lott`が起動することを基準値として確認する。
+- **非アクセラレーション経路では、WebKitのチューニング・計測用変数が軒並み無効になる。**
+  `WEBKIT_SKIA_CPU_PAINTING_THREADS`、`WEBKIT_FORCE_VBLANK_TIMER`、`WEBKIT_SHOW_DAMAGE` は
+  いずれも合成器側の機能で、合成器が動いていなければ無反応になる。**「変化がない」ことを
+  仮説の否定と読んではいけない。** どのツマミも効かないため、原因の切り分けが著しく
+  難しくなる
+- **`WEBKIT_SHOW_DAMAGE=1` で赤い矩形が出るかどうかが、合成器が生きているかの判定になる。**
+  出なければ非アクセラレーション経路。最初にこれを確認するとよい
+- **`su -` したrootシェルでアプリを起動しない。** `XDG_RUNTIME_DIR` が引き継がれないため、
+  描画に到達する前に一時領域の作成に失敗して終了する。WebKitのエラーではなくアプリ側の
+  エラーが出る。起動テストはGUIセッション内の通常ユーザーで行い、**毎回まず素の起動が
+  成功することを基準値として確認する**
 - **WebKitGTKの環境変数は記憶や推測に頼らず、実在を確認してから使う。**
-  `strings /usr/lib/libwebkit2gtk-4.1.so.0 | grep -E '^WEBKIT_[A-Z_]+$'`で列挙できる。
+  `strings /usr/lib/libwebkit2gtk-4.1.so.0 | grep -E '^WEBKIT_[A-Z_]+$'` で列挙できる
 - Angular側（CDK autosizeの除去、固定高さvirtual scroll、`OnPush`、表示行数削減）は
   いずれも症状を変えなかった。フロントエンドのコード上も、仮想スクロールのビューポートに
-  紐づく毎フレーム処理は存在しない。今回の症状の原因ではない。
+  紐づく毎フレーム処理は存在しない。今回の症状の原因ではない
+
+参考リンク:
+
+- [unslothai/unsloth #9393](https://github.com/unslothai/unsloth/issues/9393) —
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` がWebKitGTK 2.44+では完全なソフトウェア描画になる、
+  という同趣旨の指摘
+- [Linux Graphics Issues | Tauri](https://v2.tauri.app/develop/debug/linux-graphics/) —
+  公式の回避策一覧。`WEBKIT_DISABLE_DMABUF_RENDERER=1` を推奨しつつ性能低下を明記
+- [WebKit Bug 262607](https://bugs.webkit.org/show_bug.cgi?id=262607) —
+  NVIDIA向けにDMA-BUF rendererを無効化する提案。RESOLVED WONTFIX

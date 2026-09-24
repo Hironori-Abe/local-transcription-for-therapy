@@ -32,6 +32,26 @@ export function normalizePlaybackRange(segment: PlaybackSegment): PlaybackRange 
   return { start, end: Math.max(start + 0.1, rawEnd) };
 }
 
+/** 1行を繰り返し再生するときの最短の長さ（秒）。 */
+export const MIN_LOOP_PLAYBACK_SECONDS = 1.5;
+
+/**
+ * 短すぎる行（相づちなど）は再生しても聞き取れないため、前後を均等に足して最短の長さにする。
+ * 行の時刻そのものは変えず、再生範囲だけを広げる。音声の先頭より前には広げない。
+ */
+export function expandShortPlaybackRange(
+  range: PlaybackRange,
+  minSeconds: number = MIN_LOOP_PLAYBACK_SECONDS
+): PlaybackRange {
+  const length = range.end - range.start;
+  if (!(length < minSeconds)) {
+    return range;
+  }
+  const pad = (minSeconds - length) / 2;
+  const start = Math.max(0, range.start - pad);
+  return { start, end: start + Math.max(minSeconds, range.end - start) };
+}
+
 export function buildPlaybackQueue(
   rows: ReadonlyArray<PlaybackSegment>,
   startSegmentId: number,

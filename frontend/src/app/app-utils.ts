@@ -1673,6 +1673,9 @@ export function resolveGeneralAppSettingsValue(
   if (transcription && typeof transcription.engine === 'string') {
     resolved.transcriptionEngine = normalizeSpeechEngineValue(transcription.engine);
   }
+  if (transcription && typeof transcription.keepFillers === 'boolean') {
+    resolved.keepFillers = transcription.keepFillers;
+  }
 
   const playbackRate = Number(settings.playback?.rate);
   if (Number.isFinite(playbackRate) && options.playbackRateOptions.includes(playbackRate)) {

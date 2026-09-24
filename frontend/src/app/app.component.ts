@@ -42,6 +42,7 @@ import {
   clampPlaybackTarget,
   clampTargetToRange,
   normalizePlaybackRange,
+  expandShortPlaybackRange,
   resolveNextPlaybackSegment,
   resolveSequenceSeek,
   resolveShortcutTarget
@@ -978,6 +979,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** 文字起こし・話者分離のエンジン（既定 standard。ggml は whisper.cpp / Nemotron の試験的経路）。 */
   readonly transcriptionEngine = signal<SpeechEngineOption>('standard');
   readonly diarizationEngine = signal<SpeechEngineOption>('standard');
+  /** whisper.cpp でフィラー・相づちを残す（既定 true。カウンセリングではフィラーも重要な情報）。 */
+  readonly keepFillers = signal<boolean>(true);
   readonly ggmlSpeechStatus = signal<GgmlSpeechStatus | null>(null);
   readonly ggmlSpeechWarning = computed(() => {
     const status = this.ggmlSpeechStatus();
@@ -1669,6 +1672,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (general.diarizationEngine !== undefined) {
       this.diarizationEngine.set(general.diarizationEngine);
     }
+    if (general.keepFillers !== undefined) {
+      this.keepFillers.set(general.keepFillers);
+    }
 
     const llm = resolveLlmAppSettingsValue(this.appSettings, {
       localLlmAppsEnabled: this.localLlmAppsEnabled(),
@@ -1748,7 +1754,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         computeType: this.normalizeComputeType(this.computeType()),
         language: this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
         hipDeviceIndex: this.selectedHipDeviceIndex(),
-        engine: this.transcriptionEngine()
+        engine: this.transcriptionEngine(),
+        keepFillers: this.keepFillers()
       }
     };
     this.persistAppSettings();
@@ -2598,6 +2605,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     void this.refreshGgmlSpeechStatus();
   }
 
+  onKeepFillersChange(checked: boolean): void {
+    this.keepFillers.set(checked);
+    this.persistTranscriptionSettings();
+  }
+
   onDiarizationEngineChange(valueRaw: string): void {
     this.diarizationEngine.set(normalizeSpeechEngineValue(valueRaw));
     this.persistDiarizationSettings();
@@ -2742,6 +2754,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             hipDeviceIndex: this.selectedHipDeviceIndex() >= 0 ? this.selectedHipDeviceIndex() : null,
             transcriptionEngine: this.transcriptionEngine(),
             diarizationEngine: this.diarizationEngine(),
+            keepFillers: this.keepFillers(),
           }
         }
       );
@@ -6070,7 +6083,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.error.set(`音声を再生できませんでした: ${this.normalizeErrorMessage(e)}`);
       return;
     }
-    const range = normalizePlaybackRange(segment);
+    // 1行の繰り返し再生では、相づちなど短い行も聞き取れるよう前後を足す（行の時刻は変えない）。
+    // 「ここから再生」は次の行へ続けて流れるので広げない（次の行の頭を二重に流さないため）。
+    const baseRange = normalizePlaybackRange(segment);
+    const range = loopEnabled ? expandShortPlaybackRange(baseRange) : baseRange;
     const { start, end } = range;
     const currentPlayingId = this.playingSegmentId();
 

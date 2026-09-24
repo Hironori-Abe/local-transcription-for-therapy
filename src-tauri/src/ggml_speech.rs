@@ -48,6 +48,27 @@ const VAD_SPEECH_PAD_MS: &str = "400";
 /// （10分音声の冒頭 1.9〜30.6 秒が消えるのを確認。beam 3 では起きない）。
 pub(crate) const WHISPER_BEAM_SIZE: u32 = 3;
 
+/// フィラー・相づちを残すための初期プロンプト（毎回の 30 秒窓に付ける）。
+/// Whisper は既定でフィラーを省きやすいため、話し言葉の例文で書き起こし方を寄せる。
+/// 臨床的な内容（症状・薬など）や固有名詞を含めないこと: 例文中の語が、話されていないのに
+/// 出力へ紛れ込むおそれがある（頻出語を入れた検証で「辛いもの」→「自傷」の誤認識を確認）。
+/// 検証: demo_data/ggml-poc/README.md「初期プロンプトとフィラーの検証」
+/// （公開書き起こしに対しフィラー再現 19%→68%、文字誤り率 18.6%→16.5%）。
+pub(crate) const FILLER_PROMPT: &str = "以下は日本語の会話です。 えーとですね、そのー、なんか最近ちょっとバタバタしてて。まー、どうしようかなって思ってて。うーん。あのー、まあ、そうですね、なるほど、うん。";
+/// whisper.cpp のトークナイザで数えた FILLER_PROMPT のトークン数（プロンプトを変えたら数え直す:
+/// `whisper-cli ... --prompt "<文>" --carry-initial-prompt -mc 3` の警告に表示される）。
+/// `-mc` をこの値 + 1 にすると、例文だけを毎回付け、直前テキストは引き継がない
+/// （引き継ぎは雪崩型ハルシネーションの原因になるため、アプリでは常に切っている）。
+pub(crate) const FILLER_PROMPT_TOKENS: u32 = 55;
+
+/// これより短い行は、隣の同じ話者の行へつなぐ（1秒未満の行は再生しても聞き取れないため）。
+const SHORT_ROW_SECONDS: f64 = 1.0;
+/// 短い行をつなぐ相手との最大の間隔。
+const SHORT_ROW_MERGE_GAP_SECONDS: f64 = 1.0;
+
+/// 行を分けてよい文末の文字。文の途中（単語の途中）では行を分けない。
+const SENTENCE_END_CHARS: &[char] = &['。', '？', '！', '?', '!'];
+
 /// 話者分離の短区間除去・結合（diarize_cli.py の filter_short_segments と同じ値）。
 const DIAR_MIN_DURATION_SECONDS: f64 = 0.3;
 const DIAR_MERGE_GAP_SECONDS: f64 = 0.5;
@@ -154,9 +175,17 @@ pub(crate) fn whisper_cli_args(
     output_prefix: &Path,
     language: &str,
     use_gpu: bool,
+    keep_fillers: bool,
     threads: usize,
 ) -> Vec<OsString> {
     let beam = WHISPER_BEAM_SIZE.to_string();
+    // 直前テキストの引き継ぎは常に切る（condition_on_previous_text=False 相当）。
+    // フィラーを残す場合は例文だけを毎回付けるため、文脈長を例文のトークン数 + 1 に合わせる。
+    let max_context = if keep_fillers {
+        (FILLER_PROMPT_TOKENS + 1).to_string()
+    } else {
+        "0".to_string()
+    };
     let mut args: Vec<OsString> = vec![
         "-m".into(),
         model_path.into(),
@@ -170,9 +199,8 @@ pub(crate) fn whisper_cli_args(
         beam.clone().into(),
         "-bo".into(),
         beam.into(),
-        // condition_on_previous_text=False 相当。直前テキストの引き継ぎによる雪崩型ハルシネーションを防ぐ。
         "-mc".into(),
-        "0".into(),
+        max_context.into(),
         "-lpt".into(),
         "-1.0".into(),
         "--vad".into(),
@@ -192,6 +220,13 @@ pub(crate) fn whisper_cli_args(
         "-np".into(),
         "-pp".into(),
     ];
+    if keep_fillers {
+        // 例文を付けるとセグメントが長くまとまるため、話者交代位置で分割できるよう
+        // トークン単位の時刻（-ojf）も出力する。
+        args.extend(
+            ["--prompt", FILLER_PROMPT, "--carry-initial-prompt", "-ojf"].map(OsString::from),
+        );
+    }
     if !use_gpu {
         args.push("-ng".into());
     }
@@ -213,6 +248,7 @@ pub(crate) fn parse_whisper_progress(line: &str) -> Option<u32> {
 pub(crate) fn convert_whisper_output(
     output: &Value,
     language: &str,
+    with_words: bool,
 ) -> Result<(Vec<Value>, String), String> {
     let items = output
         .get("transcription")
@@ -238,15 +274,286 @@ pub(crate) fn convert_whisper_output(
             continue;
         }
         text.push_str(segment_text);
-        segments.push(json!({
+        let mut segment = json!({
             "id": segments.len(),
             "start": start,
             "end": end,
             "text": segment_text,
             "speaker": Value::Null,
-        }));
+        });
+        if with_words {
+            let words = segment_words(item, segment_text, start, end);
+            if !words.is_empty() {
+                segment["words"] = Value::Array(words);
+            }
+        }
+        segments.push(segment);
     }
     Ok((segments, text))
+}
+
+/// whisper.cpp の `-ojf` のトークンを `{word, start, end}` へ変換する。
+///
+/// whisper.cpp は VAD 使用時、セグメントの時刻は元の音声の時間軸へ戻すが、トークンの時刻は
+/// 無音を詰めた後の時間軸のまま出力する（10分音声の末尾で約12秒ずれるのを確認）。
+/// そのためセグメント内でトークン時刻を [start, end] へ線形に写像し直す。
+/// トークンをつないだ文字列がセグメントのテキストと一致しない場合（漢字がバイト断片の
+/// トークンに分かれて文字化けした場合など）は空を返し、そのセグメントは分割しない。
+fn segment_words(item: &Value, segment_text: &str, start: f64, end: f64) -> Vec<Value> {
+    let Some(tokens) = item.get("tokens").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let raw: Vec<(&str, f64, f64)> = tokens
+        .iter()
+        .filter_map(|t| {
+            let text = t.get("text")?.as_str()?;
+            if text.starts_with("[_") {
+                return None; // [_BEG_] / [_TT_n] などの特殊トークン
+            }
+            let o = t.get("offsets")?;
+            let from = o.get("from")?.as_f64()? / 1000.0;
+            let to = (o.get("to")?.as_f64()? / 1000.0).max(from);
+            Some((text, from, to))
+        })
+        .collect();
+    let joined: String = raw.iter().map(|r| r.0).collect();
+    if joined.trim() != segment_text || joined.contains('\u{FFFD}') {
+        return Vec::new();
+    }
+    let (Some(r0), Some(r1)) = (
+        raw.iter().map(|r| r.1).reduce(f64::min),
+        raw.iter().map(|r| r.2).reduce(f64::max),
+    ) else {
+        return Vec::new();
+    };
+    let scale = if r1 > r0 {
+        (end - start) / (r1 - r0)
+    } else {
+        0.0
+    };
+    raw.into_iter()
+        .map(|(text, from, to)| {
+            json!({
+                "word": text,
+                "start": start + (from - r0) * scale,
+                "end": start + (to - r0) * scale,
+            })
+        })
+        .collect()
+}
+
+/// 話者分離の区間 `{start, end, speaker}` のうち、[t0, t1] と最も重なる話者を返す。
+/// 重なりが同じなら短い区間（割り込み・相づち）を優先し、重ならなければ最も近い区間の話者。
+fn speaker_for_span(t0: f64, t1: f64, diar: &[(f64, f64, String)]) -> Option<String> {
+    let mut best: Option<(f64, f64, &str)> = None; // (重なり, 区間長, 話者)
+    for (s, e, spk) in diar {
+        let overlap = t1.min(*e) - t0.max(*s);
+        if overlap <= 0.0 {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((bo, blen, _)) => {
+                overlap > bo + 1e-6 || ((overlap - bo).abs() <= 1e-6 && e - s < blen)
+            }
+        };
+        if better {
+            best = Some((overlap, e - s, spk));
+        }
+    }
+    if let Some((_, _, spk)) = best {
+        return Some(spk.to_string());
+    }
+    let mid = (t0 + t1) / 2.0;
+    diar.iter()
+        .min_by(|a, b| {
+            let da = (a.0 - mid).abs().min((a.1 - mid).abs());
+            let db = (b.0 - mid).abs().min((b.1 - mid).abs());
+            da.total_cmp(&db)
+        })
+        .map(|d| d.2.clone())
+}
+
+/// (単語, 開始, 終了)
+type TimedWord = (String, f64, f64);
+
+/// 単語列を文に分ける。文末記号（。？！）の直後と、空白で始まる単語の直前で区切る。
+fn split_into_sentences(words: Vec<TimedWord>) -> Vec<Vec<TimedWord>> {
+    let mut sentences: Vec<Vec<TimedWord>> = Vec::new();
+    let mut current: Vec<TimedWord> = Vec::new();
+    for w in words {
+        if !current.is_empty() && w.0.starts_with(char::is_whitespace) {
+            sentences.push(std::mem::take(&mut current));
+        }
+        let ends_sentence = w.0.trim_end().ends_with(SENTENCE_END_CHARS);
+        current.push(w);
+        if ends_sentence {
+            sentences.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        sentences.push(current);
+    }
+    sentences
+}
+
+/// 単語の時刻を持つセグメントを文ごとの行に分け、文ごとに話者を割り当てる。
+///
+/// フィラー用の例文を付けると Whisper はセグメントを長くまとめ（中央値 2.2 秒→9 秒）、
+/// 1行に2人の発話が混ざって行単位の割り当てが崩れる（10分音声で一致率 92.6%→68.8%）。
+/// 1文1行にして文ごとに話者を決めると 89.8% まで戻り、行の長さも標準エンジンと同程度
+/// （中央値 2.4 秒）になる。
+///
+/// 単語単位で話者交代位置に切る方式は、トークン時刻の誤差（数百ミリ秒）で単語の途中や
+/// 句点だけの行ができ、読めなくなったため採らない（2026-09-25 の画面確認で判明）。
+/// 単語の時刻を持つセグメントが無ければ None を返す（従来の行単位の割り当てを使う）。
+pub(crate) fn split_segments_by_speaker(
+    segments: &[Value],
+    diarization_segments: &[Value],
+) -> Option<Vec<Value>> {
+    let has_words = segments.iter().any(|s| {
+        s.get("words")
+            .and_then(Value::as_array)
+            .is_some_and(|w| !w.is_empty())
+    });
+    let diar: Vec<(f64, f64, String)> = diarization_segments
+        .iter()
+        .filter_map(|d| {
+            Some((
+                d.get("start")?.as_f64()?,
+                d.get("end")?.as_f64()?,
+                d.get("speaker")?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    if !has_words || diar.is_empty() {
+        return None;
+    }
+
+    let mut out: Vec<Value> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        let start = seg.get("start").and_then(Value::as_f64).unwrap_or(0.0);
+        let end = seg.get("end").and_then(Value::as_f64).unwrap_or(start);
+        let words: Vec<TimedWord> = seg
+            .get("words")
+            .and_then(Value::as_array)
+            .map(|ws| {
+                ws.iter()
+                    .filter_map(|w| {
+                        Some((
+                            w.get("word")?.as_str()?.to_string(),
+                            w.get("start")?.as_f64()?,
+                            w.get("end")?.as_f64()?,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if words.is_empty() {
+            let mut kept = seg.clone();
+            kept["speaker"] = speaker_for_span(start, end, &diar)
+                .map(Value::String)
+                .unwrap_or(Value::Null);
+            out.push(kept);
+            continue;
+        }
+
+        let sentences = split_into_sentences(words);
+        let n = sentences.len();
+        for (i, ws) in sentences.into_iter().enumerate() {
+            let text = ws.iter().map(|w| w.0.as_str()).collect::<String>();
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let sub_start = if i == 0 { start } else { ws[0].1 };
+            let sub_end = if i + 1 == n { end } else { ws[ws.len() - 1].2 }.max(sub_start);
+            let speaker = speaker_for_span(sub_start, sub_end.max(sub_start + 0.02), &diar);
+            out.push(json!({
+                "start": sub_start,
+                "end": sub_end,
+                "text": text,
+                "speaker": speaker.map(Value::String).unwrap_or(Value::Null),
+                "words": ws
+                    .iter()
+                    .map(|w| json!({ "word": w.0, "start": w.1, "end": w.2 }))
+                    .collect::<Vec<_>>(),
+            }));
+        }
+    }
+    let mut out = merge_short_rows(out);
+    for (i, seg) in out.iter_mut().enumerate() {
+        seg["id"] = json!(i);
+    }
+    Some(out)
+}
+
+fn row_f64(row: &Value, key: &str) -> f64 {
+    row.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn is_short_row(row: &Value) -> bool {
+    row_f64(row, "end") - row_f64(row, "start") < SHORT_ROW_SECONDS
+}
+
+/// `later` を `earlier` の後ろにつないだ行を返す。
+fn join_rows(earlier: &Value, later: &Value) -> Value {
+    let mut joined = earlier.clone();
+    let text = format!(
+        "{}{}",
+        earlier.get("text").and_then(Value::as_str).unwrap_or(""),
+        later.get("text").and_then(Value::as_str).unwrap_or("")
+    );
+    joined["text"] = Value::String(text);
+    joined["start"] = json!(row_f64(earlier, "start").min(row_f64(later, "start")));
+    joined["end"] = json!(row_f64(earlier, "end").max(row_f64(later, "end")));
+    let mut words = earlier
+        .get("words")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    words.extend(
+        later
+            .get("words")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    joined["words"] = Value::Array(words);
+    joined
+}
+
+/// 1秒未満の行を、間隔 1 秒以内の同じ話者の前の行（無ければ次の行）へつなぐ。
+/// つなげない行（相手の発話中に入った相づちなど）は記録を消さずにそのまま残す。
+fn merge_short_rows(rows: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(rows.len());
+    let mut pending: Option<Value> = None; // 次の行の先頭へつなぐ候補
+    for mut row in rows {
+        if let Some(short) = pending.take() {
+            if short["speaker"] == row["speaker"]
+                && row_f64(&row, "start") - row_f64(&short, "end") <= SHORT_ROW_MERGE_GAP_SECONDS
+            {
+                row = join_rows(&short, &row);
+            } else {
+                out.push(short);
+            }
+        }
+        if is_short_row(&row) {
+            if let Some(prev) = out.last_mut() {
+                if prev["speaker"] == row["speaker"]
+                    && row_f64(&row, "start") - row_f64(prev, "end") <= SHORT_ROW_MERGE_GAP_SECONDS
+                {
+                    *prev = join_rows(prev, &row);
+                    continue;
+                }
+            }
+            pending = Some(row);
+            continue;
+        }
+        out.push(row);
+    }
+    out.extend(pending);
+    out
 }
 
 /// transcribe_cli.py `_is_likely_hallucination` の移植。language=ja のときだけ判定する。
@@ -493,6 +800,7 @@ mod tests {
             Path::new("/t/out"),
             "ja",
             true,
+            false,
             8,
         );
         let joined: Vec<String> = args
@@ -512,6 +820,7 @@ mod tests {
             Path::new("i"),
             Path::new("o"),
             "ja",
+            false,
             false,
             0,
         );
@@ -545,7 +854,7 @@ mod tests {
                 {"offsets": {"from": 4000, "to": 5000}, "text": "ううう"},
             ]
         });
-        let (segments, text) = convert_whisper_output(&raw, "ja").unwrap();
+        let (segments, text) = convert_whisper_output(&raw, "ja", false).unwrap();
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[1]["id"], 1);
         assert_eq!(segments[1]["start"], 1.94);
@@ -677,6 +986,7 @@ mod tests {
                 &out_prefix,
                 "ja",
                 true,
+                true,
                 8,
             ))
             .status()
@@ -686,7 +996,7 @@ mod tests {
             &std::fs::read_to_string(out_prefix.with_extension("json")).unwrap(),
         )
         .unwrap();
-        let (segments, text) = convert_whisper_output(&asr, "ja").unwrap();
+        let (segments, text) = convert_whisper_output(&asr, "ja", true).unwrap();
         eprintln!(
             "whisper.cpp: {} segments, {} chars, {:.1}s",
             segments.len(),
@@ -714,6 +1024,10 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&diar_out).unwrap()).unwrap();
         let turns = parse_nemo_diarization(&diar).unwrap();
         let (diar_segments, summary) = postprocess_diarization(&turns, 2);
+        let split =
+            split_segments_by_speaker(&segments, &diar_segments).expect("words があれば分割される");
+        eprintln!("speaker split: {} -> {} rows", segments.len(), split.len());
+        assert!(split.iter().all(|s| s["speaker"].is_string()));
         eprintln!(
             "nemotron: {} turns -> {} segments, {:.1}s, summary={summary}",
             turns.len(),
@@ -722,6 +1036,159 @@ mod tests {
         );
         assert_eq!(summary["speakerCount"], 2);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn whisper_args_with_fillers_carry_prompt_without_history() {
+        let args = whisper_cli_args(
+            Path::new("m"),
+            Path::new("v"),
+            Path::new("i"),
+            Path::new("o"),
+            "ja",
+            true,
+            true,
+            8,
+        );
+        let s: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let i = s.iter().position(|a| a == "-mc").unwrap();
+        assert_eq!(s[i + 1], (FILLER_PROMPT_TOKENS + 1).to_string());
+        assert!(s.contains(&"--carry-initial-prompt".to_string()));
+        assert!(s.contains(&"-ojf".to_string()));
+        assert!(s.contains(&FILLER_PROMPT.to_string()));
+    }
+
+    #[test]
+    fn filler_prompt_has_no_clinical_terms() {
+        for term in ["眠れ", "薬", "つらく", "死", "病院", "自傷", "頻出語"] {
+            assert!(!FILLER_PROMPT.contains(term), "{term}");
+        }
+    }
+
+    fn whisper_item(text: &str, from: u64, to: u64, tokens: &[(&str, u64, u64)]) -> Value {
+        let mut toks = vec![json!({"text": "[_BEG_]", "offsets": {"from": 0, "to": 0}})];
+        toks.extend(
+            tokens
+                .iter()
+                .map(|(t, a, b)| json!({"text": t, "offsets": {"from": a, "to": b}})),
+        );
+        json!({"text": text, "offsets": {"from": from, "to": to}, "tokens": toks})
+    }
+
+    #[test]
+    fn words_are_remapped_into_segment_range() {
+        // VAD で詰めた時間軸のトークン（100〜102秒）を、元の時間軸のセグメント（110〜114秒）へ写像する。
+        let raw = json!({"transcription": [whisper_item(
+            "そうですね",
+            110_000,
+            114_000,
+            &[("そう", 100_000, 101_000), ("ですね", 101_000, 102_000)],
+        )]});
+        let (segments, _) = convert_whisper_output(&raw, "ja", true).unwrap();
+        let words = segments[0]["words"].as_array().unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0]["start"], 110.0);
+        assert_eq!(words[1]["start"], 112.0);
+        assert_eq!(words[1]["end"], 114.0);
+        let (plain, _) = convert_whisper_output(&raw, "ja", false).unwrap();
+        assert!(plain[0].get("words").is_none());
+    }
+
+    #[test]
+    fn words_are_dropped_when_tokens_do_not_rebuild_text() {
+        let raw = json!({"transcription": [whisper_item(
+            "漢字",
+            0,
+            1_000,
+            &[("\u{FFFD}", 0, 500), ("字", 500, 1_000)],
+        )]});
+        let (segments, _) = convert_whisper_output(&raw, "ja", true).unwrap();
+        assert!(segments[0].get("words").is_none());
+    }
+
+    fn word(w: &str, a: f64, b: f64) -> Value {
+        json!({"word": w, "start": a, "end": b})
+    }
+
+    #[test]
+    fn splits_long_segment_into_sentences_with_own_speakers() {
+        let segments = vec![json!({
+            "id": 0, "start": 0.0, "end": 6.0, "text": "そうなんですよ。 あのー、うん。", "speaker": null,
+            "words": [
+                word("そう", 0.0, 1.0), word("なんです", 1.0, 2.0), word("よ。", 2.0, 3.0),
+                word(" あのー", 3.2, 4.5), word("、うん。", 4.5, 6.0),
+            ]
+        })];
+        let diar = vec![
+            json!({"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"}),
+            json!({"start": 3.1, "end": 6.0, "speaker": "SPEAKER_01"}),
+        ];
+        let split = split_segments_by_speaker(&segments, &diar).unwrap();
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0]["text"], "そうなんですよ。");
+        assert_eq!(split[0]["speaker"], "SPEAKER_00");
+        assert_eq!(split[0]["start"], 0.0);
+        assert_eq!(split[1]["text"], "あのー、うん。");
+        assert_eq!(split[1]["speaker"], "SPEAKER_01");
+        assert_eq!(split[1]["end"], 6.0);
+        assert_eq!(split[1]["id"], 1);
+    }
+
+    #[test]
+    fn never_splits_inside_a_sentence() {
+        // 文の途中で話者分離の話者が変わっても、単語の途中や文の途中では行を分けない。
+        let segments = vec![json!({
+            "id": 0, "start": 0.0, "end": 3.0, "text": "言い訳になってしまうかも", "speaker": null,
+            "words": [word("言い", 0.0, 1.0), word("訳に", 1.0, 1.5), word("なってしまうかも", 1.5, 3.0)]
+        })];
+        let diar = vec![
+            json!({"start": 0.0, "end": 1.2, "speaker": "SPEAKER_00"}),
+            json!({"start": 1.2, "end": 3.0, "speaker": "SPEAKER_01"}),
+        ];
+        let split = split_segments_by_speaker(&segments, &diar).unwrap();
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0]["text"], "言い訳になってしまうかも");
+        assert_eq!(split[0]["speaker"], "SPEAKER_01");
+    }
+
+    fn row(start: f64, end: f64, speaker: &str, text: &str) -> Value {
+        json!({"start": start, "end": end, "speaker": speaker, "text": text, "words": []})
+    }
+
+    #[test]
+    fn short_rows_join_same_speaker_neighbors_but_are_never_dropped() {
+        let rows = vec![
+            row(0.0, 3.0, "A", "今日はね。"),
+            row(3.2, 3.6, "A", "うん。"), // 前の同じ話者へ
+            row(4.0, 4.4, "B", "そう。"), // 前後とも別の話者 → そのまま残す
+            row(5.0, 5.3, "A", "で、"),   // 前は別の話者 → 次の同じ話者の先頭へ
+            row(5.5, 8.0, "A", "話を戻すと。"),
+        ];
+        let merged = merge_short_rows(rows);
+        let texts: Vec<&str> = merged.iter().map(|r| r["text"].as_str().unwrap()).collect();
+        assert_eq!(
+            texts,
+            vec!["今日はね。うん。", "そう。", "で、話を戻すと。"]
+        );
+        assert_eq!(merged[0]["end"], 3.6);
+        assert_eq!(merged[2]["start"], 5.0);
+    }
+
+    #[test]
+    fn short_row_is_not_joined_across_a_long_gap() {
+        let rows = vec![row(0.0, 3.0, "A", "はい。"), row(5.0, 5.4, "A", "うん。")];
+        assert_eq!(merge_short_rows(rows).len(), 2);
+    }
+
+    #[test]
+    fn segments_without_words_keep_existing_assignment() {
+        let segments =
+            vec![json!({"id": 0, "start": 0.0, "end": 2.0, "text": "はい", "speaker": null})];
+        let diar = vec![json!({"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"})];
+        assert!(split_segments_by_speaker(&segments, &diar).is_none());
     }
 
     #[test]

@@ -6,6 +6,7 @@ import {
   clampPlaybackTarget,
   clampTargetToRange,
   normalizePlaybackRange,
+  expandShortPlaybackRange,
   resolveNextPlaybackSegment,
   resolveSegmentAtTime,
   resolveSequenceSeek,
@@ -22,6 +23,12 @@ test('playback range normalizes invalid and too-short boundaries', () => {
   assert.deepEqual(normalizePlaybackRange({ id: 1, start: -2, end: 0.05 }), { start: 0, end: 0.1 });
   assert.deepEqual(normalizePlaybackRange({ id: 1, start: 3, end: 2 }), { start: 3, end: 3.1 });
   assert.deepEqual(normalizePlaybackRange({ id: 1, start: Number.NaN, end: Number.NaN }), { start: 0, end: 0.1 });
+});
+
+test('short loop ranges are padded on both sides without going before zero', () => {
+  assert.deepEqual(expandShortPlaybackRange({ start: 10, end: 10.5 }), { start: 9.5, end: 11 });
+  assert.deepEqual(expandShortPlaybackRange({ start: 0.2, end: 0.4 }), { start: 0, end: 1.5 });
+  assert.deepEqual(expandShortPlaybackRange({ start: 3, end: 6 }), { start: 3, end: 6 });
 });
 
 test('playback queue starts at the requested visible row and loop mode has no queue', () => {

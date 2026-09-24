@@ -4338,6 +4338,8 @@ struct RunTranscriptionRequest {
     transcription_engine: Option<String>,
     /// "standard"（既定: pyannote）/ "ggml"（Nemotron-3-Diarization）
     diarization_engine: Option<String>,
+    /// ggml（whisper.cpp）でフィラー・相づちを残すか（省略時 true）。標準エンジンでは使わない。
+    keep_fillers: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -12336,8 +12338,9 @@ fn run_transcription_blocking(
     set_cancel_requested(RunningTaskKind::Transcription, false);
     let transcription_engine = SpeechEngine::parse(request.transcription_engine.as_deref());
     let diarization_engine = SpeechEngine::parse(request.diarization_engine.as_deref());
+    let keep_fillers = request.keep_fillers.unwrap_or(true);
     eprintln!(
-        "[LoTT][transcription][run_id={run_id}][stage=engine] transcription={transcription_engine:?} diarization={diarization_engine:?}"
+        "[LoTT][transcription][run_id={run_id}][stage=engine] transcription={transcription_engine:?} diarization={diarization_engine:?} keep_fillers={keep_fillers}"
     );
     let amd_gpu_required = is_amd_gpu_build(&app);
     let script_path = resolve_sidecar_script_path(&app)?;
@@ -12527,6 +12530,7 @@ fn run_transcription_blocking(
         noise_reduction_mode,
         false,
         request.hip_device_index,
+        keep_fillers,
     )?;
     eprintln!(
         "[LoTT][transcription][run_id={run_id}][stage=transcription_sidecar_done] elapsed_ms={} exit={:?} stdout_bytes={} stderr_bytes={}",
@@ -12588,6 +12592,7 @@ fn run_transcription_blocking(
             noise_reduction_mode,
             true,
             request.hip_device_index,
+            keep_fillers,
         )?;
         if take_cancel_requested(RunningTaskKind::Transcription) {
             let diar_pid = DIARIZATION_PID.load(Ordering::SeqCst);
@@ -13420,6 +13425,7 @@ fn execute_ggml_transcription(
     model: &str,
     language: &str,
     low_memory_mode: bool,
+    keep_fillers: bool,
 ) -> Result<SidecarExecResult, String> {
     let paths = resolve_ggml_speech_paths(app)?;
     let missing = paths.missing_for_transcription(model);
@@ -13463,6 +13469,7 @@ fn execute_ggml_transcription(
         &out_prefix,
         language,
         use_gpu,
+        keep_fillers,
         threads,
     ));
     emit_progress(
@@ -13499,11 +13506,13 @@ fn execute_ggml_transcription(
             exec.stderr,
         ));
     }
-    let raw = fs::read_to_string(&out_json)
+    // トークンがバイト断片の場合に不正な UTF-8 が混ざることがあるため、置換文字を許して読む。
+    let raw = fs::read(&out_json)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
         .map_err(|e| format!("whisper.cpp の出力を読み込めませんでした: {e}"))?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("whisper.cpp の出力 JSON を解析できませんでした: {e}"))?;
-    let (segments, text) = ggml_speech::convert_whisper_output(&parsed, language)?;
+    let (segments, text) = ggml_speech::convert_whisper_output(&parsed, language, keep_fillers)?;
     // 長尺安定モードでも探索幅は下げない（ggml_speech::WHISPER_BEAM_SIZE のコメント参照）。
     let beam = ggml_speech::WHISPER_BEAM_SIZE;
     let result = serde_json::json!({
@@ -13520,8 +13529,9 @@ fn execute_ggml_transcription(
                 "vadFilter": true,
                 "wordTimestamps": false,
                 "lowMemoryMode": low_memory_mode,
-                "initialPrompt": Value::Null,
-                "initialPromptNote": "ggml エンジンでは初期プロンプトを使いません（docs/ggml-speech-engine-design.md 5.2）",
+                "keepFillers": keep_fillers,
+                // 利用者の追加指示・用語辞書は使わない（話されていない語が出力へ紛れ込むのを防ぐため）。
+                "initialPrompt": if keep_fillers { Value::from(ggml_speech::FILLER_PROMPT) } else { Value::Null },
                 "beamSize": beam,
                 "bestOf": beam,
                 "conditionOnPreviousText": false,
@@ -13673,6 +13683,7 @@ fn execute_transcription_for_engine(
     noise_reduction_mode: &str,
     is_retry: bool,
     hip_device_index: Option<i32>,
+    keep_fillers: bool,
 ) -> Result<SidecarExecResult, String> {
     match engine {
         SpeechEngine::Standard => execute_transcription(
@@ -13693,9 +13704,15 @@ fn execute_transcription_for_engine(
             is_retry,
             hip_device_index,
         ),
-        SpeechEngine::Ggml => {
-            execute_ggml_transcription(app, audio_path, device, model, language, low_memory_mode)
-        }
+        SpeechEngine::Ggml => execute_ggml_transcription(
+            app,
+            audio_path,
+            device,
+            model,
+            language,
+            low_memory_mode,
+            keep_fillers,
+        ),
     }
 }
 
@@ -14236,6 +14253,12 @@ fn assign_speakers_to_segments(result: &mut Value, diarization_segments: &[Value
     let Some(segments) = result.get_mut("segments").and_then(Value::as_array_mut) else {
         return;
     };
+    // 単語の時刻を持つ結果（ggml エンジンでフィラーを残す場合）は、話者交代位置で行を分けて割り当てる。
+    // 標準エンジン（word_timestamps=false）の結果は単語を持たないため、従来の行単位の割り当てのまま。
+    if let Some(split) = ggml_speech::split_segments_by_speaker(segments, diarization_segments) {
+        *segments = split;
+        return;
+    }
 
     for seg in segments.iter_mut() {
         let seg_obj = match seg.as_object_mut() {

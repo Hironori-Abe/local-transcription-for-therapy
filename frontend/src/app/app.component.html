@@ -736,6 +736,13 @@
                     <mat-option value="ggml">Nemotron（試験的）</mat-option>
                   </mat-select>
                 </mat-form-field>
+                <mat-checkbox *ngIf="transcriptionEngine() === 'ggml'"
+                  [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                  [checked]="keepFillers()" (change)="onKeepFillersChange($event.checked)"
+                  matTooltip="「えーと」「あのー」「うん」などのフィラー・相づちを書き起こします。外すと Whisper の既定どおり省かれやすくなります。"
+                  matTooltipPosition="above">
+                  フィラー・相づちを残す
+                </mat-checkbox>
                 <div *ngIf="ggmlSpeechWarning()" class="gpu-asr-warning ggml-speech-warning">
                   <mat-icon class="material-symbols-outlined">warning</mat-icon>
                   {{ ggmlSpeechWarning() }}

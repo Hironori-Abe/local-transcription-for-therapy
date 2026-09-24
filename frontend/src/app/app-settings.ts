@@ -30,6 +30,8 @@ export interface AppSettingsV1 {
     language?: string;
     hipDeviceIndex?: number;
     engine?: string;
+    /** ggml（whisper.cpp）でフィラー・相づちを残すか。未設定は true。 */
+    keepFillers?: boolean;
   };
   diarization?: {
     device?: string;
@@ -92,6 +94,7 @@ export interface GeneralAppSettingsValue {
   addUtteranceNumber?: boolean;
   transcriptionEngine?: SpeechEngineOption;
   diarizationEngine?: SpeechEngineOption;
+  keepFillers?: boolean;
 }
 
 export interface GeneralAppSettingsOptions {

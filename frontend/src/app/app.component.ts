@@ -61,8 +61,10 @@ import {
 } from './transcription-io';
 import {
   type AppSettingsV1,
+  type GgmlSpeechStatus,
   type LlmBackendMode,
   type LlmPromptType,
+  type SpeechEngineOption,
   type ThemeMode
 } from './app-settings';
 import {
@@ -162,6 +164,7 @@ import {
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
+  normalizeSpeechEngineValue,
   normalizeTranscriptionLanguageValue,
   parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
@@ -972,6 +975,21 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   readonly segmentRowFilter = signal<'all' | 'caution' | 'caution_context'>('all');
   readonly parallelMode = signal<'standard' | 'fast'>('standard');
+  /** 文字起こし・話者分離のエンジン（既定 standard。ggml は whisper.cpp / Nemotron の試験的経路）。 */
+  readonly transcriptionEngine = signal<SpeechEngineOption>('standard');
+  readonly diarizationEngine = signal<SpeechEngineOption>('standard');
+  readonly ggmlSpeechStatus = signal<GgmlSpeechStatus | null>(null);
+  readonly ggmlSpeechWarning = computed(() => {
+    const status = this.ggmlSpeechStatus();
+    const lines: string[] = [];
+    if (this.transcriptionEngine() === 'ggml' && status && !status.transcriptionReady) {
+      lines.push(`文字起こし（whisper.cpp）の準備が済んでいません: ${status.missingForTranscription.join(' / ')}`);
+    }
+    if (this.diarizationEngine() === 'ggml' && status && !status.diarizationReady) {
+      lines.push(`話者分離（Nemotron）の準備が済んでいません: ${status.missingForDiarization.join(' / ')}`);
+    }
+    return lines.join('\n');
+  });
   readonly clusteringAdjust = signal<'standard' | 'over_split' | 'under_split'>('standard');
   readonly parallelModeHint = computed(() => parallelModeHintValue(this.parallelMode()));
   readonly resultWarningStats = computed(() => {
@@ -1645,6 +1663,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (general.addUtteranceNumber !== undefined) {
       this.addUtteranceNumber.set(general.addUtteranceNumber);
     }
+    if (general.transcriptionEngine !== undefined) {
+      this.transcriptionEngine.set(general.transcriptionEngine);
+    }
+    if (general.diarizationEngine !== undefined) {
+      this.diarizationEngine.set(general.diarizationEngine);
+    }
 
     const llm = resolveLlmAppSettingsValue(this.appSettings, {
       localLlmAppsEnabled: this.localLlmAppsEnabled(),
@@ -1723,7 +1747,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         device: this.normalizeTranscriptionDevice(this.transcriptionDevice()),
         computeType: this.normalizeComputeType(this.computeType()),
         language: this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
-        hipDeviceIndex: this.selectedHipDeviceIndex()
+        hipDeviceIndex: this.selectedHipDeviceIndex(),
+        engine: this.transcriptionEngine()
       }
     };
     this.persistAppSettings();
@@ -1776,7 +1801,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       ...this.appSettings,
       diarization: {
         device: this.normalizeTranscriptionDevice(this.diarizationDevice()),
-        speakerCount: this.speakerCount()
+        speakerCount: this.speakerCount(),
+        engine: this.diarizationEngine()
       }
     };
     this.persistAppSettings();
@@ -1844,6 +1870,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.applyAppSettings();
     this.loadEstimateSamples();
     void this.initializeStartupState();
+    void this.refreshGgmlSpeechStatus();
     this.ngZone.runOutsideAngular(() => {
       window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
     });
@@ -2565,6 +2592,28 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistDiarizationSettings();
   }
 
+  onTranscriptionEngineChange(valueRaw: string): void {
+    this.transcriptionEngine.set(normalizeSpeechEngineValue(valueRaw));
+    this.persistTranscriptionSettings();
+    void this.refreshGgmlSpeechStatus();
+  }
+
+  onDiarizationEngineChange(valueRaw: string): void {
+    this.diarizationEngine.set(normalizeSpeechEngineValue(valueRaw));
+    this.persistDiarizationSettings();
+    void this.refreshGgmlSpeechStatus();
+  }
+
+  /** ggml エンジンの実行ファイル・モデルが揃っているかを確認する（起動はしない）。 */
+  async refreshGgmlSpeechStatus(): Promise<void> {
+    try {
+      const status = await invoke<GgmlSpeechStatus>('check_ggml_speech_status', { model: this.whisperModel() });
+      this.ggmlSpeechStatus.set(status);
+    } catch {
+      this.ggmlSpeechStatus.set(null);
+    }
+  }
+
   async runTranscription(): Promise<void> {
     if (this.transcriptionPipelineRunning()) {
       return;
@@ -2691,6 +2740,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               : this.clusteringAdjust() === 'under_split' ? 0.55
               : null,
             hipDeviceIndex: this.selectedHipDeviceIndex() >= 0 ? this.selectedHipDeviceIndex() : null,
+            transcriptionEngine: this.transcriptionEngine(),
+            diarizationEngine: this.diarizationEngine(),
           }
         }
       );
@@ -2850,6 +2901,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             clusteringThreshold: this.clusteringAdjust() === 'over_split' ? 0.82
               : this.clusteringAdjust() === 'under_split' ? 0.55
               : null,
+            diarizationEngine: this.diarizationEngine(),
           }
         }
       );
@@ -4360,6 +4412,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   onWhisperModelChange(value: string): void {
     this.whisperModel.set(value);
+    void this.refreshGgmlSpeechStatus();
     if (value === 'large-v3' && this.largeV3Installed() === false && !this.largeV3Downloading()) {
       void this.downloadLargeV3();
     }

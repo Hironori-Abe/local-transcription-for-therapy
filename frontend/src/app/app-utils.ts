@@ -7,7 +7,8 @@ import type {
   LlmPromptType,
   LlmStringSettingsField,
   ResolvedLlmAppSettingsValue,
-  ResolveLlmAppSettingsOptions
+  ResolveLlmAppSettingsOptions,
+  SpeechEngineOption
 } from './app-settings';
 
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
@@ -1640,6 +1641,11 @@ export function normalizeTranscriptionDeviceValue(
 }
 
 /** 保存済み設定のうち、LLM起動経路に依存しない値を検証・正規化する。 */
+/** 未知の値は既定の standard に戻す（ggml は明示的に選んだときだけ使う）。 */
+export function normalizeSpeechEngineValue(valueRaw: unknown): SpeechEngineOption {
+  return valueRaw === 'ggml' ? 'ggml' : 'standard';
+}
+
 export function resolveGeneralAppSettingsValue(
   settings: AppSettingsV1,
   options: GeneralAppSettingsOptions
@@ -1663,6 +1669,9 @@ export function resolveGeneralAppSettingsValue(
   }
   if (transcription && Number.isInteger(transcription.hipDeviceIndex)) {
     resolved.hipDeviceIndex = transcription.hipDeviceIndex;
+  }
+  if (transcription && typeof transcription.engine === 'string') {
+    resolved.transcriptionEngine = normalizeSpeechEngineValue(transcription.engine);
   }
 
   const playbackRate = Number(settings.playback?.rate);
@@ -1694,6 +1703,9 @@ export function resolveGeneralAppSettingsValue(
   }
   if (diarization && Number.isFinite(diarization.speakerCount)) {
     resolved.speakerCount = Math.max(1, Math.min(5, Math.floor(Number(diarization.speakerCount))));
+  }
+  if (diarization && typeof diarization.engine === 'string') {
+    resolved.diarizationEngine = normalizeSpeechEngineValue(diarization.engine);
   }
 
   if (typeof settings.export?.addUtteranceNumber === 'boolean') {

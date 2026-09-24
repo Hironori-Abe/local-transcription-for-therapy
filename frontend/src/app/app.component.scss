@@ -312,6 +312,11 @@
   font-style: italic;
 }
 
+.ggml-speech-warning {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .gpu-asr-warning {
   flex: 0 0 100%;
   display: flex;

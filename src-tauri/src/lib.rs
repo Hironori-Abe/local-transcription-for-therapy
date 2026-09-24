@@ -23,6 +23,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
+mod ggml_speech;
+use ggml_speech::{GgmlSpeechPaths, SpeechEngine};
+
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
 
@@ -4331,6 +4334,10 @@ struct RunTranscriptionRequest {
     parallel_diarization: Option<bool>,
     clustering_threshold: Option<f64>,
     hip_device_index: Option<i32>,
+    /// "standard"（既定: faster-whisper）/ "ggml"（whisper.cpp）
+    transcription_engine: Option<String>,
+    /// "standard"（既定: pyannote）/ "ggml"（Nemotron-3-Diarization）
+    diarization_engine: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4376,6 +4383,8 @@ struct RunDiarizationRequest {
     device: Option<String>,
     result: Value,
     clustering_threshold: Option<f64>,
+    /// "standard"（既定: pyannote）/ "ggml"（Nemotron-3-Diarization）
+    diarization_engine: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -12115,6 +12124,7 @@ fn run_diarization_blocking(
     }
 
     let speaker_count = request.speaker_count.unwrap_or(2).clamp(1, 5);
+    let diarization_engine = SpeechEngine::parse(request.diarization_engine.as_deref());
     let amd_gpu_required = is_amd_gpu_build(&app);
     let requested_device = if is_cpu_only_build(&app) {
         "cpu".to_string()
@@ -12146,7 +12156,8 @@ fn run_diarization_blocking(
         "話者分離処理を開始します...",
         Some(1.0),
     );
-    let mut diarization_output = execute_diarization(
+    let mut diarization_output = execute_diarization_for_engine(
+        diarization_engine,
         &app,
         &diarization_python_bin,
         &script_path,
@@ -12199,7 +12210,8 @@ fn run_diarization_blocking(
                 "話者分離の GPU 実行に失敗したため CPU へ切り替えます...",
                 Some(70.0),
             );
-            let retry_output = execute_diarization(
+            let retry_output = execute_diarization_for_engine(
+                diarization_engine,
                 &app,
                 &diarization_python_bin,
                 &script_path,
@@ -12322,6 +12334,11 @@ fn run_transcription_blocking(
         request.parallel_diarization.unwrap_or(false)
     );
     set_cancel_requested(RunningTaskKind::Transcription, false);
+    let transcription_engine = SpeechEngine::parse(request.transcription_engine.as_deref());
+    let diarization_engine = SpeechEngine::parse(request.diarization_engine.as_deref());
+    eprintln!(
+        "[LoTT][transcription][run_id={run_id}][stage=engine] transcription={transcription_engine:?} diarization={diarization_engine:?}"
+    );
     let amd_gpu_required = is_amd_gpu_build(&app);
     let script_path = resolve_sidecar_script_path(&app)?;
     if !script_path.exists() {
@@ -12430,11 +12447,13 @@ fn run_transcription_blocking(
         Some(2.0),
     );
 
-    let retry_plan = if transcription_device == "cuda" {
-        build_gpu_retry_plan(&selected_compute_type, low_memory_mode)
-    } else {
-        vec![selected_compute_type.clone()]
-    };
+    // 計算方式を切り替える再試行は faster-whisper（CTranslate2）固有。ggml エンジンでは行わない。
+    let retry_plan =
+        if transcription_device == "cuda" && transcription_engine == SpeechEngine::Standard {
+            build_gpu_retry_plan(&selected_compute_type, low_memory_mode)
+        } else {
+            vec![selected_compute_type.clone()]
+        };
     let initial_prompt = request.initial_prompt.as_deref();
     let language = normalize_transcription_language(request.language.as_deref());
     let normalize_audio = request.normalize_audio.unwrap_or(false);
@@ -12465,7 +12484,8 @@ fn run_transcription_blocking(
                         Some(3.0),
                     );
                     Some(thread::spawn(move || {
-                        execute_diarization(
+                        execute_diarization_for_engine(
+                            diarization_engine,
                             &app_par,
                             &diar_bin,
                             &dscript,
@@ -12489,7 +12509,8 @@ fn run_transcription_blocking(
         .first()
         .cloned()
         .unwrap_or_else(|| selected_compute_type.clone());
-    let mut output = execute_transcription(
+    let mut output = execute_transcription_for_engine(
+        transcription_engine,
         &app,
         &python_bin,
         &script_path,
@@ -12549,7 +12570,8 @@ fn run_transcription_blocking(
             ),
             Some(7.0),
         );
-        let retry_output = execute_transcription(
+        let retry_output = execute_transcription_for_engine(
+            transcription_engine,
             &app,
             &python_bin,
             &script_path,
@@ -12692,7 +12714,8 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                         "話者分離処理を開始します...",
                         Some(86.0),
                     );
-                    execute_diarization(
+                    execute_diarization_for_engine(
+                        diarization_engine,
                         &app,
                         &diarization_python_bin,
                         &diarize_script_path,
@@ -12746,7 +12769,8 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                             "話者分離の GPU 実行に失敗したため CPU へ切り替えます...",
                             Some(90.0),
                         );
-                        let retry_output = execute_diarization(
+                        let retry_output = execute_diarization_for_engine(
+                            diarization_engine,
                             &app,
                             &diarization_python_bin,
                             &diarize_script_path,
@@ -13218,6 +13242,526 @@ fn execute_diarization(
         status,
         stdout,
         stderr,
+    })
+}
+
+// ---- ggml 音声エンジン（whisper.cpp / NeMo-Speech.cpp）------------------------------------
+// 既存サイドカーと同じ JSON（{"success":..,"result":..}）を返し、呼び出し側の後続処理を共用する。
+// 設計: docs/ggml-speech-engine-design.md
+
+/// ggml エンジンの実行ファイル・モデルの配置。
+/// dev: python_sidecar/speech-engines/ と python_sidecar/models/（scripts/setup-ggml-speech-linux.sh が配置）
+/// release: app_local_data_dir()/speech-engines/ と app_local_data_dir()/models/
+fn resolve_ggml_speech_paths(app: &AppHandle) -> Result<GgmlSpeechPaths, String> {
+    if cfg!(debug_assertions) {
+        let manifest_base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("python_sidecar");
+        let base = if manifest_base.exists() {
+            manifest_base
+        } else {
+            env::current_dir()
+                .map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?
+                .join("python_sidecar")
+        };
+        return Ok(GgmlSpeechPaths::resolve(
+            &base.join("speech-engines"),
+            &base.join("models"),
+        ));
+    }
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir の解決に失敗しました: {e}"))?;
+    let models_root = release_models_root(app).unwrap_or_else(|| data_dir.join("models"));
+    Ok(GgmlSpeechPaths::resolve(
+        &data_dir.join("speech-engines"),
+        &models_root,
+    ))
+}
+
+#[cfg(unix)]
+fn synthetic_exit_status(code: i32) -> std::process::ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(code << 8)
+}
+
+#[cfg(windows)]
+fn synthetic_exit_status(code: i32) -> std::process::ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw(code as u32)
+}
+
+/// 起動前の失敗（ファイル不足など）を、サイドカーの失敗出力と同じ形で返す。
+fn ggml_failure_result(
+    message: String,
+    status: Option<std::process::ExitStatus>,
+    stderr: String,
+) -> SidecarExecResult {
+    SidecarExecResult {
+        status: status.unwrap_or_else(|| synthetic_exit_status(1)),
+        stdout: serde_json::json!({ "success": false, "error": { "message": message } })
+            .to_string(),
+        stderr,
+    }
+}
+
+fn private_temp_name(tag: &str) -> String {
+    format!(
+        "lott-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    )
+}
+
+/// 音声を 16kHz mono PCM16 WAV へ変換して一時ディレクトリへ置く（LGPL ffmpeg CLI を使用）。
+/// ggml エンジンへは中立な一時ファイル名だけを渡し、元のファイル名を argv に出さない。
+fn decode_audio_to_private_wav(
+    app: &AppHandle,
+    audio_path: &str,
+    guard: &mut TempFileGuard,
+) -> Result<PathBuf, String> {
+    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
+        .ok_or_else(|| "音声の変換に必要な ffmpeg が見つかりませんでした。".to_string())?;
+    if !Path::new(audio_path).exists() {
+        return Err("音声ファイルが見つかりません。".to_string());
+    }
+    let wav = private_llm_temp_dir(app)?.join(format!("{}.wav", private_temp_name("ggml-audio")));
+    write_private_temp_file(&wav, b"")?;
+    guard.push(wav.clone());
+    let mut cmd = Command::new(&ffmpeg);
+    apply_host_command_env(&mut cmd);
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("16000")
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg("-f")
+        .arg("wav")
+        .arg(&wav);
+    apply_windows_no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "音声の変換に失敗しました: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(wav)
+}
+
+/// ggml エンジンの CLI を起動し、stderr を1行ずつ `on_line` へ渡しながら終了を待つ。
+/// PID を登録するので、既存の中止操作（cancel_transcription / cancel_diarization）で停止できる。
+fn run_ggml_engine_process(
+    mut cmd: Command,
+    running_kind: RunningTaskKind,
+    mut on_line: impl FnMut(&str),
+) -> Result<SidecarExecResult, String> {
+    // 自前ビルドの実行ファイルは RUNPATH=$ORIGIN の共有ライブラリとホストの GPU ドライバーだけを使う。
+    // AppImage の LD_LIBRARY_PATH を持ち込まない。
+    apply_host_command_env(&mut cmd);
+    apply_windows_no_window(&mut cmd);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("音声エンジンの起動に失敗しました: {e}"))?;
+    assign_to_kill_on_close_job(&child);
+    set_running_pid(running_kind, child.id());
+
+    let stdout_reader = child.stdout.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut r) = stdout_reader {
+            let _ = r.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let mut stderr = String::new();
+    if let Some(r) = child.stderr.take() {
+        for line in BufReader::new(r).lines().map_while(Result::ok) {
+            on_line(&line);
+            stderr.push_str(&line);
+            stderr.push('\n');
+            if stderr.len() > 256 * 1024 {
+                stderr = ggml_speech::tail_chars(&stderr, 64 * 1024);
+            }
+        }
+    }
+    let status = child.wait();
+    clear_running_pid(running_kind);
+    let status = status.map_err(|e| format!("音声エンジンの終了待機に失敗しました: {e}"))?;
+    let stdout = stdout_handle.join().unwrap_or_default();
+    Ok(SidecarExecResult {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// whisper.cpp で文字起こしする（transcribe_cli.py と同じ結果形式）。
+fn execute_ggml_transcription(
+    app: &AppHandle,
+    audio_path: &str,
+    device: &str,
+    model: &str,
+    language: &str,
+    low_memory_mode: bool,
+) -> Result<SidecarExecResult, String> {
+    let paths = resolve_ggml_speech_paths(app)?;
+    let missing = paths.missing_for_transcription(model);
+    if !missing.is_empty() {
+        return Ok(ggml_failure_result(
+            format!(
+                "ggml エンジン（whisper.cpp）の準備が済んでいません。scripts/setup-ggml-speech-linux.sh を実行してください。\n不足: {}",
+                missing.join(" / ")
+            ),
+            None,
+            String::new(),
+        ));
+    }
+    let model_path = paths.whisper_model(model).expect("checked above");
+    let use_gpu = device != "cpu";
+
+    emit_progress(
+        app,
+        "preprocessing",
+        "音声を変換しています...（ggml エンジン）",
+        Some(3.0),
+    );
+    let mut guard = TempFileGuard::new();
+    let wav = match decode_audio_to_private_wav(app, audio_path, &mut guard) {
+        Ok(v) => v,
+        Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
+    };
+    let out_prefix = private_llm_temp_dir(app)?.join(private_temp_name("ggml-asr"));
+    let out_json = out_prefix.with_extension("json");
+    guard.push(out_json.clone());
+
+    let threads = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+    let mut cmd = Command::new(&paths.whisper_cli);
+    cmd.args(ggml_speech::whisper_cli_args(
+        &model_path,
+        &paths.vad_model,
+        &wav,
+        &out_prefix,
+        language,
+        use_gpu,
+        threads,
+    ));
+    emit_progress(
+        app,
+        "transcribing",
+        &format!(
+            "whisper.cpp で文字起こし中です...（{}）",
+            if use_gpu { "GPU" } else { "CPU" }
+        ),
+        Some(5.0),
+    );
+    let mut last = 0u32;
+    let exec = run_ggml_engine_process(cmd, RunningTaskKind::Transcription, |line| {
+        if let Some(p) = ggml_speech::parse_whisper_progress(line) {
+            if p > last {
+                last = p;
+                emit_progress(
+                    app,
+                    "transcribing",
+                    "音声を文字起こし中です...（whisper.cpp）",
+                    Some(5.0 + p as f64 * 0.9),
+                );
+            }
+        }
+    })?;
+    if !exec.status.success() {
+        let tail = ggml_speech::tail_chars(exec.stderr.trim(), 1500);
+        return Ok(ggml_failure_result(
+            format!(
+                "whisper.cpp の文字起こしに失敗しました（exit={:?}）。\n{tail}",
+                exec.status.code()
+            ),
+            Some(exec.status),
+            exec.stderr,
+        ));
+    }
+    let raw = fs::read_to_string(&out_json)
+        .map_err(|e| format!("whisper.cpp の出力を読み込めませんでした: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("whisper.cpp の出力 JSON を解析できませんでした: {e}"))?;
+    let (segments, text) = ggml_speech::convert_whisper_output(&parsed, language)?;
+    // 長尺安定モードでも探索幅は下げない（ggml_speech::WHISPER_BEAM_SIZE のコメント参照）。
+    let beam = ggml_speech::WHISPER_BEAM_SIZE;
+    let result = serde_json::json!({
+        "success": true,
+        "result": {
+            "text": text,
+            "segments": segments,
+            "settings": {
+                "engine": "whisper.cpp",
+                "model": model,
+                "device": if use_gpu { "cuda" } else { "cpu" },
+                "computeType": "ggml",
+                "language": language,
+                "vadFilter": true,
+                "wordTimestamps": false,
+                "lowMemoryMode": low_memory_mode,
+                "initialPrompt": Value::Null,
+                "initialPromptNote": "ggml エンジンでは初期プロンプトを使いません（docs/ggml-speech-engine-design.md 5.2）",
+                "beamSize": beam,
+                "bestOf": beam,
+                "conditionOnPreviousText": false,
+            },
+            "diarizationRequested": false,
+            "diarization": {
+                "requested": false,
+                "applied": false,
+                "status": "disabled",
+                "provider": Value::Null,
+                "segments": [],
+                "summary": Value::Null,
+                "note": Value::Null,
+            },
+        }
+    });
+    emit_progress(app, "postprocess", "結果を整形しています...", Some(97.0));
+    Ok(SidecarExecResult {
+        status: exec.status,
+        stdout: result.to_string(),
+        stderr: exec.stderr,
+    })
+}
+
+/// NeMo-Speech.cpp + Nemotron-3-Diarization で話者分離する（diarize_cli.py と同じ結果形式）。
+fn execute_ggml_diarization(
+    app: &AppHandle,
+    audio_path: &str,
+    device: &str,
+    num_speakers: u8,
+    running_kind: RunningTaskKind,
+    progress_event: &str,
+) -> Result<SidecarExecResult, String> {
+    let emit = |stage: &str, message: &str, progress: f64| {
+        let _ = app.emit(
+            progress_event,
+            serde_json::json!({ "stage": stage, "message": message, "progress": progress }),
+        );
+    };
+    let paths = resolve_ggml_speech_paths(app)?;
+    let missing = paths.missing_for_diarization();
+    if !missing.is_empty() {
+        return Ok(ggml_failure_result(
+            format!(
+                "ggml エンジン（Nemotron-3-Diarization）の準備が済んでいません。scripts/setup-ggml-speech-linux.sh を実行してください。\n不足: {}",
+                missing.join(" / ")
+            ),
+            None,
+            String::new(),
+        ));
+    }
+    let use_gpu = device != "cpu";
+    emit(
+        "diarization_preprocessing",
+        "話者分離用に音声を変換しています...",
+        5.0,
+    );
+    let mut guard = TempFileGuard::new();
+    let wav = match decode_audio_to_private_wav(app, audio_path, &mut guard) {
+        Ok(v) => v,
+        Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
+    };
+    let out_json =
+        private_llm_temp_dir(app)?.join(format!("{}.json", private_temp_name("ggml-diar")));
+    guard.push(out_json.clone());
+
+    // モデルは必ずローカルの絶対パスで渡す。リポジトリ ID を渡すと NeMo-Speech.cpp が
+    // 自動ダウンロードを試みるため（通常運用時は通信しない方針）。
+    let device_arg = env::var("LOTT_NEMO_SPEECH_DEVICE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| if use_gpu { "auto" } else { "cpu" }.to_string());
+    let mut cmd = Command::new(&paths.nemo_speech);
+    cmd.arg("diarize")
+        .arg(&wav)
+        .arg("--model")
+        .arg(&paths.diar_model)
+        .arg("--device")
+        .arg(&device_arg)
+        .arg("--format")
+        .arg("json")
+        .arg("-o")
+        .arg(&out_json)
+        .arg("--force");
+    emit(
+        "diarization_running",
+        &format!(
+            "Nemotron-3-Diarization で話者分離中です...（{}）",
+            if use_gpu { "GPU" } else { "CPU" }
+        ),
+        20.0,
+    );
+    let exec = run_ggml_engine_process(cmd, running_kind, |_| {})?;
+    if !exec.status.success() {
+        let tail = ggml_speech::tail_chars(exec.stderr.trim(), 1500);
+        return Ok(ggml_failure_result(
+            format!(
+                "Nemotron-3-Diarization の話者分離に失敗しました（exit={:?}）。\n{tail}",
+                exec.status.code()
+            ),
+            Some(exec.status),
+            exec.stderr,
+        ));
+    }
+    let raw = fs::read_to_string(&out_json)
+        .map_err(|e| format!("話者分離の出力を読み込めませんでした: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("話者分離の出力 JSON を解析できませんでした: {e}"))?;
+    let turns = ggml_speech::parse_nemo_diarization(&parsed)?;
+    let (segments, summary) =
+        ggml_speech::postprocess_diarization(&turns, usize::from(num_speakers.max(1)));
+    emit("diarization_done", "話者分離が完了しました。", 98.0);
+    let result = serde_json::json!({
+        "success": true,
+        "result": {
+            "provider": "nemotron-3-diarization",
+            "engine": "ggml",
+            "requestedDevice": device,
+            "device": if use_gpu { "cuda" } else { "cpu" },
+            "backendDevice": device_arg,
+            "segments": segments,
+            "summary": summary,
+        }
+    });
+    Ok(SidecarExecResult {
+        status: exec.status,
+        stdout: result.to_string(),
+        stderr: exec.stderr,
+    })
+}
+
+/// エンジン選択に応じて文字起こしを実行する。Standard は従来の Python サイドカーそのまま。
+#[allow(clippy::too_many_arguments)]
+fn execute_transcription_for_engine(
+    engine: SpeechEngine,
+    app: &AppHandle,
+    python_bin: &str,
+    script_path: &PathBuf,
+    audio_path: &str,
+    device: &str,
+    compute_type: &str,
+    model: &str,
+    language: &str,
+    initial_prompt: Option<&str>,
+    low_memory_mode: bool,
+    normalize_audio: bool,
+    highpass_filter: bool,
+    noise_reduction: bool,
+    noise_reduction_mode: &str,
+    is_retry: bool,
+    hip_device_index: Option<i32>,
+) -> Result<SidecarExecResult, String> {
+    match engine {
+        SpeechEngine::Standard => execute_transcription(
+            app,
+            python_bin,
+            script_path,
+            audio_path,
+            device,
+            compute_type,
+            model,
+            language,
+            initial_prompt,
+            low_memory_mode,
+            normalize_audio,
+            highpass_filter,
+            noise_reduction,
+            noise_reduction_mode,
+            is_retry,
+            hip_device_index,
+        ),
+        SpeechEngine::Ggml => {
+            execute_ggml_transcription(app, audio_path, device, model, language, low_memory_mode)
+        }
+    }
+}
+
+/// エンジン選択に応じて話者分離を実行する。Standard は従来の Python サイドカーそのまま。
+#[allow(clippy::too_many_arguments)]
+fn execute_diarization_for_engine(
+    engine: SpeechEngine,
+    app: &AppHandle,
+    python_bin: &str,
+    script_path: &PathBuf,
+    audio_path: &str,
+    device: &str,
+    num_speakers: u8,
+    clustering_threshold: Option<f64>,
+    running_kind: RunningTaskKind,
+    progress_event: &str,
+    hip_device_index: Option<i32>,
+) -> Result<SidecarExecResult, String> {
+    match engine {
+        SpeechEngine::Standard => execute_diarization(
+            app,
+            python_bin,
+            script_path,
+            audio_path,
+            device,
+            num_speakers,
+            clustering_threshold,
+            running_kind,
+            progress_event,
+            hip_device_index,
+        ),
+        SpeechEngine::Ggml => execute_ggml_diarization(
+            app,
+            audio_path,
+            device,
+            num_speakers,
+            running_kind,
+            progress_event,
+        ),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GgmlSpeechStatus {
+    transcription_ready: bool,
+    diarization_ready: bool,
+    missing_for_transcription: Vec<String>,
+    missing_for_diarization: Vec<String>,
+}
+
+/// 設定タブ用: ggml エンジンのファイルが揃っているかを返す（ファイルの有無を見るだけで、起動はしない）。
+#[tauri::command]
+fn check_ggml_speech_status(
+    app: AppHandle,
+    model: Option<String>,
+) -> Result<GgmlSpeechStatus, String> {
+    let paths = resolve_ggml_speech_paths(&app)?;
+    let model = model.unwrap_or_else(|| "turbo".to_string());
+    let missing_for_transcription = paths.missing_for_transcription(&model);
+    let missing_for_diarization = paths.missing_for_diarization();
+    Ok(GgmlSpeechStatus {
+        transcription_ready: missing_for_transcription.is_empty(),
+        diarization_ready: missing_for_diarization.is_empty(),
+        missing_for_transcription,
+        missing_for_diarization,
     })
 }
 
@@ -15405,6 +15949,7 @@ pub fn run() {
             run_overall_proofread,
             cancel_transcription,
             cancel_diarization,
+            check_ggml_speech_status,
             cancel_proofread,
             cancel_llm_proofread,
             list_llm_models,

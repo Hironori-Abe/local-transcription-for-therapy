@@ -718,6 +718,29 @@
                 <mat-hint>{{ parallelModeHint() }}</mat-hint>
               </mat-form-field> -->
               </div>
+              <!-- 音声エンジン: 既定は標準（faster-whisper / pyannote）。ggml は whisper.cpp / Nemotron-3-Diarization の試験的経路。 -->
+              <div class="actions-row settings-llm-row">
+                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                  <mat-label>文字起こしエンジン</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                    [value]="transcriptionEngine()" (valueChange)="onTranscriptionEngineChange($event)">
+                    <mat-option value="standard">標準（faster-whisper）</mat-option>
+                    <mat-option value="ggml">whisper.cpp（試験的）</mat-option>
+                  </mat-select>
+                </mat-form-field>
+                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                  <mat-label>話者分離エンジン</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                    [value]="diarizationEngine()" (valueChange)="onDiarizationEngineChange($event)">
+                    <mat-option value="standard">標準（pyannote）</mat-option>
+                    <mat-option value="ggml">Nemotron（試験的）</mat-option>
+                  </mat-select>
+                </mat-form-field>
+                <div *ngIf="ggmlSpeechWarning()" class="gpu-asr-warning ggml-speech-warning">
+                  <mat-icon class="material-symbols-outlined">warning</mat-icon>
+                  {{ ggmlSpeechWarning() }}
+                </div>
+              </div>
             </ng-container>
 
             <!-- 音声入力パック: 全ビルドで表示。Editor版・CPU版はCPUバックエンド込み、Full版はGPU直起動のため

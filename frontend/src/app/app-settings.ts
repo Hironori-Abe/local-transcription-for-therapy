@@ -5,6 +5,16 @@ import type {
 } from './app-utils';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+/** 文字起こし・話者分離のエンジン。standard = faster-whisper / pyannote、ggml = whisper.cpp / Nemotron（試験的）。 */
+export type SpeechEngineOption = 'standard' | 'ggml';
+
+/** check_ggml_speech_status の応答。ファイルの有無だけを見る（エンジンは起動しない）。 */
+export interface GgmlSpeechStatus {
+  transcriptionReady: boolean;
+  diarizationReady: boolean;
+  missingForTranscription: string[];
+  missingForDiarization: string[];
+}
 export type LlmBackendMode = 'local_gguf' | 'lmstudio' | 'ollama';
 export type LlmPromptType = 'gemma4' | 'original';
 export type LlmStringSettingsField =
@@ -19,10 +29,12 @@ export interface AppSettingsV1 {
     computeType?: string;
     language?: string;
     hipDeviceIndex?: number;
+    engine?: string;
   };
   diarization?: {
     device?: string;
     speakerCount?: number;
+    engine?: string;
   };
   proofread?: {
     chunkSize?: number;
@@ -78,6 +90,8 @@ export interface GeneralAppSettingsValue {
   diarizationDevice?: NormalizedTranscriptionDevice;
   speakerCount?: number;
   addUtteranceNumber?: boolean;
+  transcriptionEngine?: SpeechEngineOption;
+  diarizationEngine?: SpeechEngineOption;
 }
 
 export interface GeneralAppSettingsOptions {

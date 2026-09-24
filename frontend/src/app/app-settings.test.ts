@@ -9,6 +9,7 @@ import {
   getStoredLlmPromptTypeValue,
   getStoredLlmStringSettingValue,
   hasStoredLlmStringSettingValue,
+  normalizeSpeechEngineValue,
   resolveGeneralAppSettingsValue,
   resolveLlmAppSettingsValue,
   resolvePersistedLlmBackendModeValue,
@@ -303,4 +304,21 @@ test('LLM prompt type helpers validate stored values and update immutably', () =
   const updated = updateStoredLlmPromptTypeValue(settings, 'ollama:a', 'gemma4');
   assert.equal(getStoredLlmPromptTypeValue(updated, 'ollama:a'), 'gemma4');
   assert.equal(getStoredLlmPromptTypeValue(settings, 'ollama:a'), 'original');
+});
+
+test('speech engine settings default to standard and accept only ggml as the alternative', () => {
+  assert.equal(normalizeSpeechEngineValue('ggml'), 'ggml');
+  assert.equal(normalizeSpeechEngineValue('standard'), 'standard');
+  assert.equal(normalizeSpeechEngineValue('GGML'), 'standard');
+  assert.equal(normalizeSpeechEngineValue(undefined), 'standard');
+
+  const settings: AppSettingsV1 = {
+    transcription: { engine: 'ggml' },
+    diarization: { engine: 'something-else' }
+  };
+  assert.deepEqual(resolveGeneralAppSettingsValue(settings, options), {
+    transcriptionEngine: 'ggml',
+    diarizationEngine: 'standard'
+  });
+  assert.deepEqual(resolveGeneralAppSettingsValue({ transcription: {}, diarization: {} }, options), {});
 });

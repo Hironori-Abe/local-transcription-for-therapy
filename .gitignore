@@ -13,6 +13,7 @@ __pycache__/
 venv/
 demo_data/
 python_sidecar/models/
+python_sidecar/speech-engines/
 scripts/a
 reports/
 .angular/

@@ -1,0 +1,33 @@
+LoTT: whisper.cpp d09f61a 向け。Windows で日本語などを含むモデルパスを応答ファイル（UTF-8）で渡せるようにする。
+whisper-cli はモデルの存在確認を ANSI（narrow の ifstream）で行う一方、whisper_init_from_file は
+UTF-8 として開くため、ASCII 以外を含むパスはどちらかで必ず失敗する。存在確認を UTF-8 に揃える。
+
+diff --git a/examples/cli/cli.cpp b/examples/cli/cli.cpp
+index 55d5d433..814e6ccf 100644
+--- a/examples/cli/cli.cpp
++++ b/examples/cli/cli.cpp
+@@ -1030,7 +1030,23 @@ int main(int argc, char ** argv) {
+         return 2;
+     }
+ 
+-    if (!is_file_exist(params.model.c_str())) {
++    // LoTT: whisper_init_from_file はモデルパスを UTF-8 として開く（Windows）。存在確認も UTF-8 で行い、
++    // 日本語などを含むパスを応答ファイル（UTF-8）で渡せるようにする。UTF-8 として不正なら従来の確認に戻す。
++    bool model_exists = false;
++#if defined(_WIN32)
++    {
++        const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, params.model.c_str(), -1, nullptr, 0);
++        if (n > 0) {
++            std::wstring wpath(n, L'\0');
++            MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, params.model.c_str(), -1, &wpath[0], n);
++            model_exists = std::ifstream(wpath.c_str()).good();
++        }
++    }
++#endif
++    if (!model_exists) {
++        model_exists = is_file_exist(params.model.c_str());
++    }
++    if (!model_exists) {
+         fprintf(stderr, "error: model file not found '%s'\n", params.model.c_str());
+         whisper_print_usage(argc, argv, params);
+         return 3;

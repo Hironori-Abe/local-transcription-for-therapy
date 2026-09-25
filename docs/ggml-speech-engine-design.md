@@ -2,8 +2,10 @@
 
 - 作成日: 2026-09-25
 - ブランチ: `N3-Diarization`
-- 状態: **段階2を実装中（Linux / Vulkan で動作確認）**。PoC の手順と実測値は `demo_data/ggml-poc/README.md` を参照
-- 開発環境の準備: `bash scripts/setup-ggml-speech-linux.sh --backend vulkan`（ビルドとモデル取得。SHA-256 検証あり）
+- 状態: **段階2を実装中（Linux / Vulkan、Windows / CUDA・Vulkan で動作確認）**。PoC の手順と実測値は `demo_data/ggml-poc/README.md` を参照
+- 開発環境の準備（ビルドとモデル取得。SHA-256 検証あり）:
+  - Linux: `bash scripts/setup-ggml-speech-linux.sh --backend vulkan`
+  - Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1`（既定 `-Backend vulkan`。CUDA 版は `-Backend cuda` で、比較・切り分け用）
 - 関連: `AGENTS.md`（Non-Negotiable Constraints / Stable Areas / Audio Decode Policy / 校正エンジンのライフサイクル）
 
 ---
@@ -39,7 +41,86 @@
 | Nemotron 3.5 ASR | 日本語の精度・速度ともに whisper.cpp に劣るため不採用 |
 | NeMo の ASR+話者分離統合モード | 日本語では単語が発話単位の塊になり、話者付けに使えないため不採用 |
 
-**未検証**: Windows / NVIDIA（主配布）、実際のカウンセリング音声、正解ラベルに対する話者分離の誤り率（DER）。
+**未検証**: 実際のカウンセリング音声、正解ラベルに対する話者分離の誤り率（DER）、アプリ画面からの Windows 実行。Windows / NVIDIA は CUDA 版を 2.1、Vulkan 版を 2.2 で検証した。
+
+### 2.1 Windows / NVIDIA（CUDA）での検証（2026-09-25、RTX 4060 Laptop 8GB / Ryzen 7 8845HS、Windows 11）
+
+主配布の環境で、CUDA 版をソースからビルドして検証した（段階1の一部）。音声は `demo_data/10minutes`（約11.7分）と `demo_data/50minutes`（約58分）。比較対象の標準経路は、アプリと同じ引数・環境変数で `transcribe_cli.py` / `diarize_cli.py` を直接起動した（両音声とも 15MB 以上のため長尺安定モード: float16・beam 1）。ggml 経路はアプリと同じ引数（フィラーを残す・beam 3）。時間はモデル読み込みを含む。
+
+| | 10分 標準 | 10分 ggml | 50分 標準 | 50分 ggml |
+|---|---|---|---|---|
+| 文字起こし | 19.6秒（初回 74.4秒） | **18.6秒** | 72.6秒 | **68.5秒** |
+| 話者分離 | 30.9秒（初回 42.9秒） | **10.1秒** | 121.4秒 | **70.3秒** |
+| 合計（順に実行） | 50.5秒 | **28.7秒** | 194.0秒 | **138.8秒** |
+| 最大 RSS（文字起こし / 話者分離） | 2.0GB / 1.6GB | 0.6GB / 1.0GB | 3.6GB / 2.0GB | 1.3GB / 1.4GB |
+| 最大 VRAM（文字起こし / 話者分離） | 1.9GB / 2.1GB | 2.0GB / 0.6GB | 1.9GB / 2.1GB | 2.0GB / 0.6GB |
+
+- **NVIDIA では文字起こしの速度差は小さい**（CUDA の faster-whisper は十分速い。R9700 / ROCm で見た約1.7倍の差は出ない）。ggml は beam 3、標準は beam 1 で、探索量の多い ggml がやや速い。差が大きいのは話者分離（10分で約3倍）と、Python / PyTorch の初回読み込み（標準経路の初回は文字起こし 74秒・話者分離 43秒）
+- Nemotron は音声長に比例しない（10分 10秒 → 50分 70秒）。Linux / R9700 と同じ傾向（12章）
+- 文字起こしと話者分離を**同時に**動かすと、50分で 105.9秒（順に実行すると 138.8秒）。VRAM は合計 2.6GB で 8GB 機にも収まり、結果は順に実行した場合と同一
+- 3回の繰り返しで whisper.cpp・Nemotron とも出力はビット単位で同一。20秒以上の欠落、反復ハルシネーションは無し
+- 実行中に強制終了すると、両エンジンとも VRAM は即座に 0 に戻り、プロセスも残らない（Job Object を使わない `taskkill /T /F` で確認）
+- nemo-speech の `--device auto` は CUDA 版では NVIDIA GPU を選ぶ（CUDA 版からは iGPU が見えない）。CPU 実行（`--device cpu`）も動作する（60秒音声で 17.7秒）
+
+品質（既存 LoTT 出力との比較。既存出力は標準経路で作ったものなので、話者一致率は標準経路に有利に出る）:
+
+| 条件 | 行数 | 文字差 | 話者一致率 | 行の長さ中央値 |
+|---|---|---|---|---|
+| 10分 標準（再実行） | 271 | 10.8% | 95.3% | 2.2秒 |
+| 10分 ggml・フィラーを残す（既定） | 187 | 15.9% | 89.9% | 2.8秒 |
+| 10分 ggml・フィラーを残さない | 254 | 9.7% | 93.4% | 2.4秒 |
+| 50分 標準（再実行） | 1247 | 10.4% | 95.7% | 2.4秒 |
+| 50分 ggml・フィラーを残す（既定） | 1007 | 16.6% | 85.5% | 2.2秒 |
+
+- ggml の話者一致率は Linux / Vulkan（10分 89.8%、50分 85.1%）とほぼ同じ。GPU 方式による差は見られない
+- フィラーを残すと既存出力に無い語が増えるため、文字差は大きく出る（5.2 の公開書き起こしでの評価では、この条件の文字誤り率が最も低い）
+
+### 2.2 Windows / NVIDIA（Vulkan）での検証（2026-09-25、同じ PC、LunarG Vulkan SDK 1.4.357.0）
+
+同じ固定 commit を Vulkan でビルドし（`-Backend vulkan`）、2.1 と同じ条件で計測した。時間は2回目以降（1回目はシェーダーのコンパイルが入り、whisper.cpp 26.6秒、Nemotron 22.5秒。ドライバーのキャッシュに残るため以降は速い）。
+
+| | 10分 CUDA | 10分 Vulkan（RTX 4060） | 10分 Vulkan（Radeon 780M iGPU） | 50分 CUDA | 50分 Vulkan（RTX 4060） |
+|---|---|---|---|---|---|
+| 文字起こし | 18.6秒 | 20.0秒 | 87.9秒 | 68.5秒 | 71.4秒 |
+| 話者分離 | 10.1秒 | 9.4秒 | 28.1秒 | 70.3秒 | 67.1秒 |
+| 同時実行（50分） | - | - | - | 105.9秒 / VRAM 2.6GB | 98.1秒 / VRAM 2.1GB |
+| 最大 VRAM（文字起こし / 話者分離） | 2.0GB / 0.6GB | 1.9GB / 0.2GB | - | 2.0GB / 0.6GB | 1.9GB / 0.2GB |
+| 配置サイズ（2エンジン合計） | 約1.6GB（cuBLAS 込み） | **約0.1GB** | 同左 | | |
+
+| 品質（既存 LoTT 出力比、フィラーを残す） | 行数 | 文字差 | 話者一致率 | フィラー・相づち |
+|---|---|---|---|---|
+| 10分 CUDA | 187 | 15.9% | 89.9% | 65 |
+| 10分 Vulkan（RTX 4060） | 200 | 17.2% | 87.9% | 78 |
+| 10分 Vulkan（iGPU） | 201 | 16.2% | 89.5% | - |
+| 50分 CUDA | 1007 | 16.6% | 85.5% | - |
+| 50分 Vulkan（RTX 4060） | 1021 | 17.1% | 84.4% | - |
+
+- **RTX 4060 では Vulkan 版が CUDA 版とほぼ同じ速度**（12章の「NVIDIA では Vulkan が CUDA より遅いことが多い」は、この2エンジンには当てはまらなかった）。一方で配置サイズは約1/16、話者分離の VRAM は約1/3
+- 出力は CUDA 版と完全には一致しない（数値計算の差で探索結果が変わる）。Vulkan 版の中では3回とも同一。品質指標は同程度で、正解データが無いためどちらが良いかは判断できない
+- 20秒以上の欠落・反復ハルシネーションは無し。強制終了で VRAM は即座に解放される
+- **Vulkan のデバイス番号は iGPU が 0、RTX 4060 が 1**。whisper-cli（既定 = 0）も nemo-speech（`--device auto`）も **iGPU を選ぶ**。現在のアプリは Vulkan のデバイスを指定しないため、Vulkan 版をこの構成で使うと iGPU で動き、文字起こしは約4.4倍遅くなる。Vulkan 版を採用するなら、llama-server の Linux 版（`preferred_vulkan_device_index`）と同様に dGPU を選ぶ処理が必要（whisper-cli は `GGML_VK_VISIBLE_DEVICES`、nemo-speech は `--device vulkan:N`）
+
+### 2.3 校正（llama.cpp llama-server）の CUDA 版と Vulkan 版（2026-09-25、同じ PC）
+
+NVIDIA 向けも Vulkan に揃えられるかを見るため、同梱の CUDA 版 b10075 と公式 Vulkan 版 b10075（`llama-b10075-bin-win-vulkan-x64.zip`、RTX 4060 を `GGML_VK_VISIBLE_DEVICES=1` で指定）を、アプリと同じ起動引数で比べた。依頼は校正用システムプロンプト（`gemma4_system.txt`）＋10分音声の書き起こし80行（入力926トークン）。プロンプトキャッシュは無効、各2回。
+
+| | CUDA | Vulkan |
+|---|---|---|
+| E4B + MTP（`-ngl 99`、FA on）: 1回の所要 / 生成速度 | 10.0秒 / 193 tok/s | 12.1秒 / 161 tok/s |
+| 12B + MTP（`--fit on`、ctx 8192、FA on） | 57〜60秒 / 35〜37 tok/s | 63.3秒 / 33.2 tok/s |
+| 音声入力（E4B + mmproj、15秒音声） | 4.0秒 | 4.1秒 |
+| VRAM（E4B / 12B / 音声） | 3.0 / 6.5 / 4.1GB | 2.9 / 6.4 / 4.0GB |
+
+- Vulkan は E4B で約2割、12B で約1割遅い。音声入力は同じ。MTP の採択数はほぼ同じ
+- b10075 の Vulkan 版では、MTP 併用時の FlashAttention on も問題なく動いた（off にすると E4B の生成は 161 → 147 tok/s に落ちる）
+- 1回目だけシェーダーのコンパイルで遅い（E4B で入力処理 25 tok/s）。ドライバーのキャッシュに残るため2回目以降は速い
+
+Windows 固有の問題（いずれも対処済み。7.1・8章）:
+
+- **フィラー用プロンプトが化けていた**。Windows の whisper-cli は argv をシステムのコードページ（cp932）で受け取り、プロンプトは UTF-8 としてトークン化するため、55トークンの例文が152トークンの文字化けになる。10分音声でフィラー・相づちの数は、化けた状態で 19（プロンプト無しは 15）、正しく渡すと 65。**修正前は Windows で「フィラー・相づちを残す」が実質的に効いていなかった**
+- **ユーザー名などに日本語を含むパスで失敗する**。リリース版はモデルも一時ファイルも `%LOCALAPPDATA%\<identifier>\` 配下にあるため、日本語のユーザー名では両エンジンとも起動できなかった
+- **日本語版 Windows で NeMo-Speech.cpp がビルドできない**（MSVC が BOM 無し UTF-8 のソースを cp932 として読む）
+- **PATH に引用符付きのエントリがあると MSVC 環境の取り込みが失敗する**（この PC の CUDA のエントリ `...\CUDA\v12.9\bin" `。NeMo 公式の `build.ps1` は PATH をレジストリから読み直すため回避できない）
 
 ## 3. 採用・不採用の判断
 
@@ -210,6 +291,43 @@ pyannote community-1 と同様に、UI のセットアップタブからダウ�
 - 一時 WAV・JSON は `private-temp`（0700、`PRIVATE_TEMP_MAX_AGE` で自動削除）に置く
 - 同梱バイナリなので `apply_host_command_env` は適用しない（AGENTS.md の方針どおり）
 
+### 6.5 GPU の選択（Vulkan 版）
+
+Vulkan 版の ggml は既定で Vulkan の 0 番の GPU を使い、iGPU を併載した機種では 0 番が iGPU のことがある（2.2）。そのため Rust 側で GPU を決めて渡す（`src-tauri/src/gpu_select.rs`）。
+
+- **番号**: `vkEnumeratePhysicalDevices` の並び。ggml-vulkan の `GGML_VK_VISIBLE_DEVICES` はこの並びを指すので、版の異なる ggml を持つ whisper-cli / nemo-speech（将来は llama-server も）に同じ番号を渡せる
+- **渡し方**: `GGML_VK_VISIBLE_DEVICES=<番号>` で1台だけ見せる。nemo-speech には `--device vulkan:0` を併せて渡す（`auto` は iGPU を選ぶことがある）。環境変数が既に設定されていればそれを尊重する
+- **自動選択**: 単体 GPU があればその中で VRAM 最大、無ければ iGPU、それも無ければ仮想 GPU。VRAM が同じなら番号の小さい方。CPU 実装（llvmpipe 等）は選ばない。iGPU の device-local ヒープは共有メモリの大きさ（780M で約10〜16GB）で VRAM として比べられないため、種別を先に見る
+- **設定**: 設定タブの「音声エンジンの GPU」（Vulkan 版の ggml エンジンを選んでいるときだけ表示）。「自動（<選ばれる GPU 名>）」と各 GPU を選べる。保存は GPU の UUID で行い、GPU の抜き差しで番号が変わっても追従する。保存した GPU が見つからなければ自動に戻る
+- **列挙**: Vulkan の初期化は全 GPU ドライバーを読み込むため、アプリ本体ではなく、アプリ自身を `--lott-list-vulkan-devices` 付きの子プロセスで起動して列挙する（15秒でタイムアウト。失敗時は空の一覧 = ggml の既定に任せる）。結果はアプリ起動中キャッシュする。この PC で約0.4秒
+- **ビルド種別の判定**: エンジンの `BUILD_INFO.txt`（セットアップスクリプトが書く `backend vulkan` / `preset vulkan-diar`）。CUDA 版では何もしない（従来どおり）
+- 進捗表示と結果の `settings.gpu` / `gpu` に、使った GPU の名前を残す
+- 校正の llama-server は未対応（従来の `preferred_vulkan_device_index`（Linux のみ、名前に nvidia を含む GPU を優先）のまま）。Vulkan へ揃える場合に同じ選択処理へ寄せる
+
+### 7.1 Windows のパスと文字コード
+
+Windows の whisper-cli / nemo-speech は argv をシステムのコードページ（日本語環境では cp932）で受け取る。一方、ファイルの開き方は箇所ごとに異なる。
+
+| 対象 | 開き方 | ASCII 以外を含むパス |
+|---|---|---|
+| whisper-cli のモデル・VAD モデル | UTF-8 として解釈 → ワイド文字 | argv では失敗 |
+| whisper-cli のモデルの存在確認（引数解析時） | ANSI（cp932） | UTF-8 では失敗（パッチで UTF-8 に揃えた） |
+| whisper-cli の入力音声（miniaudio）・出力 JSON | ANSI | UTF-8 では失敗 |
+| whisper-cli のプロンプト | UTF-8 としてトークン化 | argv では化ける |
+| nemo-speech のモデル（`ggml_fopen`） | UTF-8 として解釈 | argv では失敗（パッチで UTF-8 のまま渡すようにした） |
+| nemo-speech の入力音声・出力 JSON | ANSI | cp932 で表せる文字なら可 |
+
+対処（`execute_ggml_transcription` / `execute_ggml_diarization`）:
+
+- whisper-cli へは、引数を UTF-8 の**応答ファイル**（`whisper-cli @<file>`、1行1引数、BOM 無し）で渡す（`ggml_speech::whisper_response_file`）。プロンプトとモデルパスが UTF-8 のまま届く
+- 音声と出力先は、**作業ディレクトリを一時ディレクトリにして生成名（ASCII）だけ**で渡す。応答ファイル自体も同じ
+- ソースに当てる LoTT 独自パッチ（`scripts/patches/`、セットアップスクリプトが冪等に適用）:
+  - `whisper-cpp-cli-utf8-model-path.patch`: モデルの存在確認を UTF-8 で行う
+  - `nemo-speech-diarize-utf8-model-path.patch`: モデルパスを `u8string()` で渡す（Linux では値が変わらない）
+- 日本語のフォルダ名にモデル・音声を置いて、両エンジンとも ASCII のパスと同一の結果になることを確認した
+- 応答ファイルにはモデルの絶対パスと固定の例文だけが入り、音声のファイル名は入らない。一時ディレクトリに置き、処理後に削除する（異常終了時は `PRIVATE_TEMP_MAX_AGE` で回収）
+- nemo-speech はモデルの読み込みに失敗しても、パスの形をした引数ではダウンロードを試みない（日本語パスで失敗させた際にも確認）
+
 ## 8. 配布とビルド
 
 どちらのプロジェクトも、Vulkan 版の公式バイナリを配布していない（whisper.cpp の公式リリースは CPU / BLAS / cuBLAS のみ）。Linux CUDA 版 llama-server と同様に、**commit を固定してソースからビルドする**。
@@ -227,6 +345,20 @@ pyannote community-1 と同様に、UI のセットアップタブからダウ�
 - NeMo-Speech.cpp は sentencepiece の開発ファイルが必要（ビルド時のみ、静的リンク可）
 - NeMo-Speech.cpp の CUDA プリセットは `ggml-patches/` のパッチを当てる。必ず `scripts/configure.sh` 経由で configure する
 - 3つの実行ファイルは、それぞれ別バージョンの ggml を持つ。別プロセスとして動かすので衝突はしないが、共有ライブラリ（`libggml*.so` / `ggml*.dll`）は**バイナリごとに別ディレクトリへ置く**
+
+Windows（`scripts/setup-ggml-speech-windows.ps1`）で確認した注意点:
+
+- 必要なもの: VS 2022 Build Tools（C++。同梱の CMake / Ninja を使う）、Git、CUDA Toolkit 12.x（CUDA 版）、LunarG Vulkan SDK（Vulkan 版）。sentencepiece は vcpkg（NeMo-Speech.cpp の `builtin-baseline` と同じ commit に固定）で静的リンクする。初回は vcpkg が protobuf 等をビルドするため時間がかかる
+- NeMo 公式の `scripts\windows\build.ps1` は使わない。PATH をレジストリから読み直すため、引用符付きの PATH エントリがあると `vcvars64.bat` が「\Microsoft was unexpected at this time.」で失敗する。セットアップスクリプトはプロセス内で PATH を整形してから、同じ手順（vcvars → vcpkg → ggml パッチ → cmake）を行う
+- 日本語版 Windows では NeMo-Speech.cpp に `/utf-8` が必要（`src/common/subtitles.cpp` が C3688 で失敗する）。`CMAKE_CXX_FLAGS` を直接指定すると既定の `/EHsc` が消えるため、`CFLAGS` / `CXXFLAGS` / `CUDAFLAGS` 環境変数で渡す。whisper.cpp は ggml 側で付いている
+- whisper.cpp の examples は C++11 でコンパイルされる。パッチを直すときは C++17 の機能（非 const の `std::wstring::data()` など）を使わない
+- CUDA 版は `cudart64_12.dll` / `cublas64_12.dll` / `cublasLt64_12.dll` を実行ファイルの隣へ置く（PATH 上の CUDA に依存しない）。**1エンジンあたり約0.8GB**になり、2エンジンで約1.6GB。同梱の llama-server も CUDA 12.4 の同じ DLL を持つため、配布時は共有・cuBLAS シム（NeMo の `-DNEMO_SPEECH_CUBLAS_SHIM=ON`）・CUDA バージョンの統一を検討する（12章）
+- `-CudaArch` の既定 `native` は手元の GPU だけを対象にする。配布ビルドでは対象世代を並べる（例: `75;86;89;120`）
+- Vulkan 版は LunarG Vulkan SDK が必要（`winget install KhronosGroup.VulkanSDK`。導入直後のシェルには `VULKAN_SDK` が反映されないため、スクリプトはレジストリからも読む）。whisper.cpp にも `SPIRV-Headers_DIR` を渡す。実行時は OS の `vulkan-1.dll` だけを使い、追加の DLL は不要
+- NeMo の ggml サブモジュールに CUDA 用パッチが当たったままでも、Vulkan 版（`NEMO_SPEECH_GGML_PATCHED=OFF`）はビルド・動作した
+- バックエンドを並べて比較するときは `-EnginesDir` で配置先を変える（既定はアプリが読む `python_sidecar\speech-engines`）
+
+
 
 配置先の案（`resources/` 同梱）:
 
@@ -279,7 +411,10 @@ AGENTS.md は `transcribe_cli.py` と `diarize_cli.py` を触れないところ�
 
 | 項目 | 内容 | 対応 |
 |---|---|---|
-| NVIDIA での性能 | CUDA 上の faster-whisper は十分最適化されており、差が縮まるか逆転する可能性がある | 段階1で実測する |
+| NVIDIA での性能 | 実測（2.1）: 文字起こしはほぼ同等（10分 18.6秒 vs 19.6秒）、話者分離は約3倍速い。合計は10分で約43%、50分で約28%短い。Python の初回読み込みが無い分、初回実行の差はさらに大きい | 速度だけでは置き換えの決め手にならない。依存削減・メモリ・安定性と合わせて判断する |
+| Windows の CUDA DLL の容量 | cuBLAS 一式を各エンジンの隣へ置くと約1.6GB。llama-server の CUDA 12.4 DLL とも重複する | 配布前に、DLL の共有・cuBLAS シム・CUDA バージョンの統一を比較する |
+| Windows / Vulkan のデバイス選択 | 実測（2.2）: RTX 4060 では CUDA 版と同等の速度だが、iGPU 併載機では両エンジンとも既定で iGPU を選ぶ | 音声エンジンは自動選択と設定での指定を実装した（6.5）。校正の llama-server は未対応 |
+| NVIDIA を Vulkan に統一する場合の校正速度 | 実測（2.3）: E4B で約2割、12B で約1割遅い。音声入力は同じ | 容量（CUDA 版は cuBLAS 込みで音声エンジンだけで約1.6GB、llama-server も約1GB）・インストーラーの一本化と比べて決める。文字起こし・話者分離の標準経路（faster-whisper / pyannote）が残る間は、NVIDIA 版の PyTorch CUDA がどのみち必要 |
 | Vulkan on NVIDIA | NVIDIA では Vulkan が CUDA より遅いことが多い | NVIDIA は CUDA 版を当面の本命とする |
 | Nemotron の成熟度 | 2026-09-23 公開、NeMo-Speech.cpp 対応は 09-24 マージ（v0.1.0）。レビューで「話者ラベル・タイムスタンプが誤る可能性」が指摘されている | commit を固定し、更新は検証後に行う |
 | 日本語の話者分離 | 対応言語に日本語が無い | 実際のカウンセリング音声で DER を測る |
@@ -287,7 +422,7 @@ AGENTS.md は `transcribe_cli.py` と `diarize_cli.py` を触れないところ�
 | 話者数の指定 | モデル側で指定できない | 6.2 の後処理。精度が不足すれば C API の確率を使う方式へ進む |
 | 長尺の話者分離時間 | 10分で7秒に対し50分で59秒と、長さに比例しない伸び方をした | プリセット（`v3-streaming` / `v3-offline`）を比較する |
 | RADV の警告 | 「non-conformant」と表示されるが動作に問題は無かった | 表示だけの警告として扱う。ログで抑制するかは実装時に判断 |
-| Windows ビルド | NeMo-Speech.cpp の Windows 手順はあるが未確認 | 段階1で確認する |
+| Windows ビルド | CUDA 版・Vulkan 版は確認済み（8章）。日本語版 Windows 特有の問題（`/utf-8`、PATH の引用符）と、日本語パスの問題（7.1）に対処した | CPU 版のビルドは未確認 |
 | 初期プロンプト | 現行アプリでもほぼ効いていない（5.2） | ggml 導入とは別に、現行経路の改善課題として扱う |
 
 ## 13. 参考

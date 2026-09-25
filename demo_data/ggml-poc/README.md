@@ -96,3 +96,29 @@ VAD はアプリと同じ値（`-vt 0.5 -vspd 200 -vsd 800 -vp 400`、Silero v6.
   - **whisper.cpp は VAD 使用時、トークンの時刻を VAD で詰めた時間軸のまま出す**（セグメント時刻だけ元に戻す。末尾で約12秒ずれる）。セグメント内で線形に写像し直す必要がある
   - DTW（`--dtw`、`-nfa` 必須）は遅く、分割精度も改善しなかった
 - 50分音声: W1/W5 とも臨床語・頻出語の混入なし、反復ループなし。「うん」8→約144、「うーん」0→約35 など相づち・フィラーが大幅に増える。「そうですね」は 24→33（プロンプト由来の挿入が一部ある可能性）
+
+## Windows / NVIDIA（CUDA）での検証（2026-09-25、RTX 4060 Laptop 8GB）
+
+準備: `powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1 -Backend cuda`。
+詳細は `docs/ggml-speech-engine-design.md` の 2.1 / 7.1 / 8章。
+
+| | 10分 標準（faster-whisper + pyannote、CUDA） | 10分 ggml（CUDA） | 50分 標準 | 50分 ggml |
+|---|---|---|---|---|
+| 文字起こし | 19.6s（初回 74.4s） | 18.6s | 72.6s | 68.5s |
+| 話者分離 | 30.9s（初回 42.9s） | 10.1s | 121.4s | 70.3s |
+| 話者一致率（既存比、フィラーを残す） | 95.3% | 89.9% | 95.7% | 85.5% |
+
+- NVIDIA では文字起こしの速度差は小さく、差は話者分離と Python の初回読み込みに出る
+- 両エンジン同時実行で VRAM 合計 2.6GB。出力は3回とも同一。強制終了で VRAM は即解放
+- Windows では argv が cp932 で届くため、フィラー用プロンプトが化けていた（フィラー・相づち 19 → 修正後 65）。応答ファイル（`@file`、UTF-8）で渡すよう修正
+
+## Windows / NVIDIA（Vulkan）での検証（2026-09-25、同じ PC）
+
+| | 10分 CUDA | 10分 Vulkan（RTX 4060） | 10分 Vulkan（Radeon 780M iGPU） | 50分 CUDA | 50分 Vulkan（RTX 4060） |
+|---|---|---|---|---|---|
+| 文字起こし | 18.6s | 20.0s | 87.9s | 68.5s | 71.4s |
+| 話者分離 | 10.1s | 9.4s | 28.1s | 70.3s | 67.1s |
+| 話者一致率（既存比） | 89.9% | 87.9% | 89.5% | 85.5% | 84.4% |
+
+- RTX 4060 では Vulkan 版も CUDA 版とほぼ同じ速度。配置サイズは 2エンジンで約0.1GB（CUDA 版は cuBLAS 込みで約1.6GB）
+- Vulkan のデバイス番号は iGPU が 0。whisper-cli・nemo-speech（`--device auto`）とも既定で iGPU を選ぶため、dGPU の指定が必要

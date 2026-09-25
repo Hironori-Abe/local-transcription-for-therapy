@@ -24,6 +24,8 @@ tauri = { version = "2", features = [] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 encoding_rs = "0.8"
 regex = "1"
+# Vulkan の GPU 一覧（ggml エンジンの GPU 選択用）。ローダーは実行時に動的に読み込む（無い環境でも起動できる）
+ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -66,7 +66,9 @@ import {
   type LlmBackendMode,
   type LlmPromptType,
   type SpeechEngineOption,
-  type ThemeMode
+  type ThemeMode,
+  type VulkanGpuDevice,
+  type VulkanGpuList
 } from './app-settings';
 import {
   aggregateDownloadProgressPercent,
@@ -166,6 +168,9 @@ import {
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeSpeechEngineValue,
+  effectiveVulkanGpuUuidValue,
+  vulkanGpuAutoLabelValue,
+  vulkanGpuLabelValue,
   normalizeTranscriptionLanguageValue,
   parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
@@ -982,6 +987,18 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** whisper.cpp でフィラー・相づちを残す（既定 true。カウンセリングではフィラーも重要な情報）。 */
   readonly keepFillers = signal<boolean>(true);
   readonly ggmlSpeechStatus = signal<GgmlSpeechStatus | null>(null);
+  /** ggml エンジン（Vulkan 版）の GPU 一覧と、設定で選ばれた GPU（UUID。'' は自動）。 */
+  readonly vulkanGpus = signal<VulkanGpuList | null>(null);
+  readonly ggmlGpuUuid = signal<string>('');
+  /** Vulkan 版の ggml エンジンを使う設定のときだけ GPU 選択欄を出す（CUDA 版は既存の「使用デバイス」）。 */
+  readonly ggmlGpuSelectorVisible = computed(() => {
+    const status = this.ggmlSpeechStatus();
+    const usesVulkan = (this.transcriptionEngine() === 'ggml' && status?.whisperBackend === 'vulkan')
+      || (this.diarizationEngine() === 'ggml' && status?.nemoBackend === 'vulkan');
+    return usesVulkan && (this.vulkanGpus()?.devices.length ?? 0) > 0;
+  });
+  readonly ggmlGpuSelectValue = computed(() => effectiveVulkanGpuUuidValue(this.ggmlGpuUuid(), this.vulkanGpus()));
+  readonly ggmlGpuAutoLabel = computed(() => vulkanGpuAutoLabelValue(this.vulkanGpus()));
   readonly ggmlSpeechWarning = computed(() => {
     const status = this.ggmlSpeechStatus();
     const lines: string[] = [];
@@ -1675,6 +1692,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (general.keepFillers !== undefined) {
       this.keepFillers.set(general.keepFillers);
     }
+    if (general.ggmlGpuUuid !== undefined) {
+      this.ggmlGpuUuid.set(general.ggmlGpuUuid);
+    }
 
     const llm = resolveLlmAppSettingsValue(this.appSettings, {
       localLlmAppsEnabled: this.localLlmAppsEnabled(),
@@ -1755,7 +1775,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         language: this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
         hipDeviceIndex: this.selectedHipDeviceIndex(),
         engine: this.transcriptionEngine(),
-        keepFillers: this.keepFillers()
+        keepFillers: this.keepFillers(),
+        ggmlGpuUuid: this.ggmlGpuUuid()
       }
     };
     this.persistAppSettings();
@@ -2621,9 +2642,30 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       const status = await invoke<GgmlSpeechStatus>('check_ggml_speech_status', { model: this.whisperModel() });
       this.ggmlSpeechStatus.set(status);
+      if ((status.whisperBackend === 'vulkan' || status.nemoBackend === 'vulkan') && !this.vulkanGpus()) {
+        await this.refreshVulkanGpus(false);
+      }
     } catch {
       this.ggmlSpeechStatus.set(null);
     }
+  }
+
+  /** Vulkan の GPU 一覧を取得する（列挙は Rust 側の子プロセスで行い、失敗時は空）。 */
+  async refreshVulkanGpus(refresh: boolean): Promise<void> {
+    try {
+      this.vulkanGpus.set(await invoke<VulkanGpuList>('list_vulkan_gpus', { refresh }));
+    } catch {
+      this.vulkanGpus.set(null);
+    }
+  }
+
+  onGgmlGpuChange(uuid: string): void {
+    this.ggmlGpuUuid.set(uuid);
+    this.persistTranscriptionSettings();
+  }
+
+  vulkanGpuLabel(device: VulkanGpuDevice): string {
+    return vulkanGpuLabelValue(device);
   }
 
   async runTranscription(): Promise<void> {
@@ -2755,6 +2797,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             transcriptionEngine: this.transcriptionEngine(),
             diarizationEngine: this.diarizationEngine(),
             keepFillers: this.keepFillers(),
+            ggmlGpuUuid: this.ggmlGpuUuid() || null,
           }
         }
       );
@@ -2915,6 +2958,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               : this.clusteringAdjust() === 'under_split' ? 0.55
               : null,
             diarizationEngine: this.diarizationEngine(),
+            ggmlGpuUuid: this.ggmlGpuUuid() || null,
           }
         }
       );

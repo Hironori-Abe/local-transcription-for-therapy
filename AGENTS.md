@@ -27,8 +27,8 @@
 - App shell: Tauri 2 (Rust)
 - Frontend: Angular 21 + Angular Material
 - Sidecar: Python
-- ASR: faster-whisper
-- Diarization: pyannote.audio (`pyannote-speaker-diarization-community-1`)
+- ASR: faster-whisper（標準）/ whisper.cpp（ggml・試験的。設定タブで選択）
+- Diarization: pyannote.audio (`pyannote-speaker-diarization-community-1`)（標準）/ NeMo-Speech.cpp + Nemotron-3-Diarization（ggml・試験的）
 - LLM proofreading: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けDL。NVIDIA=CUDA直起動 / AMD=ROCm優先・Vulkanフォールバック）。エンジンは同梱/DL の llama.cpp llama-server 直起動 + local OpenAI-compatible API（loopback only）。外部のランタイム管理CLI/デーモンは配布しない
 
 ## Runtime Defaults
@@ -93,6 +93,12 @@ scripts\setup-dev-cpu.bat     & scripts\run-dev-cpu.bat
 - NVIDIA Driver, CUDA 12.x, cuDNN 9.x（GPU利用時）
 
 話者分離モデルは UI セットアップタブから配置する。
+
+ggml 音声エンジン（whisper.cpp / Nemotron-3-Diarization）の開発用ビルドとモデル取得（固定 commit・SHA-256 検証。詳細は `docs/ggml-speech-engine-design.md`）:
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1 -Backend vulkan
+```
 
 ## Setup and Run (Ubuntu / Linux)
 
@@ -320,10 +326,9 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 - PyAV 非依存の ffmpeg backend / import stub / `FFMPEG_BIN` 注入経路。Apache-2.0 配布の前提なので、PyAV や imageio-ffmpeg を戻さない
 - 話者分離実行部分: `python_sidecar/diarize_cli.py`、community-1 ローカル配置ポリシー、話者表示初期値
 - 既定の Gemma 4 E4B 校正経路（同梱/DL llama-server 直起動）。特にデフォルトプロンプトと実行条件は、互換API追加・12B階層追加の影響を受けないように保つ（既定は常に E4B）
-- 高精度階層（Gemma 4 12B）はオプトインの追加機能（NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）。E4B 既定の挙動（デフォルトプロンプト・実行条件・CUDA / AMD ROCm・Vulkan での E4B 直起動経路）を変えないこと
+- 高精度階層（Gemma 4 12B）はオプトインの追加機能。既定は常に E4B とし、E4B のデフォルトプロンプトと実行条件（ctx・MTP・FlashAttention 等）を 12B 追加の影響で変えないこと。GPU 方式（CUDA / ROCm / Vulkan）の変更は Vulkan 統一の方針（Distribution Strategy）に従って行ってよい
 - 既存のローカルGGUFモデル探索・選択の挙動。ユーザー登録式への完全移行は、別タスクとして検討する
 - 保存形式（JSON / DOCX / XLSX）と出力表カラム
-- CUDA / ROCm の配布ライン分離方針
 - loopback 限定バリデーション。プライバシー境界なので、緩和する場合は必ず明示合意を取る
 
 ## Output and Save Formats
@@ -340,7 +345,12 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 
 ## Distribution Strategy
 
-配布形態は次の3系統を維持します。
+**方針（2026-09-25 決定、`N3-Diarization` ブランチで移行中）: GPU 実行は Vulkan へ統一し、NVIDIA / AMD / Intel を1つのインストーラーで扱う。** 文字起こし・話者分離は ggml エンジン（whisper.cpp / NeMo-Speech.cpp）、校正は llama.cpp llama-server の Vulkan 版に揃える。Intel Arc で、RTX 4060 での実測（`docs/ggml-speech-engine-design.md` 2.2・2.3。音声エンジンは CUDA と同等、校正は約1〜2割遅い）と同程度に動くことを確認してから確定する（計測手順: `demo_data/ggml-poc/arc-bench/`）。Python / PyTorch の標準経路を残す間は、下記の配布ライン（CUDA / ROCm / CPU / Editor）が並存する。
+
+- 複数 GPU の機種では、iGPU 以外を優先し、その中で VRAM が最大の GPU を自動選択する。設定タブでユーザーが選べる形式を残す（`src-tauri/src/gpu_select.rs`。Vulkan の並び = `GGML_VK_VISIBLE_DEVICES` の番号を全エンジンに渡し、設定は GPU の UUID で保存する）
+- Vulkan 統一に伴い、CUDA 版・ROCm 版の llama-server の同梱・ダウンロードと、それを前提とする記述（Proofreading Policy の NVIDIA=CUDA 直起動・AMD=ROCm 優先など）は段階的に置き換える。置き換えるまでは現行実装の説明として残す
+
+現行の配布形態は次の系統です。
 
 1. Full CUDA version（**主配布**）
    - 文字起こし〜話者分離〜校正をすべて含む
@@ -362,8 +372,7 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 
 補足:
 
-- PyTorch は CUDA build と ROCm build を同一 venv に共存させず、配布ラインごとに venv を分ける
-- 1つの配布パッケージへ CUDA / ROCm の両 runtime を同梱しない
+- （Python の標準経路を残す間のみ）PyTorch は CUDA build と ROCm build を同一 venv に共存させず、配布ラインごとに venv を分ける。Vulkan 統一後の ggml エンジン・llama-server はこの制約を受けない
 - NSIS版は venv 非同梱のため、配布先でインストール先フォルダ直下に `.venv312\`（フォルダ全体）を配置するか、`PYTHON_BIN` 環境変数を設定する必要がある
 - pyannote-speaker-diarization-community-1 はインストール後ダウンロード。NSIS ビルド（`tauri.nvidia.windows.override.json`）には含めない。リリースの保存先は `%LOCALAPPDATA%\{identifier}\models\`（resource_dir ではない）
 - llama-server（`resources/llama-server/`）は現状 NSIS インストーラーに同梱（~1GB）。将来的にはセットアップ UI からのポストインストールダウンロードに切り替え予定
@@ -396,7 +405,7 @@ Tauri build override 方針:
 
 ## Hardware Policy
 
-- 現行安定 Full は RTX/CUDA 主軸
+- 現行安定 Full は RTX/CUDA 主軸。今後は Vulkan（NVIDIA / AMD / Intel 共通）へ移行する（Distribution Strategy の方針）
 - ROCm / AMD 版は当面 experimental とし、LLM 校正と pyannote / PyTorch ROCm から検証する
 - AMD iGPU / dGPU / NPU の並行処理は、DL した llama.cpp ROCm / Vulkan llama-server や `llama_cpp` HIPBLAS / Vulkan を優先して検証する
 - `faster-whisper` / `ctranslate2` の GPU ASR は CUDA 主軸。gfx1150（Radeon 890M）と gfx1102（RX 7600M XT）では GPU 動作確認済み。ROCmでは `CT2_CUDA_ALLOCATOR=cub_caching` を `transcribe_cli.py` が自動設定する。gfx1102はネイティブ実行し、`HSA_OVERRIDE_GFX_VERSION` は通常使用しない。gfx1103はv4.7.xホイール非収録だが、品質影響が未検証のためoverrideを自動設定しない

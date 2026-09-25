@@ -313,12 +313,13 @@ test('speech engine settings default to standard and accept only ggml as the alt
   assert.equal(normalizeSpeechEngineValue(undefined), 'standard');
 
   const settings: AppSettingsV1 = {
-    transcription: { engine: 'ggml', keepFillers: false },
+    transcription: { engine: 'ggml', keepFillers: false, ggmlGpuUuid: ' 0123abcd ' },
     diarization: { engine: 'something-else' }
   };
   assert.deepEqual(resolveGeneralAppSettingsValue(settings, options), {
     transcriptionEngine: 'ggml',
     keepFillers: false,
+    ggmlGpuUuid: '0123abcd',
     diarizationEngine: 'standard'
   });
   assert.deepEqual(resolveGeneralAppSettingsValue({ transcription: {}, diarization: {} }, options), {});

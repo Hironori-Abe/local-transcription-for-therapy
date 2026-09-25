@@ -81,6 +81,26 @@ fn exe_name(base: &str) -> String {
     }
 }
 
+/// `<engine>/bin/<exe>` の2つ上にある BUILD_INFO.txt（セットアップスクリプトが書く）からビルド種別を読む。
+fn engine_backend(exe: &Path) -> Option<&'static str> {
+    let info = exe.parent()?.parent()?.join("BUILD_INFO.txt");
+    parse_build_backend(&std::fs::read_to_string(info).ok()?)
+}
+
+/// BUILD_INFO.txt の `backend <name>`（whisper.cpp）/ `preset <name>-diar`（NeMo-Speech.cpp）を読む。
+pub(crate) fn parse_build_backend(text: &str) -> Option<&'static str> {
+    text.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let (key, value) = (it.next()?, it.next()?.trim_start_matches('\u{feff}'));
+        if key != "backend" && key != "preset" {
+            return None;
+        }
+        ["vulkan", "cuda", "cpu"]
+            .into_iter()
+            .find(|b| value == *b || value.starts_with(&format!("{b}-")))
+    })
+}
+
 /// UI のモデル名を ggml モデルファイル名へ対応付ける。
 pub(crate) fn whisper_model_file(model: &str) -> Option<&'static str> {
     match model.trim().to_ascii_lowercase().as_str() {
@@ -151,6 +171,16 @@ impl GgmlSpeechPaths {
             missing.push(format!("VAD モデル: {}", self.vad_model.display()));
         }
         missing
+    }
+
+    /// whisper-cli のビルド種別（"vulkan" / "cuda" / "cpu"。不明なら None）。
+    pub(crate) fn whisper_backend(&self) -> Option<&'static str> {
+        engine_backend(&self.whisper_cli)
+    }
+
+    /// nemo-speech のビルド種別（"vulkan" / "cuda" / "cpu"。不明なら None）。
+    pub(crate) fn nemo_backend(&self) -> Option<&'static str> {
+        engine_backend(&self.nemo_speech)
     }
 
     /// 話者分離に必要なファイルのうち、見つからないものを返す。
@@ -231,6 +261,31 @@ pub(crate) fn whisper_cli_args(
         args.push("-ng".into());
     }
     args
+}
+
+/// whisper-cli の応答ファイル（`whisper-cli @<file>`。1行1引数、BOM 無し UTF-8）の内容を作る。
+///
+/// Windows の whisper-cli は argv をシステムのコードページ（日本語環境では cp932）で受け取る一方、
+/// プロンプトのトークン化とモデル読み込みは UTF-8 として扱う。そのため argv で渡すと
+/// フィラー用プロンプトが化ける（55 トークンの例文が 152 トークンになるのを確認）うえ、
+/// 日本語を含むモデルパスも開けない。応答ファイルの中身はバイト列のまま（UTF-8）で読まれる。
+/// なお音声と出力先は UTF-8 のパスを扱えない（ANSI の fopen / ofstream）ため、
+/// 呼び出し側で作業ディレクトリからの ASCII のファイル名だけを渡すこと。
+pub(crate) fn whisper_response_file(args: &[OsString]) -> Result<String, String> {
+    let mut out = String::new();
+    for arg in args {
+        let s = arg
+            .to_str()
+            .ok_or_else(|| format!("whisper.cpp の引数を UTF-8 に変換できません: {arg:?}"))?;
+        if s.contains(['\n', '\r']) {
+            return Err(format!(
+                "whisper.cpp の引数に改行を含めることはできません: {s}"
+            ));
+        }
+        out.push_str(s);
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// whisper-cli の `-pp` 出力（`...: progress =  42%`）から進捗率を取り出す。
@@ -951,7 +1006,8 @@ mod tests {
     }
 
     /// 実物の whisper-cli / nemo-speech を、アプリと同じ引数・同じ変換処理で動かす結合テスト。
-    /// `scripts/setup-ggml-speech-linux.sh` 実行後に、16kHz mono WAV を指定して走らせる:
+    /// `scripts/setup-ggml-speech-linux.sh`（Windows は `scripts\setup-ggml-speech-windows.ps1`）実行後に、
+    /// 16kHz mono WAV を指定して走らせる（Windows の nemo-speech は既定 `auto`、CUDA 版なら `cuda:0` を推奨）:
     ///   LOTT_GGML_TEST_WAV=/path/to/audio.wav cargo test --lib real_engines -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -977,26 +1033,35 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
 
         let started = std::time::Instant::now();
+        // アプリと同じく、音声・出力は作業ディレクトリからのファイル名で、Windows では応答ファイルで渡す。
+        std::fs::copy(&wav, tmp.join("in.wav")).unwrap();
         let out_prefix = tmp.join("asr");
-        let status = Command::new(&paths.whisper_cli)
-            .args(whisper_cli_args(
-                &paths.whisper_model("turbo").unwrap(),
-                &paths.vad_model,
-                &wav,
-                &out_prefix,
-                "ja",
-                true,
-                true,
-                8,
-            ))
-            .status()
-            .unwrap();
+        let keep_fillers = env::var("LOTT_GGML_TEST_KEEP_FILLERS").map_or(true, |v| v != "0");
+        let args = whisper_cli_args(
+            &paths.whisper_model("turbo").unwrap(),
+            &paths.vad_model,
+            Path::new("in.wav"),
+            Path::new("asr"),
+            "ja",
+            true,
+            keep_fillers,
+            8,
+        );
+        let mut cmd = Command::new(&paths.whisper_cli);
+        cmd.current_dir(&tmp);
+        if cfg!(target_os = "windows") {
+            std::fs::write(tmp.join("args.txt"), whisper_response_file(&args).unwrap()).unwrap();
+            cmd.arg("@args.txt");
+        } else {
+            cmd.args(args);
+        }
+        let status = cmd.status().unwrap();
         assert!(status.success());
         let asr: Value = serde_json::from_str(
             &std::fs::read_to_string(out_prefix.with_extension("json")).unwrap(),
         )
         .unwrap();
-        let (segments, text) = convert_whisper_output(&asr, "ja", true).unwrap();
+        let (segments, text) = convert_whisper_output(&asr, "ja", keep_fillers).unwrap();
         eprintln!(
             "whisper.cpp: {} segments, {} chars, {:.1}s",
             segments.len(),
@@ -1035,6 +1100,12 @@ mod tests {
             started.elapsed().as_secs_f64()
         );
         assert_eq!(summary["speakerCount"], 2);
+        // 評価用: LOTT_GGML_TEST_OUT を指定すると、アプリと同じ最終行（1文1行・話者付き）を書き出す。
+        if let Some(out) = env::var_os("LOTT_GGML_TEST_OUT") {
+            let dump = json!({ "rows": split, "diarization": diar_segments, "summary": summary });
+            std::fs::write(&out, serde_json::to_string_pretty(&dump).unwrap()).unwrap();
+            eprintln!("wrote {}", PathBuf::from(out).display());
+        }
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1059,6 +1130,98 @@ mod tests {
         assert!(s.contains(&"--carry-initial-prompt".to_string()));
         assert!(s.contains(&"-ojf".to_string()));
         assert!(s.contains(&FILLER_PROMPT.to_string()));
+    }
+
+    /// 評価用: 既に実行した whisper-cli / nemo-speech の出力 JSON を、アプリと同じ変換・後処理で最終行へ変換する。
+    ///   LOTT_GGML_ASR_JSON=... LOTT_GGML_DIAR_JSON=... LOTT_GGML_TEST_OUT=rows.json [LOTT_GGML_TEST_KEEP_FILLERS=0]
+    ///   cargo test --lib convert_existing_outputs -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn convert_existing_outputs() {
+        let (Some(asr), Some(diar), Some(out)) = (
+            env::var_os("LOTT_GGML_ASR_JSON"),
+            env::var_os("LOTT_GGML_DIAR_JSON"),
+            env::var_os("LOTT_GGML_TEST_OUT"),
+        ) else {
+            eprintln!("LOTT_GGML_ASR_JSON / LOTT_GGML_DIAR_JSON / LOTT_GGML_TEST_OUT が未設定のためスキップ");
+            return;
+        };
+        let keep_fillers = env::var("LOTT_GGML_TEST_KEEP_FILLERS").map_or(true, |v| v != "0");
+        let read = |p: &OsString| -> Value {
+            serde_json::from_str(&String::from_utf8_lossy(&std::fs::read(p).unwrap())).unwrap()
+        };
+        let (segments, _) = convert_whisper_output(&read(&asr), "ja", keep_fillers).unwrap();
+        let turns = parse_nemo_diarization(&read(&diar)).unwrap();
+        let (diar_segments, summary) = postprocess_diarization(&turns, 2);
+        let rows = split_segments_by_speaker(&segments, &diar_segments).unwrap_or_else(|| {
+            // words が無い（フィラーなし）場合はアプリと同じく重なり最大の話者を行ごとに付ける
+            segments
+                .iter()
+                .map(|s| {
+                    let (a, b) = (row_f64(s, "start"), row_f64(s, "end"));
+                    let d: Vec<(f64, f64, String)> = diar_segments
+                        .iter()
+                        .map(|x| {
+                            (
+                                row_f64(x, "start"),
+                                row_f64(x, "end"),
+                                x["speaker"].as_str().unwrap().to_string(),
+                            )
+                        })
+                        .collect();
+                    let mut s = s.clone();
+                    s["speaker"] = speaker_for_span(a, b, &d)
+                        .map(Value::String)
+                        .unwrap_or(Value::Null);
+                    s
+                })
+                .collect()
+        });
+        let dump = json!({ "rows": rows, "diarization": diar_segments, "summary": summary });
+        std::fs::write(&out, serde_json::to_string_pretty(&dump).unwrap()).unwrap();
+        eprintln!(
+            "{} segments -> {} rows",
+            segments.len(),
+            dump["rows"].as_array().unwrap().len()
+        );
+    }
+
+    #[test]
+    fn build_backend_is_read_from_build_info() {
+        assert_eq!(
+            parse_build_backend("whisper.cpp abc\nbackend vulkan\ncuda-arch native"),
+            Some("vulkan")
+        );
+        assert_eq!(
+            parse_build_backend("NeMo-Speech.cpp abc\npreset cuda-diar\n"),
+            Some("cuda")
+        );
+        assert_eq!(
+            parse_build_backend("\u{feff}whisper.cpp abc\r\nbackend cpu\r\n"),
+            Some("cpu")
+        );
+        assert_eq!(parse_build_backend("whisper.cpp abc\n"), None);
+    }
+
+    #[test]
+    fn response_file_keeps_utf8_prompt_one_arg_per_line() {
+        let args = whisper_cli_args(
+            Path::new("C:\\Users\\山田\\models\\m.bin"),
+            Path::new("vad.bin"),
+            Path::new("a.wav"),
+            Path::new("out"),
+            "ja",
+            true,
+            true,
+            8,
+        );
+        let text = whisper_response_file(&args).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), args.len());
+        assert!(!text.starts_with('\u{feff}'));
+        assert_eq!(lines[1], "C:\\Users\\山田\\models\\m.bin");
+        assert!(lines.contains(&FILLER_PROMPT));
+        assert!(whisper_response_file(&[OsString::from("a\nb")]).is_err());
     }
 
     #[test]

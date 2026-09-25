@@ -736,6 +736,16 @@
                     <mat-option value="ggml">Nemotron（試験的）</mat-option>
                   </mat-select>
                 </mat-form-field>
+                <!-- Vulkan 版の ggml エンジンが使う GPU。自動は「単体 GPU の中で VRAM 最大 → 無ければ内蔵 GPU」。 -->
+                <mat-form-field *ngIf="ggmlGpuSelectorVisible()" appearance="outline"
+                  class="settings-llm-field settings-field-device">
+                  <mat-label>音声エンジンの GPU</mat-label>
+                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
+                    [value]="ggmlGpuSelectValue()" (valueChange)="onGgmlGpuChange($event)">
+                    <mat-option value="">{{ ggmlGpuAutoLabel() }}</mat-option>
+                    <mat-option *ngFor="let d of vulkanGpus()!.devices" [value]="d.uuid">{{ vulkanGpuLabel(d) }}</mat-option>
+                  </mat-select>
+                </mat-form-field>
                 <mat-checkbox *ngIf="transcriptionEngine() === 'ggml'"
                   [disabled]="running() || proofreadRunning() || diarizationRunning()"
                   [checked]="keepFillers()" (change)="onKeepFillersChange($event.checked)"

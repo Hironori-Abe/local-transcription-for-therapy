@@ -1,0 +1,18 @@
+LoTT: NeMo-Speech.cpp 97a15af 向け。Windows で日本語などを含むモデルパスを開けるようにする。
+argv はシステムのコードページ（cp932）で届き、fs::path::string() も ANSI を返すが、
+モデルを開く ggml_fopen は UTF-8 として解釈するため、ユーザー名が日本語だと
+%LOCALAPPDATA% 配下のモデルを開けない。u8string() で UTF-8 のまま渡す（Linux では同じ値）。
+
+diff --git a/app/diarize.cpp b/app/diarize.cpp
+index a50596a..d3c3c4e 100644
+--- a/app/diarize.cpp
++++ b/app/diarize.cpp
+@@ -226,7 +226,7 @@ command_diarize(int argc, char** argv) {
+         const auto geometry = config.resolved_geometry();
+         nemo_speech::EngineRegistry engines;
+         config.model_path =
+-            resolve_model_file(config.model_path, "diarization", "diarization model").string();
++            resolve_model_file(config.model_path, "diarization", "diarization model").u8string();
+         if (cli_verbose())
+             std::fprintf(
+                 stderr, "diarize: model=%s mode=%s inputs=%zu concurrency=%d device=%d\n",

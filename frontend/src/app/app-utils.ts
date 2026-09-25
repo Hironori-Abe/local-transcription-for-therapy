@@ -8,7 +8,9 @@ import type {
   LlmStringSettingsField,
   ResolvedLlmAppSettingsValue,
   ResolveLlmAppSettingsOptions,
-  SpeechEngineOption
+  SpeechEngineOption,
+  VulkanGpuDevice,
+  VulkanGpuList
 } from './app-settings';
 
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
@@ -1642,6 +1644,24 @@ export function normalizeTranscriptionDeviceValue(
 
 /** 保存済み設定のうち、LLM起動経路に依存しない値を検証・正規化する。 */
 /** 未知の値は既定の standard に戻す（ggml は明示的に選んだときだけ使う）。 */
+/** ggml エンジンの GPU 選択欄の表示名（例: 「NVIDIA GeForce RTX 4060 Laptop GPU（8GB）」）。 */
+export function vulkanGpuLabelValue(device: VulkanGpuDevice): string {
+  const gb = Math.round(device.vramMb / 1024);
+  const note = device.kind === 'integrated' ? '・内蔵GPU' : device.kind === 'cpu' ? '・CPU' : '';
+  return `${device.name}（${gb}GB${note}）`;
+}
+
+/** 「自動」の表示名。自動で選ばれる GPU を括弧内に示す。 */
+export function vulkanGpuAutoLabelValue(list: VulkanGpuList | null): string {
+  const auto = list?.devices.find(d => d.uuid === list.autoUuid);
+  return auto ? `自動（${auto.name}）` : '自動';
+}
+
+/** 保存済みの GPU が今も存在すればその UUID、無ければ ''（自動）を選択欄に表示する。 */
+export function effectiveVulkanGpuUuidValue(savedUuid: string, list: VulkanGpuList | null): string {
+  return savedUuid && list?.devices.some(d => d.uuid === savedUuid) ? savedUuid : '';
+}
+
 export function normalizeSpeechEngineValue(valueRaw: unknown): SpeechEngineOption {
   return valueRaw === 'ggml' ? 'ggml' : 'standard';
 }
@@ -1675,6 +1695,9 @@ export function resolveGeneralAppSettingsValue(
   }
   if (transcription && typeof transcription.keepFillers === 'boolean') {
     resolved.keepFillers = transcription.keepFillers;
+  }
+  if (transcription && typeof transcription.ggmlGpuUuid === 'string') {
+    resolved.ggmlGpuUuid = transcription.ggmlGpuUuid.trim();
   }
 
   const playbackRate = Number(settings.playback?.rate);

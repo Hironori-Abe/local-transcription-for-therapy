@@ -109,7 +109,10 @@ import {
   transcriptionRuntimeReasonValue,
   validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
-  processingStatusTextValue
+  processingStatusTextValue,
+  effectiveVulkanGpuUuidValue,
+  vulkanGpuAutoLabelValue,
+  vulkanGpuLabelValue,
 } from './app-utils.ts';
 
 test('duration formatters preserve rounding and negative-value behavior', () => {
@@ -1138,4 +1141,21 @@ test('runtime build flags trust the Rust CPU variant even when the frontend defa
     aiProofreadBuild: false,
     cpuVoiceInputBuild: true
   });
+});
+
+test('vulkan GPU labels show VRAM, mark integrated GPUs, and name the auto choice', () => {
+  const list = {
+    devices: [
+      { index: 0, name: 'AMD Radeon 780M Graphics', kind: 'integrated' as const, vramMb: 16278, uuid: 'a' },
+      { index: 1, name: 'NVIDIA GeForce RTX 4060 Laptop GPU', kind: 'discrete' as const, vramMb: 7957, uuid: 'b' }
+    ],
+    autoUuid: 'b'
+  };
+  assert.equal(vulkanGpuLabelValue(list.devices[0]), 'AMD Radeon 780M Graphics（16GB・内蔵GPU）');
+  assert.equal(vulkanGpuLabelValue(list.devices[1]), 'NVIDIA GeForce RTX 4060 Laptop GPU（8GB）');
+  assert.equal(vulkanGpuAutoLabelValue(list), '自動（NVIDIA GeForce RTX 4060 Laptop GPU）');
+  assert.equal(vulkanGpuAutoLabelValue(null), '自動');
+  assert.equal(effectiveVulkanGpuUuidValue('a', list), 'a');
+  assert.equal(effectiveVulkanGpuUuidValue('gone', list), '');
+  assert.equal(effectiveVulkanGpuUuidValue('', list), '');
 });

@@ -25,6 +25,8 @@ use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 mod ggml_speech;
 use ggml_speech::{GgmlSpeechPaths, SpeechEngine};
+mod gpu_select;
+pub use gpu_select::{print_vulkan_devices, LIST_VULKAN_DEVICES_ARG};
 
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
@@ -4340,6 +4342,8 @@ struct RunTranscriptionRequest {
     diarization_engine: Option<String>,
     /// ggml（whisper.cpp）でフィラー・相づちを残すか（省略時 true）。標準エンジンでは使わない。
     keep_fillers: Option<bool>,
+    /// ggml エンジン（Vulkan 版）に使わせる GPU の UUID。省略・見つからない場合は自動選択。
+    ggml_gpu_uuid: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4387,6 +4391,8 @@ struct RunDiarizationRequest {
     clustering_threshold: Option<f64>,
     /// "standard"（既定: pyannote）/ "ggml"（Nemotron-3-Diarization）
     diarization_engine: Option<String>,
+    /// ggml エンジン（Vulkan 版）に使わせる GPU の UUID。省略・見つからない場合は自動選択。
+    ggml_gpu_uuid: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -12170,6 +12176,7 @@ fn run_diarization_blocking(
         RunningTaskKind::Diarization,
         "transcription-progress",
         None,
+        request.ggml_gpu_uuid.as_deref(),
     )?;
     if take_cancel_requested(RunningTaskKind::Diarization) {
         return Ok(RunDiarizationResponse {
@@ -12224,6 +12231,7 @@ fn run_diarization_blocking(
                 RunningTaskKind::Diarization,
                 "transcription-progress",
                 None,
+                request.ggml_gpu_uuid.as_deref(),
             )?;
             if take_cancel_requested(RunningTaskKind::Diarization) {
                 return Ok(RunDiarizationResponse {
@@ -12480,6 +12488,7 @@ fn run_transcription_blocking(
                     let spk = requested_speaker_count;
                     let cluster_thresh = request.clustering_threshold;
                     let hip_idx_par = request.hip_device_index;
+                    let ggml_gpu_par = request.ggml_gpu_uuid.clone();
                     emit_progress(
                         &app,
                         "diarization_start",
@@ -12499,6 +12508,7 @@ fn run_transcription_blocking(
                             RunningTaskKind::Diarization,
                             "parallel-diarization-progress",
                             hip_idx_par,
+                            ggml_gpu_par.as_deref(),
                         )
                     }))
                 }
@@ -12531,6 +12541,7 @@ fn run_transcription_blocking(
         false,
         request.hip_device_index,
         keep_fillers,
+        request.ggml_gpu_uuid.as_deref(),
     )?;
     eprintln!(
         "[LoTT][transcription][run_id={run_id}][stage=transcription_sidecar_done] elapsed_ms={} exit={:?} stdout_bytes={} stderr_bytes={}",
@@ -12593,6 +12604,7 @@ fn run_transcription_blocking(
             true,
             request.hip_device_index,
             keep_fillers,
+            request.ggml_gpu_uuid.as_deref(),
         )?;
         if take_cancel_requested(RunningTaskKind::Transcription) {
             let diar_pid = DIARIZATION_PID.load(Ordering::SeqCst);
@@ -12731,6 +12743,7 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                         RunningTaskKind::Transcription,
                         "transcription-progress",
                         request.hip_device_index,
+                        request.ggml_gpu_uuid.as_deref(),
                     )?
                 };
                 eprintln!(
@@ -12786,6 +12799,7 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                             RunningTaskKind::Transcription,
                             "transcription-progress",
                             None,
+                            request.ggml_gpu_uuid.as_deref(),
                         )?;
                         if retry_output.status.success() {
                             diarization_output = retry_output;
@@ -13254,8 +13268,15 @@ fn execute_diarization(
 // 既存サイドカーと同じ JSON（{"success":..,"result":..}）を返し、呼び出し側の後続処理を共用する。
 // 設計: docs/ggml-speech-engine-design.md
 
+/// ggml エンジンの開発用セットアップスクリプト（準備不足のエラーで案内する）。
+const GGML_SPEECH_SETUP_SCRIPT: &str = if cfg!(target_os = "windows") {
+    "scripts\\setup-ggml-speech-windows.ps1"
+} else {
+    "scripts/setup-ggml-speech-linux.sh"
+};
+
 /// ggml エンジンの実行ファイル・モデルの配置。
-/// dev: python_sidecar/speech-engines/ と python_sidecar/models/（scripts/setup-ggml-speech-linux.sh が配置）
+/// dev: python_sidecar/speech-engines/ と python_sidecar/models/（scripts/setup-ggml-speech-{linux.sh,windows.ps1} が配置）
 /// release: app_local_data_dir()/speech-engines/ と app_local_data_dir()/models/
 fn resolve_ggml_speech_paths(app: &AppHandle) -> Result<GgmlSpeechPaths, String> {
     if cfg!(debug_assertions) {
@@ -13417,6 +13438,23 @@ fn run_ggml_engine_process(
     })
 }
 
+/// Vulkan 版の ggml エンジンに使わせる GPU を決め、`GGML_VK_VISIBLE_DEVICES` を設定する。
+/// 設定で選ばれた GPU（UUID）が見つからなければ自動選択（単体 GPU の VRAM 最大 → iGPU）。
+/// Vulkan 版でない・GPU が無い・環境変数で明示されている場合は何もしない。
+fn apply_ggml_vulkan_device(
+    cmd: &mut Command,
+    backend: Option<&str>,
+    preferred_uuid: Option<&str>,
+) -> Option<gpu_select::VulkanDevice> {
+    if backend != Some("vulkan") || env::var_os("GGML_VK_VISIBLE_DEVICES").is_some() {
+        return None;
+    }
+    let devices = gpu_select::vulkan_devices(false);
+    let device = gpu_select::resolve(&devices, preferred_uuid)?.clone();
+    cmd.env("GGML_VK_VISIBLE_DEVICES", device.index.to_string());
+    Some(device)
+}
+
 /// whisper.cpp で文字起こしする（transcribe_cli.py と同じ結果形式）。
 fn execute_ggml_transcription(
     app: &AppHandle,
@@ -13426,13 +13464,15 @@ fn execute_ggml_transcription(
     language: &str,
     low_memory_mode: bool,
     keep_fillers: bool,
+    ggml_gpu_uuid: Option<&str>,
 ) -> Result<SidecarExecResult, String> {
     let paths = resolve_ggml_speech_paths(app)?;
     let missing = paths.missing_for_transcription(model);
     if !missing.is_empty() {
         return Ok(ggml_failure_result(
             format!(
-                "ggml エンジン（whisper.cpp）の準備が済んでいません。scripts/setup-ggml-speech-linux.sh を実行してください。\n不足: {}",
+                "ggml エンジン（whisper.cpp）の準備が済んでいません。{} を実行してください。\n不足: {}",
+                GGML_SPEECH_SETUP_SCRIPT,
                 missing.join(" / ")
             ),
             None,
@@ -13453,32 +13493,63 @@ fn execute_ggml_transcription(
         Ok(v) => v,
         Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
     };
-    let out_prefix = private_llm_temp_dir(app)?.join(private_temp_name("ggml-asr"));
-    let out_json = out_prefix.with_extension("json");
+    let temp_dir = private_llm_temp_dir(app)?;
+    let out_name = private_temp_name("ggml-asr");
+    let out_json = temp_dir.join(format!("{out_name}.json"));
     guard.push(out_json.clone());
+    // 音声と出力先は一時ディレクトリからのファイル名（ASCII の生成名）だけで渡す。
+    // Windows の whisper-cli はこの2つを ANSI のパスとして開くため、ユーザー名などに
+    // 日本語を含む絶対パスを渡すと開けない（ggml_speech::whisper_response_file 参照）。
+    let wav_name = wav
+        .file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| "一時音声ファイル名を解決できませんでした。".to_string())?;
 
     let threads = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
         .min(8);
-    let mut cmd = Command::new(&paths.whisper_cli);
-    cmd.args(ggml_speech::whisper_cli_args(
+    let whisper_args = ggml_speech::whisper_cli_args(
         &model_path,
         &paths.vad_model,
-        &wav,
-        &out_prefix,
+        &wav_name,
+        Path::new(&out_name),
         language,
         use_gpu,
         keep_fillers,
         threads,
-    ));
+    );
+    let mut cmd = Command::new(&paths.whisper_cli);
+    cmd.current_dir(&temp_dir);
+    if cfg!(target_os = "windows") {
+        // argv はシステムのコードページで届き、日本語のプロンプトやモデルパスが化けるため、
+        // UTF-8 の応答ファイルで渡す。
+        let contents = match ggml_speech::whisper_response_file(&whisper_args) {
+            Ok(v) => v,
+            Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
+        };
+        let rsp_name = format!("{}.args", private_temp_name("ggml-asr-args"));
+        let rsp = temp_dir.join(&rsp_name);
+        write_private_temp_file(&rsp, contents.as_bytes())?;
+        guard.push(rsp);
+        cmd.arg(format!("@{rsp_name}"));
+    } else {
+        cmd.args(whisper_args);
+    }
+    let gpu = if use_gpu {
+        apply_ggml_vulkan_device(&mut cmd, paths.whisper_backend(), ggml_gpu_uuid)
+    } else {
+        None
+    };
+    let device_label = match (&gpu, use_gpu) {
+        (Some(d), _) => d.name.clone(),
+        (None, true) => "GPU".to_string(),
+        (None, false) => "CPU".to_string(),
+    };
     emit_progress(
         app,
         "transcribing",
-        &format!(
-            "whisper.cpp で文字起こし中です...（{}）",
-            if use_gpu { "GPU" } else { "CPU" }
-        ),
+        &format!("whisper.cpp で文字起こし中です...（{device_label}）"),
         Some(5.0),
     );
     let mut last = 0u32;
@@ -13522,6 +13593,7 @@ fn execute_ggml_transcription(
             "segments": segments,
             "settings": {
                 "engine": "whisper.cpp",
+                "gpu": gpu.as_ref().map(|d| d.name.clone()),
                 "model": model,
                 "device": if use_gpu { "cuda" } else { "cpu" },
                 "computeType": "ggml",
@@ -13564,6 +13636,7 @@ fn execute_ggml_diarization(
     num_speakers: u8,
     running_kind: RunningTaskKind,
     progress_event: &str,
+    ggml_gpu_uuid: Option<&str>,
 ) -> Result<SidecarExecResult, String> {
     let emit = |stage: &str, message: &str, progress: f64| {
         let _ = app.emit(
@@ -13576,7 +13649,8 @@ fn execute_ggml_diarization(
     if !missing.is_empty() {
         return Ok(ggml_failure_result(
             format!(
-                "ggml エンジン（Nemotron-3-Diarization）の準備が済んでいません。scripts/setup-ggml-speech-linux.sh を実行してください。\n不足: {}",
+                "ggml エンジン（Nemotron-3-Diarization）の準備が済んでいません。{} を実行してください。\n不足: {}",
+                GGML_SPEECH_SETUP_SCRIPT,
                 missing.join(" / ")
             ),
             None,
@@ -13600,11 +13674,25 @@ fn execute_ggml_diarization(
 
     // モデルは必ずローカルの絶対パスで渡す。リポジトリ ID を渡すと NeMo-Speech.cpp が
     // 自動ダウンロードを試みるため（通常運用時は通信しない方針）。
-    let device_arg = env::var("LOTT_NEMO_SPEECH_DEVICE")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| if use_gpu { "auto" } else { "cpu" }.to_string());
     let mut cmd = Command::new(&paths.nemo_speech);
+    let device_override = env::var("LOTT_NEMO_SPEECH_DEVICE")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    // Vulkan 版は GPU を選んで GGML_VK_VISIBLE_DEVICES で1台だけ見せ、その 0 番を使う
+    // （`auto` は iGPU を選ぶことがある）。
+    let gpu = if use_gpu && device_override.is_none() {
+        apply_ggml_vulkan_device(&mut cmd, paths.nemo_backend(), ggml_gpu_uuid)
+    } else {
+        None
+    };
+    let device_arg = device_override.unwrap_or_else(|| {
+        match (&gpu, use_gpu) {
+            (Some(_), _) => "vulkan:0",
+            (None, true) => "auto",
+            (None, false) => "cpu",
+        }
+        .to_string()
+    });
     cmd.arg("diarize")
         .arg(&wav)
         .arg("--model")
@@ -13620,7 +13708,11 @@ fn execute_ggml_diarization(
         "diarization_running",
         &format!(
             "Nemotron-3-Diarization で話者分離中です...（{}）",
-            if use_gpu { "GPU" } else { "CPU" }
+            match (&gpu, use_gpu) {
+                (Some(d), _) => d.name.as_str(),
+                (None, true) => "GPU",
+                (None, false) => "CPU",
+            }
         ),
         20.0,
     );
@@ -13652,6 +13744,7 @@ fn execute_ggml_diarization(
             "requestedDevice": device,
             "device": if use_gpu { "cuda" } else { "cpu" },
             "backendDevice": device_arg,
+            "gpu": gpu.as_ref().map(|d| d.name.clone()),
             "segments": segments,
             "summary": summary,
         }
@@ -13684,6 +13777,7 @@ fn execute_transcription_for_engine(
     is_retry: bool,
     hip_device_index: Option<i32>,
     keep_fillers: bool,
+    ggml_gpu_uuid: Option<&str>,
 ) -> Result<SidecarExecResult, String> {
     match engine {
         SpeechEngine::Standard => execute_transcription(
@@ -13712,6 +13806,7 @@ fn execute_transcription_for_engine(
             language,
             low_memory_mode,
             keep_fillers,
+            ggml_gpu_uuid,
         ),
     }
 }
@@ -13730,6 +13825,7 @@ fn execute_diarization_for_engine(
     running_kind: RunningTaskKind,
     progress_event: &str,
     hip_device_index: Option<i32>,
+    ggml_gpu_uuid: Option<&str>,
 ) -> Result<SidecarExecResult, String> {
     match engine {
         SpeechEngine::Standard => execute_diarization(
@@ -13751,6 +13847,7 @@ fn execute_diarization_for_engine(
             num_speakers,
             running_kind,
             progress_event,
+            ggml_gpu_uuid,
         ),
     }
 }
@@ -13762,6 +13859,9 @@ struct GgmlSpeechStatus {
     diarization_ready: bool,
     missing_for_transcription: Vec<String>,
     missing_for_diarization: Vec<String>,
+    /// 実行ファイルのビルド種別（"vulkan" / "cuda" / "cpu"。不明なら null）。GPU 選択欄の表示に使う
+    whisper_backend: Option<&'static str>,
+    nemo_backend: Option<&'static str>,
 }
 
 /// 設定タブ用: ggml エンジンのファイルが揃っているかを返す（ファイルの有無を見るだけで、起動はしない）。
@@ -13779,7 +13879,29 @@ fn check_ggml_speech_status(
         diarization_ready: missing_for_diarization.is_empty(),
         missing_for_transcription,
         missing_for_diarization,
+        whisper_backend: paths.whisper_backend(),
+        nemo_backend: paths.nemo_backend(),
     })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VulkanGpuList {
+    devices: Vec<gpu_select::VulkanDevice>,
+    /// 自動選択で使われる GPU の UUID（GPU が無ければ null）
+    auto_uuid: Option<String>,
+}
+
+/// 設定タブ用: Vulkan の GPU 一覧と、自動選択で使われる GPU を返す。
+/// 列挙は子プロセスで行い、失敗・タイムアウト時は空の一覧を返す（エラーにはしない）。
+#[tauri::command]
+async fn list_vulkan_gpus(refresh: Option<bool>) -> Result<VulkanGpuList, String> {
+    let refresh = refresh.unwrap_or(false);
+    let devices = tauri::async_runtime::spawn_blocking(move || gpu_select::vulkan_devices(refresh))
+        .await
+        .map_err(|e| format!("GPU の列挙に失敗しました: {e}"))?;
+    let auto_uuid = gpu_select::choose_auto(&devices).map(|d| d.uuid.clone());
+    Ok(VulkanGpuList { devices, auto_uuid })
 }
 
 fn apply_diarization_model_env(cmd: &mut Command, app: &AppHandle, script_path: &Path) {
@@ -15973,6 +16095,7 @@ pub fn run() {
             cancel_transcription,
             cancel_diarization,
             check_ggml_speech_status,
+            list_vulkan_gpus,
             cancel_proofread,
             cancel_llm_proofread,
             list_llm_models,

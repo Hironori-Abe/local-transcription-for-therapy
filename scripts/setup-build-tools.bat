@@ -117,8 +117,8 @@ echo Included in installer:
 echo   - App executable (lott.exe, built with --features vulkan)
 echo   - whisper.cpp / NeMo-Speech.cpp Vulkan builds (resources/speech-engines/)
 echo   - llama.cpp llama-server Vulkan build (resources/llama-server-vulkan/)
-echo   - Minimal Python 3.12 for proofreading / encrypted export (resources/python312-vulkan/)
 echo   - LGPL FFmpeg CLI (resources/ffmpeg/)
+echo   - No Python runtime (proofreading / encrypted export / downloads are built into lott.exe)
 echo   - Third-party license texts (licenses/)
 echo.
 echo Not included (downloaded after install via setup UI, no token required):
@@ -152,15 +152,21 @@ if errorlevel 1 (
 for /f "delims=" %%i in ('cargo tauri -V') do echo [OK] %%i
 echo.
 
-:: --- Vulkan: engines / llama-server / minimal Python ---
+:: --- Vulkan: engines / llama-server / build-only Python ---
 if /I not "%BUILD_VARIANT%"=="vulkan" goto :after_vulkan_bundle
-echo [INFO] Preparing Vulkan bundle (engines, llama-server, minimal Python)...
+echo [INFO] Preparing Vulkan bundle (engines, llama-server, build-only Python)...
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1
 if errorlevel 1 (
   echo [ERROR] Failed to prepare the Vulkan bundle.
   goto :hold_error
 )
-set "PYTHON312_DEST=src-tauri\resources\python312-vulkan"
+:: Vulkan 版は Python を同梱しない。下の ffmpeg 取得・ライセンス収集・成果物整理だけに使う
+:: （prepare-vulkan-bundle-windows.ps1 の $BuildPythonDir と同じパス）
+set "PYTHON312_DEST=%LOCALAPPDATA%\lott-ggml-speech-build\python-3.12.10-build"
+if not exist "%PYTHON312_DEST%\python.exe" (
+  echo [ERROR] Build-only Python was not found: %PYTHON312_DEST%\python.exe
+  goto :hold_error
+)
 goto :after_get_pip_vulkan
 
 :after_vulkan_bundle
@@ -279,8 +285,15 @@ set "LICENSE_VENV=.venv312-nvidia"
 if /I "%BUILD_VARIANT%"=="amd" set "LICENSE_VENV=.venv312-amd"
 if /I "%BUILD_VARIANT%"=="cpu" set "LICENSE_VENV=.venv312-cpu"
 if /I "%BUILD_VARIANT%"=="editor" set "LICENSE_VENV=.venv312-cpu"
-if /I "%BUILD_VARIANT%"=="vulkan" set "LICENSE_VENV=src-tauri\resources\python312-vulkan"
-if exist "%LICENSE_VENV%\Lib\site-packages" (
+:: Vulkan 版は Python パッケージを同梱しないので、Rust / Node と手動補完だけを集める
+if /I "%BUILD_VARIANT%"=="vulkan" (
+  "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --no-python --frontend frontend --tauri src-tauri --out licenses
+  if errorlevel 1 (
+    echo [ERROR] Failed to collect third-party license texts.
+    goto :hold_error
+  )
+  echo [OK] Updated licenses\THIRD_PARTY_FULL.txt
+) else if exist "%LICENSE_VENV%\Lib\site-packages" (
   "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --venv "%LICENSE_VENV%" --frontend frontend --tauri src-tauri --out licenses
   if errorlevel 1 (
     echo [ERROR] Failed to collect third-party license texts.

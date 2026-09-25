@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Vulkan 版インストーラーに同梱するもの（ggml エンジン・llama-server・最小限の Python）を用意する。
+    Vulkan 版インストーラーに同梱するもの（ggml エンジン・llama-server）と、ビルド用の Python を用意する。
 
 .DESCRIPTION
     scripts\setup-build-tools.bat --vulkan から呼ばれる。単独でも実行できる。
@@ -10,13 +10,15 @@
     配置先（いずれも git 管理外）:
       src-tauri\resources\speech-engines\{whisper,nemo}\  whisper.cpp / NeMo-Speech.cpp の Vulkan 版（固定 commit からビルド）
       src-tauri\resources\llama-server-vulkan\            公式 llama.cpp b10075 Vulkan 版（SHA-256 検証）から llama-server に必要なファイルだけ
-      src-tauri\resources\python312-vulkan\               Python 3.12 embeddable と、校正・暗号化保存・Gemma 取得に使うパッケージ
+      %LOCALAPPDATA%\lott-ggml-speech-build\python-<版>-build\  ビルド用の Python 3.12 embeddable（同梱しない）
 
+    - Vulkan 版は Python を同梱しない（校正・暗号化保存・モデル取得はすべて Rust）。
+      ビルド用の Python は setup-build-tools.bat が ffmpeg 取得・ライセンス収集・成果物整理に使う（標準ライブラリのみ）
     - モデルは同梱しない（初回起動後にアプリのセットアップ画面から取得する）
     - VC++ ランタイム（MSVCP140 など）を各実行ファイルの隣へ置く。VC++ 再頒布パッケージが入っていない PC でも動かすため
     - ネットワークを使うのはこのビルド準備の時だけ
 
-    前提: scripts\setup-ggml-speech-windows.ps1 と同じ（VS 2022 Build Tools、Git、LunarG Vulkan SDK）、Python 3.12（py -3.12）
+    前提: scripts\setup-ggml-speech-windows.ps1 と同じ（VS 2022 Build Tools、Git、LunarG Vulkan SDK）
 #>
 [CmdletBinding()]
 param(
@@ -30,8 +32,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Resources = Join-Path $RepoRoot 'src-tauri\resources'
 $EnginesDir = Join-Path $Resources 'speech-engines'
 $LlamaDir = Join-Path $Resources 'llama-server-vulkan'
-$PythonDir = Join-Path $Resources 'python312-vulkan'
 $Work = Join-Path $env:LOCALAPPDATA 'lott-ggml-speech-build'
+# 旧版で同梱していた Python（v0.9.9 開発中まで）。残っていれば消す
+$LegacyPythonDir = Join-Path $Resources 'python312-vulkan'
 
 # 公式 llama.cpp b10075 Vulkan 版（CUDA 版の同梱・CPU 版と同じビルド番号）
 $LlamaBuild = 'b10075'
@@ -43,6 +46,8 @@ $LlamaFiles = @('llama-server.exe', 'llama-server-impl.dll', 'llama-common.dll',
 
 $PythonVersion = '3.12.10'
 $PythonZipUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
+# setup-build-tools.bat がこのパスを参照する。変えるときは両方を直す
+$BuildPythonDir = Join-Path $Work "python-$PythonVersion-build"
 
 function Log([string]$Message) { Write-Host "[vulkan-bundle] $Message" }
 
@@ -115,32 +120,24 @@ if (-not $SkipLlama) {
     Remove-Item -Recurse -Force $extract
 }
 
-# ---- 3. Python（校正・暗号化保存・Gemma 取得用の最小構成） ----------------------
-if (-not $SkipPython) {
-    Log "Python $PythonVersion embeddable と最小限のパッケージを配置"
-    $tmp = "$PythonDir.tmp"
+# ---- 3. ビルド用 Python（同梱しない。標準ライブラリのみ） ------------------------
+if (Test-Path $LegacyPythonDir) {
+    Log "旧版で同梱していた $LegacyPythonDir を削除"
+    Remove-Item -Recurse -Force $LegacyPythonDir
+}
+if (-not $SkipPython -and -not (Test-Path (Join-Path $BuildPythonDir 'python.exe'))) {
+    Log "ビルド用 Python $PythonVersion embeddable を配置: $BuildPythonDir"
+    $tmp = "$BuildPythonDir.tmp"
     if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
     New-Item -ItemType Directory -Force $tmp | Out-Null
     $zip = Join-Path $Work "python-$PythonVersion-embed-amd64.zip"
     if (-not (Test-Path $zip)) { Get-File $PythonZipUrl $zip }
     Expand-Archive -Path $zip -DestinationPath $tmp
-    # site-packages を使えるようにする（BOM を付けると python312.zip の解決に失敗する）
-    $pth = Join-Path $tmp 'python312._pth'
-    $lines = [IO.File]::ReadAllLines($pth) -replace '^#import site$', 'import site'
-    [IO.File]::WriteAllLines($pth, $lines, [Text.UTF8Encoding]::new($false))
-    # 配布先の Python 3.12 / Windows x64 向けの wheel だけを入れる（ビルド PC の環境に左右されない）
-    $site = Join-Path $tmp 'Lib\site-packages'
-    New-Item -ItemType Directory -Force $site | Out-Null
-    & py -3.12 -m pip install --disable-pip-version-check --no-compile --only-binary=:all: `
-        --platform win_amd64 --python-version 3.12 --implementation cp `
-        --target $site -r (Join-Path $RepoRoot 'python_sidecar\requirements-vulkan.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'Python パッケージの導入に失敗しました（py -3.12 が必要です）。' }
-    if (Test-Path $PythonDir) { Remove-Item -Recurse -Force $PythonDir }
-    Move-Item $tmp $PythonDir
+    Move-Item $tmp $BuildPythonDir
 }
 
 Log '完了'
-foreach ($dir in $EnginesDir, $LlamaDir, $PythonDir) {
+foreach ($dir in $EnginesDir, $LlamaDir) {
     if (Test-Path $dir) {
         $size = (Get-ChildItem -Recurse -File $dir | Measure-Object Length -Sum).Sum / 1MB
         Log ('{0}: {1:N0} MB' -f $dir, $size)

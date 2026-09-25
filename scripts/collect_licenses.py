@@ -380,6 +380,11 @@ def main() -> int:
     ap.add_argument("--frontend", default="frontend")
     ap.add_argument("--tauri", default="src-tauri")
     ap.add_argument("--out", default="licenses")
+    ap.add_argument(
+        "--no-python",
+        action="store_true",
+        help="Python パッケージを同梱しない配布（Vulkan 版）。Python の節を作らない",
+    )
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -395,8 +400,11 @@ def main() -> int:
         if cands:
             site_packages = cands[0]
 
-    print("Python ライセンス収集中 ...")
-    py_e, py_m = collect_python(site_packages)
+    if args.no_python:
+        py_e, py_m = [], []
+    else:
+        print("Python ライセンス収集中 ...")
+        py_e, py_m = collect_python(site_packages)
     print("Rust ライセンス収集中 ...")
     rs_e, rs_m = collect_rust(Path(args.tauri), root)
     print("Node ライセンス収集中 ...")
@@ -407,6 +415,10 @@ def main() -> int:
         ("rust-third-party.txt", "RUST CRATES", rs_e, rs_m),
         ("node-third-party.txt", "NODE (frontend production) DEPENDENCIES", nd_e, nd_m),
     ]
+    if args.no_python:
+        sections = sections[1:]
+        # 前回の収集結果が残っていると、同梱しない Python パッケージの本文まで配布物に入る
+        (out / "python-third-party.txt").unlink(missing_ok=True)
     combined = ["LoTT — 第三者依存 フルライセンス本文（自動収集＋手動補完）", ""]
     for fname, title, e, m in sections:
         body = render(title, e, m)

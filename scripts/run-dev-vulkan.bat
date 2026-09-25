@@ -16,11 +16,7 @@ if not exist "python_sidecar\speech-engines\whisper\bin\whisper-cli.exe" goto :e
 if not exist "python_sidecar\speech-engines\nemo\bin\nemo-speech.exe" goto :err_engines
 if not exist "src-tauri\resources\llama-server-vulkan\llama-server.exe" goto :err_bundle
 
-REM 校正・暗号化保存・Gemma 取得の Python は、インストーラーと同じ最小構成を使う
-set "PYTHON_BIN="
-if exist "src-tauri\resources\python312-vulkan\python.exe" set "PYTHON_BIN=%cd%\src-tauri\resources\python312-vulkan\python.exe"
-if not defined PYTHON_BIN if exist ".venv312-nvidia\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312-nvidia\Scripts\python.exe"
-if not defined PYTHON_BIN goto :err_bundle
+REM Vulkan 版は Python を使わない（校正・暗号化保存・モデル取得はすべて Rust）
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
 
 where npm >nul 2>&1
@@ -32,7 +28,6 @@ echo Waiting 8 seconds for frontend startup...
 timeout /t 8 >nul
 
 echo Starting Tauri dev (Vulkan)...
-echo PYTHON_BIN=%PYTHON_BIN%
 call npm run tauri:dev -- --config tauri.vulkan.dev.windows.override.json --features vulkan
 if errorlevel 1 goto :err_tauri
 goto :hold_success
@@ -43,7 +38,7 @@ echo         powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-
 goto :hold_error
 
 :err_bundle
-echo [ERROR] Vulkan llama-server / Python bundle was not found. Run:
+echo [ERROR] Vulkan llama-server was not found. Run:
 echo         powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines
 goto :hold_error
 

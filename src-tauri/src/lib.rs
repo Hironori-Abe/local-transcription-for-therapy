@@ -26,6 +26,9 @@ use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 mod ggml_speech;
 use ggml_speech::{GgmlSpeechPaths, SpeechEngine};
 mod gpu_select;
+mod export_crypto;
+mod llm_proofread;
+mod llm_overall_proofread;
 pub use gpu_select::{print_vulkan_devices, LIST_VULKAN_DEVICES_ARG};
 
 #[cfg(target_os = "linux")]
@@ -1843,7 +1846,7 @@ const GEMMA_12B_LLM_MODEL_DIR: &str = "gemma-4-12b-it";
 const GEMMA_12B_MAIN_GGUF_FILENAME: &str = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_12B_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-12B-it.gguf";
 
-/// 校正AIモデルの選択肢。既定は E4b（標準）。B12（高精度）は CUDA 版のみ。
+/// 校正AIモデルの選択肢。既定は E4b（標準）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GemmaTier {
     E4b,
@@ -1877,6 +1880,75 @@ impl GemmaTier {
         }
     }
 }
+
+/// Gemma と ggml 音声モデルの取得で共用する固定ファイル定義。
+#[derive(Clone, Copy)]
+struct PinnedDownloadFile {
+    component: &'static str,
+    label: &'static str,
+    file: &'static str,
+    url: &'static str,
+    sha256: &'static str,
+    size: u64,
+}
+
+#[derive(Clone, Copy)]
+struct GemmaDownloadFile {
+    tier: GemmaTier,
+    is_mtp: bool,
+    pinned: PinnedDownloadFile,
+}
+
+const GEMMA_GGUF_DOWNLOAD_FILES: [GemmaDownloadFile; 4] = [
+    GemmaDownloadFile {
+        tier: GemmaTier::E4b,
+        is_mtp: false,
+        pinned: PinnedDownloadFile {
+            component: "gemma_gguf",
+            label: "Gemma 4 E4B QAT UD-Q4_K_XL",
+            file: GEMMA_MAIN_GGUF_FILENAME,
+            url: "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/8c5a9e4fd5482e2be20fe0bf013b4c262a8f4265/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+            sha256: "df0fd4ee07072c607c29a0a1cb4f98918426cca12f45a2776bdd6ee6d09a4de3",
+            size: 4_215_695_776,
+        },
+    },
+    GemmaDownloadFile {
+        tier: GemmaTier::E4b,
+        is_mtp: true,
+        pinned: PinnedDownloadFile {
+            component: "gemma_mtp_gguf",
+            label: "Gemma 4 E4B MTP",
+            file: GEMMA_MTP_GGUF_FILENAME,
+            url: "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/8c5a9e4fd5482e2be20fe0bf013b4c262a8f4265/mtp-gemma-4-E4B-it.gguf",
+            sha256: "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
+            size: 59_678_016,
+        },
+    },
+    GemmaDownloadFile {
+        tier: GemmaTier::B12,
+        is_mtp: false,
+        pinned: PinnedDownloadFile {
+            component: "gemma_12b",
+            label: "Gemma 4 12B QAT UD-Q4_K_XL",
+            file: GEMMA_12B_MAIN_GGUF_FILENAME,
+            url: "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/980b060c40a8539ac159e0501a3e0f66a6365af3/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+            sha256: "90fd44e29e0d7cffeb0fd00dc73cfdab9ed0b0e95306ecf7821ea634c940c370",
+            size: 6_716_356_800,
+        },
+    },
+    GemmaDownloadFile {
+        tier: GemmaTier::B12,
+        is_mtp: true,
+        pinned: PinnedDownloadFile {
+            component: "gemma_12b",
+            label: "Gemma 4 12B MTP",
+            file: GEMMA_12B_MTP_GGUF_FILENAME,
+            url: "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/980b060c40a8539ac159e0501a3e0f66a6365af3/mtp-gemma-4-12B-it.gguf",
+            sha256: "fcb35dea42c71333db904cee11baac525c9ef872818ee3753f6cb156f3c6f4f6",
+            size: 253_708_800,
+        },
+    },
+];
 
 fn gemma_llm_relative_dir(tier: GemmaTier) -> PathBuf {
     PathBuf::from("python_sidecar")
@@ -4431,6 +4503,12 @@ fn kill_process_tree_by_pid(pid: u32) -> Result<(), String> {
 fn request_cancel(kind: RunningTaskKind) -> Result<bool, String> {
     let pid = get_running_pid(kind);
     if pid == 0 {
+        if matches!(kind, RunningTaskKind::LlmProofread)
+            && LLM_PROOFREAD_ACTIVE.load(Ordering::SeqCst)
+        {
+            set_cancel_requested(kind, true);
+            return Ok(true);
+        }
         return Ok(false);
     }
     set_cancel_requested(kind, true);
@@ -5339,14 +5417,8 @@ fn get_python_bin(_app: &AppHandle) -> String {
         }
 
         if let Ok(resource_dir) = _app.path().resource_dir() {
-            // Vulkan 版は校正・暗号化保存・Gemma 取得に使う最小限のパッケージを入れた Python を
-            // 別ディレクトリに同梱する（初回セットアップで pip を使わない）。
-            let subdirs: &[&str] = if is_vulkan_build(_app) {
-                &["resources/python312-vulkan", "python312-vulkan"]
-            } else {
-                &["resources/python312", "python312"]
-            };
-            for subdir in subdirs {
+            // Vulkan 版は Python を同梱しない（校正・暗号化保存・モデル取得はすべて Rust）。
+            for subdir in ["resources/python312", "python312"] {
                 let bundled = resource_dir.join(subdir).join("python.exe");
                 if bundled.exists() {
                     return bundled.to_string_lossy().to_string();
@@ -5560,15 +5632,20 @@ fn is_usable_python_bin_candidate(value: &str) -> bool {
 
 #[tauri::command]
 fn save_transcription_json(
-    app: AppHandle,
     request: SaveTranscriptionJsonRequest,
 ) -> Result<(), String> {
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        // Write temp JSON, then have Python create AES-256 ZIP via pyzipper
+        // 一時 JSON を Rust で AES-256 ZIP に格納する。
         let temp_path = format!("{}.tmp", request.path);
         fs::write(&temp_path, &request.content)
             .map_err(|e| format!("一時ファイル書き込みに失敗しました: {e}"))?;
-        let result = encrypt_json_to_zip(&app, &temp_path, &request.path, pw);
+        let arcname = encrypted_export_arcname(&request.path, ".json")?;
+        let result = export_crypto::write_aes_zip(
+            Path::new(&temp_path),
+            Path::new(&request.path),
+            &arcname,
+            pw,
+        );
         let _ = fs::remove_file(&temp_path);
         result
     } else {
@@ -5743,7 +5820,6 @@ fn build_transcription_srt(rows: &[SaveTranscriptionSrtRow]) -> String {
 
 #[tauri::command]
 fn save_transcription_srt(
-    app: AppHandle,
     request: SaveTranscriptionSrtRequest,
 ) -> Result<(), String> {
     let content = build_transcription_srt(&request.rows);
@@ -5752,7 +5828,13 @@ fn save_transcription_srt(
         let temp_path = format!("{}.tmp", request.path);
         fs::write(&temp_path, content.as_bytes())
             .map_err(|e| format!("一時SRTファイルの書き込みに失敗しました: {e}"))?;
-        let result = encrypt_srt_to_zip(&app, &temp_path, &request.path, pw);
+        let arcname = encrypted_export_arcname(&request.path, ".srt")?;
+        let result = export_crypto::write_aes_zip(
+            Path::new(&temp_path),
+            Path::new(&request.path),
+            &arcname,
+            pw,
+        );
         let _ = fs::remove_file(&temp_path);
         result
     } else {
@@ -5829,7 +5911,6 @@ fn install_diarization_model_impl(
 
 #[tauri::command]
 fn save_transcription_docx(
-    app: AppHandle,
     request: SaveTranscriptionDocxRequest,
 ) -> Result<(), String> {
     const DOCX_TIME_COL_W: usize = 1200;
@@ -5972,7 +6053,7 @@ fn save_transcription_docx(
         .map_err(|e| format!("DOCX 生成の完了に失敗しました: {e}"))?;
 
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        if let Err(e) = encrypt_office_file(&app, &request.path, pw) {
+        if let Err(e) = export_crypto::encrypt_ooxml_in_place(Path::new(&request.path), pw) {
             let _ = fs::remove_file(&request.path);
             return Err(e);
         }
@@ -5983,7 +6064,6 @@ fn save_transcription_docx(
 
 #[tauri::command]
 fn save_transcription_xlsx(
-    app: AppHandle,
     request: SaveTranscriptionXlsxRequest,
 ) -> Result<(), String> {
     let content_types_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -6098,7 +6178,7 @@ fn save_transcription_xlsx(
         .map_err(|e| format!("XLSX 生成の完了に失敗しました: {e}"))?;
 
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        if let Err(e) = encrypt_office_file(&app, &request.path, pw) {
+        if let Err(e) = export_crypto::encrypt_ooxml_in_place(Path::new(&request.path), pw) {
             let _ = fs::remove_file(&request.path);
             return Err(e);
         }
@@ -6212,82 +6292,18 @@ impl Drop for TempFileGuard {
     }
 }
 
-fn run_encrypt_script(app: &AppHandle, args: &[&str], password: &str) -> Result<(), String> {
-    use std::io::Write;
-
-    let script_path = resolve_encrypt_office_script_path(app)?;
-    let python_bin = get_python_bin(app);
-
-    let mut cmd = Command::new(&python_bin);
-    apply_windows_no_window(&mut cmd);
-    configure_python_command(app, &python_bin, &mut cmd);
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg(&script_path);
-    for arg in args {
-        cmd.arg(arg);
-    }
-    // パスワードはコマンドライン引数ではなく stdin 経由で渡す。Windows では同一
-    // ユーザーの他プロセスが実行中プロセスの引数（コマンドライン）を参照できるため、
-    // PII 保護対象である暗号化パスワードを argv に載せない。
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("暗号化スクリプトの起動に失敗しました: {e}"))?;
-
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "暗号化スクリプトの stdin 取得に失敗しました。".to_string())?;
-        stdin
-            .write_all(password.as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|e| format!("暗号化パスワードの送信に失敗しました: {e}"))?;
-        // stdin をここで drop して EOF を送る。
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("暗号化スクリプトの実行に失敗しました: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ファイルの暗号化に失敗しました: {stderr}"));
-    }
-
-    Ok(())
+fn encrypted_export_arcname(output_path: &str, extension: &str) -> Result<String, String> {
+    let stem = Path::new(output_path)
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "保存先のファイル名から ZIP 内のファイル名を決められませんでした。ファイル名を確認してください。".to_string())?;
+    Ok(format!("{stem}{extension}"))
 }
 
-fn encrypt_office_file(app: &AppHandle, file_path: &str, password: &str) -> Result<(), String> {
-    run_encrypt_script(app, &["office", file_path], password)
-}
-
-fn encrypt_json_to_zip(
-    app: &AppHandle,
-    json_temp: &str,
-    zip_path: &str,
-    password: &str,
-) -> Result<(), String> {
-    run_encrypt_script(app, &["json", json_temp, zip_path], password)
-}
-
-fn encrypt_srt_to_zip(
-    app: &AppHandle,
-    srt_temp: &str,
-    zip_path: &str,
-    password: &str,
-) -> Result<(), String> {
-    run_encrypt_script(app, &["srt", srt_temp, zip_path], password)
-}
-
-// ─── Audio streaming server ──────────────────────────────────────────────────
 // A minimal HTTP/1.1 server bound to 127.0.0.1 that serves local audio files
-// with Range request support.  This lets GStreamer (WebKitGTK media backend)
-// seek by making byte-range requests — something blob:// URLs cannot provide.
+// with Range request support. This lets GStreamer (WebKitGTK media backend)
+// seek by making byte-range requests, which blob URLs cannot provide.
 
 struct AudioStreamServer {
     port: u16,
@@ -10075,16 +10091,13 @@ fn proofread_transcription_llm_blocking_with_kind(
     let backend = request.backend.as_deref().unwrap_or("llama_cpp");
     let is_llama_server = backend == "llama_server";
     let is_openai_compatible = backend == "openai_compatible";
-    let is_llama_cpp = backend == "llama_cpp" || backend == "llama_cpp_rocm";
-
-    if !is_llama_cpp && !is_llama_server && !is_openai_compatible {
+    if !is_llama_server && !is_openai_compatible {
         return Ok(ProofreadTranscriptionResponse {
             success: false,
             result: None,
             error_message: Some(format!("未対応の LLM バックエンドです: {backend}")),
         });
     }
-
     if is_openai_compatible && !local_llm_apps_enabled(&app) {
         return Ok(ProofreadTranscriptionResponse {
             success: false,
@@ -10092,13 +10105,8 @@ fn proofread_transcription_llm_blocking_with_kind(
             error_message: Some(LOCAL_LLM_APPS_DISABLED_MESSAGE.to_string()),
         });
     }
-
-    if !is_llama_server && !is_openai_compatible && request.model_path.is_empty() {
-        return Ok(ProofreadTranscriptionResponse {
-            success: false,
-            result: None,
-            error_message: Some("LLMモデルのパスが指定されていません。".to_string()),
-        });
+    if is_llama_server && llm_port == 0 {
+        return Err("管理下の llama-server が起動していません。先にエンジンを起動してください。".to_string());
     }
 
     let openai_base_url = if is_openai_compatible {
@@ -10128,230 +10136,89 @@ fn proofread_transcription_llm_blocking_with_kind(
         None
     };
 
-    // openai_compatible の場合、モデルが既にロード済みかを確認する。
-    // 未ロードの場合は校正完了・中止・アプリ終了時にアンロードを試みる。
-    let openai_unload_info: Option<OpenAiUnloadTarget> = if is_openai_compatible {
-        let base = openai_base_url.as_deref().unwrap_or("");
-        let model = openai_model.as_deref().unwrap_or("");
-        prepare_openai_unload_info(base, model, &app).inspect(|info| {
+    let openai_unload_info = if is_openai_compatible {
+        let info = prepare_openai_unload_info(
+            openai_base_url.as_deref().unwrap_or(""),
+            openai_model.as_deref().unwrap_or(""),
+            &app,
+        );
+        if let Some(info) = &info {
             if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
                 *guard = Some(info.clone());
             }
-        })
+        }
+        info
     } else {
         None
     };
 
-    let script_path = resolve_llm_proofread_script_path(&app)?;
-
-    let python_bin = get_python_bin(&app);
-
-    // セグメントを一時JSONファイルに書き出す
-    let segments_json = serialize_proofread_segments(&request.segments);
-    let segments_json_str = serde_json::to_string(&segments_json)
-        .map_err(|e| format!("JSON シリアライズに失敗: {e}"))?;
-
-    let tmp_dir = private_llm_temp_dir(&app)?;
-    let invocation_id = LLM_PROOFREAD_INVOCATION_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = tmp_dir.join(format!(
-        "lott_llm_segments_{}_{}.json",
-        std::process::id(),
-        invocation_id
-    ));
-    // 最初のファイル作成直後からガードし、後続ファイルの作成失敗時にも残さない。
-    let mut _tmp_guard = TempFileGuard::new();
-    write_private_temp_file(&tmp_path, segments_json_str.as_bytes())?;
-    _tmp_guard.push(tmp_path.clone());
-
-    let system_prompt_tmp_path = request
-        .system_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|prompt| !prompt.is_empty())
-        .map(|prompt| {
-            let path = tmp_dir.join(format!(
-                "lott_llm_system_prompt_{}_{}.txt",
-                std::process::id(),
-                invocation_id
-            ));
-            write_private_temp_file(&path, prompt.as_bytes())
-                .map_err(|e| format!("LLM システムプロンプトの一時保存に失敗しました: {e}"))?;
-            Ok::<PathBuf, String>(path)
-        })
-        .transpose()?;
-
-    // 会話本文/システムプロンプトを含む一時ファイルは、以降のどの早期 return でも
-    // 確実に削除されるよう RAII ガードへ登録する（spawn 失敗・パイプ取得失敗を含む）。
-    if let Some(ref path) = system_prompt_tmp_path {
-        _tmp_guard.push(path.clone());
-    }
-
-    let n_gpu_layers = request.n_gpu_layers.unwrap_or(-1);
-    let n_ctx = request.n_ctx.unwrap_or(16384).clamp(4096, 131072);
-    let max_batch = request.max_batch.unwrap_or(40).clamp(1, 100);
-
-    let mut cmd = Command::new(&python_bin);
-    apply_windows_no_window(&mut cmd);
-    configure_python_command(&app, &python_bin, &mut cmd);
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg(&script_path)
-        .arg("--segments-json-path")
-        .arg(&tmp_path)
-        .arg("--backend")
-        .arg(backend)
-        .arg("--n-ctx")
-        .arg(n_ctx.to_string())
-        .arg("--max-batch")
-        .arg(max_batch.to_string())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if is_llama_server {
-        if llm_port == 0 {
-            return Err(
-                "管理下の llama-server が起動していません。先にエンジンを起動してください。"
-                    .to_string(),
-            );
+    let parallel = if is_llama_server {
+        let state = app.state::<LlmServer>();
+        if state.mode.load(Ordering::Relaxed) == 1 {
+            state.parallel.load(Ordering::Relaxed).max(1) as usize
+        } else {
+            1
         }
-        // 内蔵経路は Rust が管理する loopback の llama-server に限定する。
-        // URL・モデル名をリクエストや永続設定から受け取らないことで、外部推論先への
-        // 会話データ送信や stale な旧設定の再利用を防ぐ。
-        let url = format!("http://127.0.0.1:{llm_port}");
-        cmd.arg("--server-url").arg(url);
-        cmd.arg("--server-model").arg(LLM_DEFAULT_MODEL);
-        // CUDA llama-server (mode==1) のときだけ、起動時に決めたスロット数 (-np) と同じ
-        // 同時送信数で並列ディスパッチし GPU のアイドルを埋める。
-        // mode==0（停止中）や逐次経路では --parallel を渡さず既定=1 のままにする。
-        let llm_state = app.state::<LlmServer>();
-        if llm_state.mode.load(Ordering::Relaxed) == 1 {
-            let np = llm_state.parallel.load(Ordering::Relaxed).max(1);
-            cmd.arg("--parallel").arg(np.to_string());
-        }
-    } else if is_openai_compatible {
-        cmd.arg("--openai-base-url")
-            .arg(openai_base_url.as_deref().unwrap_or(""))
-            .arg("--openai-model")
-            .arg(openai_model.as_deref().unwrap_or(""));
     } else {
-        cmd.arg("--model-path")
-            .arg(&request.model_path)
-            .arg("--n-gpu-layers")
-            .arg(n_gpu_layers.to_string());
-    }
-    if let Some(path) = &system_prompt_tmp_path {
-        cmd.arg("--system-prompt-path").arg(path);
-    }
-    if let Some(ref pt) = request.prompt_type {
-        if pt == "gemma4" || pt == "original" {
-            cmd.arg("--prompt-type").arg(pt);
-        }
-    }
+        1
+    };
+    let prompt_type = request
+        .prompt_type
+        .as_deref()
+        .filter(|prompt_type| matches!(*prompt_type, "gemma4" | "original"))
+        .unwrap_or("gemma4")
+        .to_string();
+    let base_url = if is_llama_server {
+        format!("http://127.0.0.1:{llm_port}")
+    } else {
+        openai_base_url.clone().unwrap_or_default()
+    };
+    let model = if is_llama_server {
+        LLM_DEFAULT_MODEL.to_string()
+    } else {
+        openai_model.clone().unwrap_or_default()
+    };
+    let options = llm_proofread::Options {
+        base_url,
+        model,
+        provider_label: if is_llama_server {
+            "AI校正エンジン".to_string()
+        } else {
+            "ローカルOpenAI互換API".to_string()
+        },
+        backend_name: backend.to_string(),
+        system_prompt: request.system_prompt.clone(),
+        prompt_type,
+        max_batch_segments: request.max_batch.unwrap_or(40).clamp(1, 100) as usize,
+        parallel,
+        require_model_list: is_llama_server,
+        fallback_to_first_model: is_llama_server,
+        extra_payload: is_llama_server.then(|| serde_json::json!({
+            "chat_template_kwargs": {"enable_thinking": false}
+        })),
+        allow_grammar: is_llama_server,
+    };
 
     emit_progress(
         &app,
         "llm_sidecar_start",
-        "LLM校正サイドカーを起動しています...",
+        "LLM校正処理を開始しています...",
         None,
     );
     emit_progress(
         &app,
         "llm_sidecar_debug",
-        &format!(
-            "backend={backend}, python_bin={python_bin}, script_path={}",
-            script_path.display()
-        ),
+        &format!("backend={backend}, engine=rust"),
         None,
     );
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("LLM proofread sidecar の起動に失敗しました: {e}"))?;
-    set_running_pid(task_kind, child.id());
-
-    let stdout_reader = child
-        .stdout
-        .take()
-        .ok_or_else(|| "stdout パイプ取得に失敗しました。".to_string())?;
-    let stderr_reader = child
-        .stderr
-        .take()
-        .ok_or_else(|| "stderr パイプ取得に失敗しました。".to_string())?;
-
-    let stdout_buf = Arc::new(Mutex::new(String::new()));
-    let stderr_buf = Arc::new(Mutex::new(String::new()));
-
-    let stdout_buf_clone = Arc::clone(&stdout_buf);
-    let stdout_handle = thread::spawn(move || {
-        let reader = BufReader::new(stdout_reader);
-        for line in reader.lines() {
-            if let Ok(text) = line {
-                let mut out = stdout_buf_clone.lock().expect("stdout mutex poisoned");
-                out.push_str(&text);
-                out.push('\n');
-            }
-        }
+    let progress_app = app.clone();
+    let emitter = llm_proofread::Emitter::new(move |payload| {
+        let _ = progress_app.emit("transcription-progress", payload);
     });
+    let cancelled = Arc::new(|| LLM_PROOFREAD_CANCEL_REQUESTED.load(Ordering::SeqCst));
+    let segments = serialize_proofread_segments(&request.segments);
+    let result = llm_proofread::proofread(&segments, options, &emitter, cancelled);
 
-    let stderr_buf_clone = Arc::clone(&stderr_buf);
-    let app_clone = app.clone();
-    let stderr_handle = thread::spawn(move || {
-        let reader = BufReader::new(stderr_reader);
-        for line in reader.lines() {
-            if let Ok(text) = line {
-                if let Some(marker_pos) = text.find("PROGRESS_JSON:") {
-                    let payload = &text[(marker_pos + "PROGRESS_JSON:".len())..];
-                    let payload_trimmed = payload.trim();
-                    if let Ok(json) = serde_json::from_str::<Value>(payload_trimmed) {
-                        let _ = app_clone.emit("transcription-progress", json);
-                    } else {
-                        let mut err = stderr_buf_clone.lock().expect("stderr mutex poisoned");
-                        err.push_str(&text);
-                        err.push('\n');
-                    }
-                } else {
-                    let mut err = stderr_buf_clone.lock().expect("stderr mutex poisoned");
-                    err.push_str(&text);
-                    err.push('\n');
-                }
-            }
-        }
-    });
-
-    let status = match child.wait() {
-        Ok(v) => {
-            clear_running_pid(task_kind);
-            v
-        }
-        Err(e) => {
-            clear_running_pid(task_kind);
-            let _ = std::fs::remove_file(&tmp_path);
-            if let Some(path) = &system_prompt_tmp_path {
-                let _ = std::fs::remove_file(path);
-            }
-            // wait 失敗時もアンロードを試みる
-            if let Some(ref info) = openai_unload_info {
-                try_unload_openai_model(info, llm_port);
-                if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
-                    *guard = None;
-                }
-            }
-            if is_llama_server {
-                let _ = try_stop_cuda_llama_server(&app);
-            }
-            return Err(format!(
-                "LLM proofread sidecar の終了待機に失敗しました: {e}"
-            ));
-        }
-    };
-
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
-    let _ = std::fs::remove_file(&tmp_path);
-    if let Some(path) = &system_prompt_tmp_path {
-        let _ = std::fs::remove_file(path);
-    }
-
-    // サイドカー終了後（成功・中止・失敗すべて）に必ずアンロードを試みる
     if let Some(ref info) = openai_unload_info {
         try_unload_openai_model(info, llm_port);
         if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
@@ -10362,9 +10229,6 @@ fn proofread_transcription_llm_blocking_with_kind(
         let _ = try_stop_cuda_llama_server(&app);
     }
 
-    let stdout = stdout_buf.lock().map(|v| v.clone()).unwrap_or_default();
-    let stderr = stderr_buf.lock().map(|v| v.clone()).unwrap_or_default();
-
     if take_cancel_requested(task_kind) {
         return Ok(ProofreadTranscriptionResponse {
             success: false,
@@ -10372,83 +10236,21 @@ fn proofread_transcription_llm_blocking_with_kind(
             error_message: Some("LLM校正が中止されました。".to_string()),
         });
     }
-
-    let parsed = parse_json_from_mixed_output(&stdout);
-
-    if !status.success() {
-        // 推論中の VRAM 不足（OOM）を stdout/stderr から検出し、検出時はメッセージにマーカーを付与する。
-        // stdout/stderr は SidecarExecResult へムーブされるため、判定は move 前に済ませておく。
-        let oom = text_indicates_vram_oom(&stderr) || text_indicates_vram_oom(&stdout);
-        let tag = |m: String| {
-            if oom && !m.contains(VRAM_OOM_MARKER) {
-                format!("{VRAM_OOM_MARKER} {m}")
-            } else {
-                m
-            }
-        };
-        // Python が JSON エラーを出力していればそのメッセージを優先する
-        let clean_msg = parsed
-            .as_ref()
-            .and_then(|j| j.get("error"))
-            .and_then(|e| e.get("message"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string);
-        if let Some(msg) = clean_msg {
-            return Ok(ProofreadTranscriptionResponse {
+    match result {
+        Ok(items) => Ok(ProofreadTranscriptionResponse {
+            success: true,
+            result: Some(serde_json::json!({"items": items})),
+            error_message: None,
+        }),
+        Err(message) => {
+            let message = tag_vram_oom_if_present(message.clone(), &message, "");
+            Ok(ProofreadTranscriptionResponse {
                 success: false,
                 result: None,
-                error_message: Some(tag(msg)),
-            });
+                error_message: Some(message),
+            })
         }
-        let err_msg = build_detailed_sidecar_error_message(
-            "LLM校正処理に失敗しました。",
-            &python_bin,
-            &SidecarExecResult {
-                status,
-                stdout,
-                stderr,
-            },
-            parsed.as_ref(),
-        );
-        return Ok(ProofreadTranscriptionResponse {
-            success: false,
-            result: None,
-            error_message: Some(tag(err_msg)),
-        });
     }
-
-    let json = parsed.ok_or_else(|| {
-        format!(
-            "LLM校正の出力をパースできませんでした。stdout: {}",
-            stdout.chars().take(300).collect::<String>()
-        )
-    })?;
-
-    let success = json
-        .get("success")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !success {
-        let msg = json
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("LLM校正でエラーが発生しました。")
-            .to_string();
-        return Ok(ProofreadTranscriptionResponse {
-            success: false,
-            result: None,
-            error_message: Some(tag_vram_oom_if_present(msg, &stdout, &stderr)),
-        });
-    }
-
-    let result = json.get("result").cloned();
-    Ok(ProofreadTranscriptionResponse {
-        success: true,
-        result,
-        error_message: None,
-    })
 }
 
 fn safe_normalize_text(text: &str) -> String {
@@ -11275,6 +11077,44 @@ mod tests {
             assert!(model.url.ends_with(model.file));
             assert!(model.size > 0);
         }
+    }
+
+    #[test]
+    fn gemma_gguf_model_table_is_pinned_and_verifiable() {
+        assert_eq!(GEMMA_GGUF_DOWNLOAD_FILES.len(), 4);
+        for model in GEMMA_GGUF_DOWNLOAD_FILES.iter() {
+            let file = &model.pinned;
+            assert!(matches!(
+                file.component,
+                "gemma_gguf" | "gemma_mtp_gguf" | "gemma_12b"
+            ));
+            assert!(file.url.starts_with("https://huggingface.co/unsloth/"));
+            let revision = file
+                .url
+                .split("/resolve/")
+                .nth(1)
+                .and_then(|value| value.split('/').next())
+                .unwrap_or("");
+            assert_eq!(revision.len(), 40, "{}", file.url);
+            assert_eq!(file.url.rsplit('/').next(), Some(file.file));
+            assert_eq!(file.sha256.len(), 64);
+            assert!(file
+                .sha256
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+            assert!(file.size > 0);
+        }
+        assert_eq!(
+            GEMMA_GGUF_DOWNLOAD_FILES
+                .iter()
+                .find(|model| model.tier == GemmaTier::E4b && model.is_mtp)
+                .map(|model| model.pinned.component),
+            Some("gemma_mtp_gguf")
+        );
+        assert!(GEMMA_GGUF_DOWNLOAD_FILES
+            .iter()
+            .filter(|model| model.tier == GemmaTier::B12)
+            .all(|model| model.pinned.component == "gemma_12b"));
     }
 
     #[test]
@@ -15003,15 +14843,6 @@ fn resolve_named_sidecar_script_path(
     ))
 }
 
-fn resolve_encrypt_office_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    resolve_named_sidecar_script_path(
-        app,
-        "encrypt_office_cli.py",
-        "暗号化スクリプトが見つかりません",
-        true,
-    )
-}
-
 fn resolve_sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     resolve_named_sidecar_script_path(
         app,
@@ -15040,15 +14871,6 @@ fn resolve_diarize_script_path(app: &AppHandle) -> Result<PathBuf, String> {
         app,
         "diarize_cli.py",
         "Diarization sidecar スクリプトが見つかりません",
-        true,
-    )
-}
-
-fn resolve_llm_proofread_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    resolve_named_sidecar_script_path(
-        app,
-        "proofread_llm_cli.py",
-        "LLM proofread sidecar スクリプトが見つかりません",
         true,
     )
 }
@@ -15162,6 +14984,143 @@ fn run_overall_proofread_blocking(
     } else {
         None
     };
+
+    if is_llama_server || is_openai_compatible {
+        if is_llama_server && llm_port == 0 {
+            return Err(
+                "管理下の llama-server が起動していません。先にエンジンを起動してください。"
+                    .to_string(),
+            );
+        }
+
+        let parallel = if is_llama_server {
+            let state = app.state::<LlmServer>();
+            if state.mode.load(Ordering::Relaxed) == 1 {
+                state.parallel.load(Ordering::Relaxed).max(1) as usize
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+        let prompt_type = request
+            .prompt_type
+            .as_deref()
+            .filter(|prompt_type| matches!(*prompt_type, "gemma4" | "original"))
+            .unwrap_or("gemma4")
+            .to_string();
+        let prompt_templates_dir = resolve_overall_prompt_templates_dir(&app, &prompt_type);
+        let base_url = if is_llama_server {
+            format!("http://127.0.0.1:{llm_port}")
+        } else {
+            openai_base_url.clone().unwrap_or_default()
+        };
+        let model = if is_llama_server {
+            LLM_DEFAULT_MODEL.to_string()
+        } else {
+            openai_model.clone().unwrap_or_default()
+        };
+        let options = llm_overall_proofread::Options {
+            base_url,
+            model,
+            provider_label: if is_llama_server {
+                "AI校正エンジン".to_string()
+            } else {
+                "ローカルOpenAI互換API".to_string()
+            },
+            system_prompt: request.system_prompt.clone(),
+            prompt_type,
+            parallel,
+            require_model_list: is_llama_server,
+            fallback_to_first_model: is_llama_server,
+            extra_payload: is_llama_server.then(|| serde_json::json!({
+                "chat_template_kwargs": {"enable_thinking": false}
+            })),
+            prompt_templates_dir,
+        };
+
+        emit_progress(
+            &app,
+            "llm_sidecar_start",
+            "全体校正サイドカーを起動しています...",
+            None,
+        );
+        emit_progress(
+            &app,
+            "overall_proofread",
+            &format!(
+                "全体校正を開始します（セグメント数: {}）",
+                request.segments.len()
+            ),
+            None,
+        );
+        emit_progress(
+            &app,
+            "llm_sidecar_debug",
+            &format!("backend={backend}, engine=rust"),
+            None,
+        );
+        let progress_app = app.clone();
+        let emitter = llm_proofread::Emitter::new(move |payload| {
+            let _ = progress_app.emit("transcription-progress", payload);
+        });
+        let cancelled = Arc::new(|| LLM_PROOFREAD_CANCEL_REQUESTED.load(Ordering::SeqCst));
+        let segments = serialize_proofread_segments(&request.segments);
+        let result = llm_overall_proofread::proofread(&segments, options, &emitter, cancelled);
+
+        if let Some(ref info) = openai_unload_info {
+            try_unload_openai_model(info, llm_port);
+            if let Ok(mut guard) = app.state::<OpenAiUnloadState>().0.lock() {
+                *guard = None;
+            }
+        }
+        if is_llama_server {
+            let _ = try_stop_cuda_llama_server(&app);
+        }
+
+        if take_cancel_requested(RunningTaskKind::LlmProofread) {
+            return Ok(OverallProofreadResponse {
+                success: false,
+                result: None,
+                error_message: Some("全体校正が中止されました。".to_string()),
+            });
+        }
+
+        return match result {
+            Ok(result_val) => {
+                let items = result_val
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let changed_count = result_val
+                    .get("changedCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let unchanged_count = result_val
+                    .get("unchangedCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                Ok(OverallProofreadResponse {
+                    success: true,
+                    result: Some(OverallProofreadResult {
+                        items,
+                        changed_count,
+                        unchanged_count,
+                    }),
+                    error_message: None,
+                })
+            }
+            Err(message) => {
+                let message = tag_vram_oom_if_present(message.clone(), &message, "");
+                Ok(OverallProofreadResponse {
+                    success: false,
+                    result: None,
+                    error_message: Some(message),
+                })
+            }
+        };
+    }
 
     let script_path = resolve_overall_proofread_script_path(&app)?;
 
@@ -15595,15 +15554,6 @@ fn resolve_download_whisper_model_script_path(app: &AppHandle) -> Result<PathBuf
     )
 }
 
-fn resolve_download_gemma_gguf_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    resolve_named_sidecar_script_path(
-        app,
-        "download_gemma_gguf_cli.py",
-        "Gemmaダウンロードスクリプトが見つかりません",
-        true,
-    )
-}
-
 fn resolve_download_diarization_model_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     resolve_named_sidecar_script_path(
         app,
@@ -15626,48 +15576,40 @@ fn get_gemma_tier_target_dir(app: &AppHandle, tier: GemmaTier) -> PathBuf {
     gemma_llm_relative_dir(tier)
 }
 
-fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
-    let script_path = resolve_download_gemma_gguf_script_path(app)
-        .map_err(|e| format!("Gemmaダウンロードスクリプトが見つかりません: {e}"))?;
-    let target_dir = get_gemma_tier_target_dir(app, GemmaTier::E4b);
-
-    let python_bin = get_python_bin(app);
-
-    let mut cmd = Command::new(&python_bin);
-    apply_windows_no_window(&mut cmd);
-    configure_python_command(app, &python_bin, &mut cmd);
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg(&script_path)
-        .arg(target_dir.to_string_lossy().as_ref());
-    if app.config().identifier.contains("amd") {
-        cmd.arg("--skip-mtp");
+fn gemma_download_file_is_installed(app: &AppHandle, model: &GemmaDownloadFile) -> bool {
+    match (model.tier, model.is_mtp) {
+        (GemmaTier::E4b, false) => get_gemma_gguf_info(app).0,
+        (GemmaTier::E4b, true) => get_gemma_mtp_gguf_info(app).0,
+        (GemmaTier::B12, false) => resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some(),
+        (GemmaTier::B12, true) => resolve_gemma_mtp_path_for_tier(app, GemmaTier::B12).is_some(),
     }
-
-    run_download_streaming(app, &mut cmd, "gemma_gguf").map(|_| ())
 }
 
-/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする（large-v3 と同じ後付け方式）。
-/// NVIDIA は CUDA 同梱 llama-server、AMD は Vulkan llama-server 直起動で 12B+MTP を使うため、
-/// 本体 GGUF と MTP ドラフトの両方を取得する（--skip-mtp は付けない）。
+fn download_gemma_tier_blocking(app: &AppHandle, tier: GemmaTier) -> Result<(), String> {
+    let target_dir = get_gemma_tier_target_dir(app, tier);
+    let skip_mtp = tier == GemmaTier::E4b && app.config().identifier.contains("amd");
+
+    for model in GEMMA_GGUF_DOWNLOAD_FILES
+        .iter()
+        .filter(|model| model.tier == tier && !(skip_mtp && model.is_mtp))
+    {
+        // 完了判定は既存の探索関数に任せ、古い revision のファイルも再取得しない。
+        if gemma_download_file_is_installed(app, model) {
+            continue;
+        }
+        let dest = target_dir.join(model.pinned.file);
+        download_pinned_file_blocking(app, &model.pinned, &dest)?;
+    }
+    Ok(())
+}
+
+fn download_gemma_gguf_blocking(app: &AppHandle) -> Result<(), String> {
+    download_gemma_tier_blocking(app, GemmaTier::E4b)
+}
+
+/// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする。
 fn download_gemma_12b_blocking(app: &AppHandle) -> Result<(), String> {
-    let script_path = resolve_download_gemma_gguf_script_path(app)
-        .map_err(|e| format!("Gemmaダウンロードスクリプトが見つかりません: {e}"))?;
-    let target_dir = get_gemma_tier_target_dir(app, GemmaTier::B12);
-
-    let python_bin = get_python_bin(app);
-
-    let mut cmd = Command::new(&python_bin);
-    apply_windows_no_window(&mut cmd);
-    configure_python_command(app, &python_bin, &mut cmd);
-    cmd.env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg(&script_path)
-        .arg(target_dir.to_string_lossy().as_ref())
-        .arg("--model")
-        .arg("12b");
-
-    run_download_streaming(app, &mut cmd, "gemma_12b").map(|_| ())
+    download_gemma_tier_blocking(app, GemmaTier::B12)
 }
 
 fn emit_setup_progress_bytes(
@@ -15754,41 +15696,63 @@ fn spawn_resumable_download(url: &str, part_file: &Path) -> Result<Child, String
     }
 }
 
-/// Vulkan 版の ggml モデルを1つ取得する。固定 revision の URL から `.part` へ取得し、
-/// サイズと SHA-256 が一致したものだけを配置する（一致しなければ消して失敗にする）。
-fn download_ggml_model_blocking(
+/// 固定 URL から `.part` へ取得し、サイズと SHA-256 が一致したものだけを配置する。
+fn download_pinned_file_blocking(
     app: &AppHandle,
-    model: &ggml_speech::GgmlModelFile,
-    models_root: &Path,
+    model: &PinnedDownloadFile,
+    dest: &Path,
 ) -> Result<(), String> {
-    let dest = model.path(models_root);
-    if model.is_installed(models_root) {
-        return Ok(());
-    }
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("保存先フォルダを作成できませんでした（{}）: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "{}の保存先フォルダを作成できませんでした（{}）: {e}。空き容量とアクセス権を確認してください。",
+                model.label,
+                parent.display()
+            )
+        })?;
     }
     let part = dest.with_file_name(format!("{}.part", model.file));
     let part_len = || part.metadata().map(|m| m.len()).unwrap_or(0);
     if part_len() > model.size {
-        let _ = fs::remove_file(&part);
+        fs::remove_file(&part).map_err(|e| {
+            format!(
+                "{}の中断ファイルを削除できませんでした: {e}。ファイルを閉じてから再実行してください。",
+                model.label
+            )
+        })?;
     }
 
     let message = format!("{}をダウンロード中...", model.label);
+    emit_setup_progress_bytes(
+        app,
+        model.component,
+        "downloading",
+        &message,
+        part_len(),
+        model.size,
+    );
     if part_len() < model.size {
-        emit_setup_progress_bytes(app, model.component, "downloading", &message, part_len(), model.size);
-        let mut child = spawn_resumable_download(model.url, &part)?;
-        let mut last_emitted = 0_u64;
+        let mut child = spawn_resumable_download(model.url, &part).map_err(|e| {
+            format!(
+                "{}のダウンロードを開始できませんでした: {e}。curl または PowerShell を利用可能にして再実行してください。",
+                model.label
+            )
+        })?;
+        let mut last_emitted = part_len();
         loop {
             match child
                 .try_wait()
-                .map_err(|e| format!("ダウンロード処理の確認に失敗しました: {e}"))?
+                .map_err(|e| {
+                    format!(
+                        "{}のダウンロード処理を確認できませんでした: {e}。回線と実行環境を確認して再実行してください。",
+                        model.label
+                    )
+                })?
             {
                 Some(status) if status.success() => break,
                 Some(_) => {
                     return Err(format!(
-                        "{}のダウンロードが途中で止まりました。インターネット接続を確認して、もう一度「不足しているファイルをすべてダウンロード」を押してください（続きから再開します）。",
+                        "{}の取得が中断されました（通信または配布元の応答エラー）。回線を確認して再実行してください（curl 利用時は .part から再開します）。",
                         model.label
                     ));
                 }
@@ -15811,28 +15775,71 @@ fn download_ggml_model_blocking(
         }
     }
 
-    emit_setup_progress(
+    let size = part_len();
+    if size != model.size {
+        let _ = fs::remove_file(&part);
+        return Err(format!(
+            "{}の検証に失敗しました（サイズが想定と異なります: {size} / {} bytes）。回線を確認して再ダウンロードしてください。",
+            model.label, model.size
+        ));
+    }
+    emit_setup_progress_bytes(
         app,
         model.component,
         "downloading",
         &format!("{}を検証中...", model.label),
+        size,
+        model.size,
     );
-    let size = part_len();
-    let sha = sha256_file_hex(&part)?;
-    if size != model.size || sha != model.sha256 {
+    let sha = sha256_file_hex(&part).map_err(|e| {
+        format!(
+            "{}を検証できませんでした: {e}。保存先の空き容量とアクセス権を確認して再実行してください。",
+            model.label
+        )
+    })?;
+    if sha != model.sha256 {
         let _ = fs::remove_file(&part);
         return Err(format!(
-            "{}の検証に失敗しました（ファイルが壊れているか、配布元の内容が変わっています）。もう一度ダウンロードしてください。繰り返し失敗する場合は開発者に連絡してください。",
+            "{}の検証に失敗しました（SHA-256 が一致しません）。回線を確認して再ダウンロードしてください。繰り返す場合は配布元の更新有無を確認してください。",
             model.label
         ));
     }
     if dest.exists() {
-        fs::remove_file(&dest)
-            .map_err(|e| format!("既存のファイルを置き換えられませんでした: {e}"))?;
+        fs::remove_file(dest).map_err(|e| {
+            format!(
+                "{}の既存ファイルを置き換えられませんでした: {e}。ファイルを閉じてアクセス権を確認してください。",
+                model.label
+            )
+        })?;
     }
-    fs::rename(&part, &dest)
-        .map_err(|e| format!("ダウンロードしたファイルを配置できませんでした: {e}"))?;
+    fs::rename(&part, dest).map_err(|e| {
+        format!(
+            "{}を保存先へ配置できませんでした: {e}。空き容量とアクセス権を確認して再実行してください。",
+            model.label
+        )
+    })?;
     Ok(())
+}
+
+/// Vulkan 版の ggml モデルを1つ取得する。
+fn download_ggml_model_blocking(
+    app: &AppHandle,
+    model: &ggml_speech::GgmlModelFile,
+    models_root: &Path,
+) -> Result<(), String> {
+    let dest = model.path(models_root);
+    if model.is_installed(models_root) {
+        return Ok(());
+    }
+    let pinned = PinnedDownloadFile {
+        component: model.component,
+        label: model.label,
+        file: model.file,
+        url: model.url,
+        sha256: model.sha256,
+        size: model.size,
+    };
+    download_pinned_file_blocking(app, &pinned, &dest)
 }
 
 /// 進捗単位（whisper_turbo / diarization）ごとに、Vulkan 版の ggml モデルをまとめて取得する。
@@ -16599,6 +16606,27 @@ fn resolve_default_overall_proofread_system_prompt_path(
         "resource_dir 解決に失敗",
         "全体校正デフォルトプロンプトが見つかりません",
     )
+}
+
+fn resolve_overall_prompt_templates_dir(
+    app: &AppHandle,
+    prompt_type: &str,
+) -> Option<PathBuf> {
+    let filename = if prompt_type == "gemma4" {
+        "gemma4_overall.txt"
+    } else {
+        "general_overall.txt"
+    };
+    resolve_prompt_template_path(
+        app,
+        "proofread",
+        filename,
+        "カレントディレクトリ解決に失敗",
+        "resource_dir 解決に失敗",
+        "全体校正プロンプトが見つかりません",
+    )
+    .ok()
+    .and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
 fn resolve_bundled_sidecar_script_candidates(

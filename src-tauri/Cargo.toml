@@ -28,6 +28,15 @@ regex = "1"
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 # ダウンロードしたモデルの検証（Vulkan 版のセットアップ）
 sha2 = "0.10"
+# パスワード付き保存（Word / Excel の OOXML Agile 暗号化、JSON / SRT の AES ZIP）を Rust で行う
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hmac = "0.12"
+cfb = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+# zip 0.6 は AES ZIP を書けないため、書き込み専用に 2.x を別名で使う
+zip2 = { package = "zip", version = "2", default-features = false, features = ["aes-crypto", "deflate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -37,6 +46,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

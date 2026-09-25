@@ -109,7 +109,7 @@ scripts\setup-build-tools.bat --vulkan
 ```
 
 - Vulkan 版は identifier `net.gakkousya.lott` を CUDA 版から引き継ぎ（上書きインストールで Gemma を再利用）、feature `vulkan` で見分ける（`is_vulkan_build` / フロントは `buildVariant === 'vulkan'`）
-- 同梱物: `resources/speech-engines`（ggml エンジン）、`resources/llama-server-vulkan`（公式 b10075 Vulkan 版）、`resources/python312-vulkan`（校正・暗号化保存・Gemma 取得用の最小 Python。`python_sidecar/requirements-vulkan.txt`）。いずれも VC++ ランタイムを同梱する
+- 同梱物: `resources/speech-engines`（ggml エンジン）、`resources/llama-server-vulkan`（公式 b10075 Vulkan 版）。いずれも VC++ ランタイムを同梱する。**Python は同梱しない**（行ごとの校正 `llm_proofread.rs`・全体校正 `llm_overall_proofread.rs`・暗号化保存 `export_crypto.rs`・モデル取得はすべて Rust。ビルド時の ffmpeg 取得・ライセンス収集には `%LOCALAPPDATA%\lott-ggml-speech-build` のビルド用 Python を使う）
 - 初回セットアップは whisper.cpp モデル・VAD・Nemotron（Rust で取得。固定 revision・SHA-256 検証・中断再開。トークン不要）と Gemma のみ。Python の pip セットアップは無い
 
 ## Setup and Run (Ubuntu / Linux)
@@ -197,7 +197,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 - ルールベース校正は Tauri/Rust 側で完結する
 - ルールベース校正定義: `src-tauri/resources/proofread/punctuation_rules/`
-- LLM校正は Python sidecar からローカルバックエンド（同梱/DL の llama.cpp llama-server / local OpenAI-compatible API）を利用し、PC外の推論APIは利用しない
+- LLM校正は Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。直接 Python backend の `llama_cpp` 全体校正だけは Python sidecar）からローカルバックエンド（同梱/DL の llama.cpp llama-server / local OpenAI-compatible API）を利用し、PC外の推論APIは利用しない
 - `OpenAI-compatible API` という名称はプロトコル互換を意味するだけで、接続先は `http://localhost:*` / `http://127.*:*` / `http://[::1]:*` のような loopback に限定する
 - クラウド OpenAI API、loopback以外のホスト、インターネット上のHTTPS推論エンドポイントへ会話データを送信する設計は採用しない
 - 既定の Gemma 4 E4B（同梱/DL llama.cpp llama-server 直起動）経路は、互換APIプロファイルの追加後も従来どおりのデフォルト経路として扱う
@@ -205,7 +205,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ### 校正エンジンのライフサイクル（VRAM解放）
 
-**Vulkan 版（feature `vulkan`）の校正・音声入力**: 同梱の `resources/llama-server-vulkan`（公式 b10075 Vulkan 版）を、下記の CUDA 直起動と同じ引数（E4B は `-ngl 99` + MTP・FlashAttention on、12B と音声入力は `--fit on`）で起動する。GPU は `GGML_VK_VISIBLE_DEVICES` で、音声エンジンと同じ設定（`gpu_select::resolve_preferred`）の GPU を選ぶ。GPU が無いときは Vulkan デバイスを見せず CPU で動かす。起動関数は `try_start_llama_server_cuda` / `start_cuda_llama_blocking` を `LlamaGpu::Vulkan` で共用している。以下の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、CUDA 版・AMD 版の現行実装の説明。
+**Vulkan 版（feature `vulkan`）の校正・音声入力**: 同梱の `resources/llama-server-vulkan`（公式 b10075 Vulkan 版）を、下記の CUDA 直起動と同じ引数（E4B は `-ngl 99` + MTP・FlashAttention on、12B と音声入力は `--fit on`）で起動する。GPU は `GGML_VK_VISIBLE_DEVICES` で、音声エンジンと同じ設定（`gpu_select::resolve_preferred`）の GPU を選ぶ。GPU が無いときは Vulkan デバイスを見せず CPU で動かす。起動関数は `try_start_llama_server_cuda` / `start_cuda_llama_blocking` を `LlamaGpu::Vulkan` で共用している。校正の送受信は Python サイドカーではなく Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。llama-server とローカル OpenAI 互換 API の経路。loopback 限定は `HttpTarget` で維持）で、全ビルド共通。Python の `proofread_llm_cli.py` / `overall_proofread_cli.py` は同等性テスト（`#[ignore]`、環境変数 `PYTHON`）の基準として残している。以下の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、CUDA 版・AMD 版の現行実装の説明。
 
 基本方針: **校正用に起動した llama-server はジョブ完了時に解放し、音声入力用は次の音声入力・区間再文字起こしに備えて保持する**。保持中の音声入力用サーバーは、校正・文字起こし・話者分離の開始時とアプリ終了時（強制終了含む）に解放する。実装は **Rust 側に集約**しており、フロントから二重に停止しない。配信は NVIDIA=CUDA / AMD=ROCm・Vulkan のいずれも「llama-server 直起動」で統一する。現行の校正経路に外部のランタイム管理デーモンやCLIはなく、状態管理構造体は `LlmServer` とする。キャッシュの正式名称は `llm-engine` とし、既存ユーザーのために旧 `lemonade` キャッシュを移行期間中だけフォールバックとして読み取る。
 
@@ -223,11 +223,11 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 | 階層 | モデル | 既定 | 対象 | 取得方法 |
 | --- | --- | --- | --- | --- |
-| 標準 | Gemma 4 E4B QAT（+MTP） | ✅ | CUDA / AMD 共通 | setup スクリプトで同梱取得（従来どおり） |
-| 高精度 | Gemma 4 12B QAT + MTP | | **NVIDIA / AMD 共通**（GPU 直起動経路） | large-v3 と同じく**後からダウンロード**（約7GB） |
+| 標準 | Gemma 4 E4B QAT（+MTP） | ✅ | CUDA / AMD 共通 | Rust で固定 revision から取得（AMD は MTP を取得しない） |
+| 高精度 | Gemma 4 12B QAT + MTP | | **NVIDIA / AMD 共通**（GPU 直起動経路） | Rust で固定 revision から後からダウンロード（約7GB） |
 
 - **既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
-- 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を `download_gemma_gguf_cli.py --model 12b` で取得する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。NVIDIA・AMD いずれも本体 + MTP ドラフトの両方を取得する。
+- 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を Tauri command `download_gemma_12b` から Rust で取得する。ファイルの URL は commit 固定、`.part` から再開し、配置直前にサイズと SHA-256 を検証する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。NVIDIA・AMD いずれも本体 + MTP ドラフトの両方を取得する。
 - **12B はどちらの GPU でも「llama-server 直起動」で動かす**（E4B も同様）。
   - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda`、`-ngl 99` + MTP）。WindowsとLinuxで同じCUDA直起動経路を使う（Linux版はb10075ソースから配布ビルド時に生成）。
   - **AMD**: **ROCm 優先 → 失敗時 Vulkan フォールバック**（`amd_12b_launch_plan` → `start_amd_12b_blocking`）。どちらも `-ngl` 無し `--fit on`/auto-fit + MTP、ctx は `AMD_12B_CTX_SIZE`(=8192)。
@@ -491,8 +491,9 @@ Tauri build override 方針:
 - Tauri commands: `src-tauri/src/lib.rs`
 - ASR CLI: `python_sidecar/transcribe_cli.py`
 - Diarization CLI: `python_sidecar/diarize_cli.py`
-- LLM proofreading CLI (segment-by-segment): `python_sidecar/proofread_llm_cli.py`
-- LLM proofreading CLI (overall): `python_sidecar/overall_proofread_cli.py`
+- LLM proofreading (segment-by-segment): `src-tauri/src/llm_proofread.rs`（Python 版 `python_sidecar/proofread_llm_cli.py` は同等性テストの基準）
+- LLM proofreading (overall): `src-tauri/src/llm_overall_proofread.rs`（Python 版 `python_sidecar/overall_proofread_cli.py` は同等性テストの基準と `llama_cpp` backend 用）
+- Encrypted export (DOCX / XLSX / AES ZIP): `src-tauri/src/export_crypto.rs`
 - Post-install package setup: `python_sidecar/setup_venv_cli.py`
 - Build guide: `docs/release-build-windows.md`
 - Runtime emulation: `docs/dev-runtime-emulation.md`

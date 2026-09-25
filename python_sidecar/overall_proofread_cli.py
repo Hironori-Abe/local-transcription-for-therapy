@@ -675,7 +675,9 @@ def _run_openai_chat_batches(
         else:
             raise RuntimeError(f"{provider_label} にモデル '{model}' が見つかりません。")
 
-    emit_progress("llm_loading", f"{provider_label} 接続成功: {model}")
+    # モデルがファイルパスで指定されている場合は、ファイル名だけを表示する（フォルダ構成は不要な情報）。
+    model_label = str(model).replace("\\", "/").rsplit("/", 1)[-1] or str(model)
+    emit_progress("llm_loading", f"{provider_label} 接続成功: {model_label}")
 
     batches = batch_segments_by_chars(segments)
     total_batches = len(batches)

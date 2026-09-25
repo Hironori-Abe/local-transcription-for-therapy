@@ -218,7 +218,9 @@ import {
   type LocationDetectionScope,
   type NoiseReductionMode,
   type RuntimeEstimateSample,
-  type EditorVoiceInputMemoryTierValue
+  type EditorVoiceInputMemoryTierValue,
+  type BuildVariant,
+  isBuildVariantValue
 } from './app-utils';
 import {
   buildDiarizationEditedTextMapValue,
@@ -569,10 +571,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly rocmAvailable = signal<boolean | null>(null);
   /** ROCm あり・CUDA なし = AMD GPU 環境と判定する。 */
   readonly isRocmGpu = computed(() => this.rocmAvailable() === true && this.cudaAvailable() === false);
-  /** アプリ identifier から判定したビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版。 */
-  readonly buildVariant = signal<'cuda' | 'rocm' | 'cpu'>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
+  /**
+   * ビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版、'cpu' = CPU 版、
+   * 'vulkan' = Vulkan 版（NVIDIA / AMD / Intel 共通。Rust の feature で判定）。
+   */
+  readonly buildVariant = signal<BuildVariant>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
   /** Rust側の実行時判定。nullの間だけAngularのコンパイル時値へフォールバックする。 */
-  readonly runtimeBuildVariant = signal<'cuda' | 'rocm' | 'cpu' | null>(null);
+  readonly runtimeBuildVariant = signal<BuildVariant | null>(null);
+  readonly vulkanBuild = computed(() => this.buildVariant() === 'vulkan');
+  /** Vulkan 版: Vulkan で使える GPU があるか（null は未確認）と、自動選択される GPU の名前。 */
+  readonly vulkanAvailable = signal<boolean | null>(null);
+  readonly vulkanGpuName = signal<string>('');
   /**
    * 配布物のAngular設定とRust側identifierが食い違った場合に備えた実行時能力。
    * startup中はコンパイル時値を使い、Rustのcheck_gpu_availability完了後は
@@ -646,7 +655,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const plan = this.llmBackendSetupPlan();
     if (plan.status === 'checking') return '判定中';
     if (plan.status === 'unavailable') return 'GPU未検出';
-    if (plan.status === 'bundled') return 'CUDA（NVIDIA・同梱）';
+    if (plan.status === 'bundled') return this.vulkanBuild() ? 'Vulkan（同梱）' : 'CUDA（NVIDIA・同梱）';
     return llmBackendLabel(plan.primary);
   });
   readonly llmBackendSetupNote = computed(() => {
@@ -970,6 +979,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
 
   readonly setupNeedsHfToken = computed(() => {
+    // Vulkan 版の話者分離モデル（Nemotron）はトークン不要でダウンロードできる。
+    if (this.vulkanBuild()) return false;
     const s = this.allSetupStatus();
     return setupNeedsHfTokenValue(
       s !== null,
@@ -992,6 +1003,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly ggmlGpuUuid = signal<string>('');
   /** Vulkan 版の ggml エンジンを使う設定のときだけ GPU 選択欄を出す（CUDA 版は既存の「使用デバイス」）。 */
   readonly ggmlGpuSelectorVisible = computed(() => {
+    if (this.vulkanBuild()) {
+      // Vulkan 版は音声エンジン・校正とも同じ GPU を使う。GPU が1つでも表示して、使う GPU を見せる。
+      return (this.vulkanGpus()?.devices.length ?? 0) > 0;
+    }
     const status = this.ggmlSpeechStatus();
     const usesVulkan = (this.transcriptionEngine() === 'ggml' && status?.whisperBackend === 'vulkan')
       || (this.diarizationEngine() === 'ggml' && status?.nemoBackend === 'vulkan');
@@ -1072,7 +1087,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly proofreadModelTierVisible = computed<boolean>(() =>
     this.runtimeAiProofreadBuild() && this.llmBackendMode() === 'local_gguf'
   );
-  readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => [
+  readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => this.vulkanBuild() ? [
+    // Vulkan 版は whisper.cpp の turbo だけを配布する（large-v3 の ggml モデルは未提供）。
+    { value: 'turbo', label: 'turbo（高速・既定）' },
+  ] : [
     { value: 'turbo', label: 'turbo（高速・既定）' },
     { value: 'large-v3', label: 'large-v3（高精度）' },
     // { value: 'medium', label: 'medium' },
@@ -1683,10 +1701,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (general.addUtteranceNumber !== undefined) {
       this.addUtteranceNumber.set(general.addUtteranceNumber);
     }
-    if (general.transcriptionEngine !== undefined) {
+    if (general.transcriptionEngine !== undefined && !this.vulkanBuild()) {
       this.transcriptionEngine.set(general.transcriptionEngine);
     }
-    if (general.diarizationEngine !== undefined) {
+    if (general.diarizationEngine !== undefined && !this.vulkanBuild()) {
       this.diarizationEngine.set(general.diarizationEngine);
     }
     if (general.keepFillers !== undefined) {
@@ -1694,6 +1712,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     if (general.ggmlGpuUuid !== undefined) {
       this.ggmlGpuUuid.set(general.ggmlGpuUuid);
+      this.syncPreferredVulkanGpu();
     }
 
     const llm = resolveLlmAppSettingsValue(this.appSettings, {
@@ -2522,7 +2541,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.isTranscriptionTabDisabled()) {
       this.error.set(this.runtimeCpuOnlyBuild()
         ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
-        : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
+        : this.vulkanBuild()
+          ? '文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。'
+          : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
       return;
     }
 
@@ -2662,10 +2683,28 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onGgmlGpuChange(uuid: string): void {
     this.ggmlGpuUuid.set(uuid);
     this.persistTranscriptionSettings();
+    this.syncPreferredVulkanGpu();
+  }
+
+  /** 選んだ GPU を Rust 側へ伝える（音声入力など、要求ごとに GPU を渡さない処理も同じ GPU を使う）。 */
+  private syncPreferredVulkanGpu(): void {
+    if (!this.isTauriRuntime()) return;
+    void invoke('set_preferred_vulkan_gpu', { uuid: this.ggmlGpuUuid() || null }).catch(() => {
+      // 未対応の古いバックエンドでは何もしない
+    });
   }
 
   vulkanGpuLabel(device: VulkanGpuDevice): string {
     return vulkanGpuLabelValue(device);
+  }
+
+  /** セットアップ行の進捗表示。ダウンロード量が分かるときは割合を添える。 */
+  setupProgressLabel(p: SetupProgressEvent): string {
+    if (p.status === 'downloading' && p.totalBytes && p.downloadedBytes != null) {
+      const percent = Math.min(100, Math.floor((p.downloadedBytes / p.totalBytes) * 100));
+      return `${p.message} ${percent}%`;
+    }
+    return p.message;
   }
 
   async runTranscription(): Promise<void> {
@@ -2675,7 +2714,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (this.isTranscriptionTabDisabled() || (this.transcriptionDevice() === 'cuda' && !this.transcriptionTabVisible())) {
       this.error.set(this.runtimeCpuOnlyBuild()
         ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
-        : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
+        : this.vulkanBuild()
+          ? '文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。'
+          : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
       return;
     }
     if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
@@ -4286,6 +4327,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.checkGpuAvailability();
     if (this.runtimeCpuOnlyBuild()) {
       void this.loadLargeV3InstallStatus();
+    } else if (this.vulkanBuild()) {
+      // Vulkan 版は Python の GPU 検出（detect_env_cli）を使わず、Vulkan の GPU 一覧を使う。
+      void this.refreshVulkanGpus(false);
     } else {
       void this.loadComputeEnv();
     }
@@ -4398,14 +4442,26 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         buildVariant?: string;
         runtimePlatform?: string;
         localLlmAppsEnabled?: boolean;
+        vulkanAvailable?: boolean;
+        vulkanGpuName?: string | null;
       }>('check_gpu_availability', { retry });
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
         this.cudaAvailable.set(result.cudaAvailable);
         this.rocmAvailable.set(result.rocmAvailable);
-        if (result.buildVariant === 'cuda' || result.buildVariant === 'rocm' || result.buildVariant === 'cpu') {
+        if (isBuildVariantValue(result.buildVariant)) {
           this.runtimeBuildVariant.set(result.buildVariant);
           this.buildVariant.set(result.buildVariant);
+        }
+        if (result.buildVariant === 'vulkan') {
+          // Vulkan 版は ggml エンジンだけを持つ（標準の Python 経路は同梱しない）。
+          this.transcriptionEngine.set('ggml');
+          this.diarizationEngine.set('ggml');
+          if (this.whisperModel() !== 'turbo') {
+            this.whisperModel.set('turbo');
+          }
+          this.vulkanAvailable.set(result.vulkanAvailable === true);
+          this.vulkanGpuName.set(result.vulkanGpuName ?? '');
         }
         if (result.buildVariant === 'cpu') {
           // A mismatched/default Angular bundle must still use the CPU ASR
@@ -4995,7 +5051,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         hipDeviceIndex: llmDevIdx >= 0 ? llmDevIdx : null,
         llmParallel: llmPar > 0 ? llmPar : null,
         llmCtx: llmCtxVal > 0 ? llmCtxVal : null,
-        proofreadTier: proofreadTier ?? null
+        proofreadTier: proofreadTier ?? null,
+        gpuUuid: this.ggmlGpuUuid() || null
       });
       this.llmServerStatus.set('running');
       void this.refreshLlmLoadedDevice();

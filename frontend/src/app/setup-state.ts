@@ -134,7 +134,7 @@ export function needsFullSetup(input: NeedsFullSetupInput): boolean {
   return !input.status.pythonEnv
     || (input.transcriptionTabVisible && (!input.status.whisperTurbo || !input.status.diarization))
     || (input.aiProofreadBuild && !input.status.gemmaGguf)
-    || (input.aiProofreadBuild && input.buildVariant === 'cuda' && !input.status.gemmaMtpGguf)
+    || (input.aiProofreadBuild && (input.buildVariant === 'cuda' || input.buildVariant === 'vulkan') && !input.status.gemmaMtpGguf)
     || (input.aiProofreadBuild && !input.status.llmBackend);
 }
 
@@ -192,8 +192,17 @@ export function browserVoiceInputPackStatus(cpuBackendRequired: boolean): Editor
 export function llmBackendInstallPlan(
   cudaAvailable: boolean | null | undefined,
   rocmAvailable: boolean | null | undefined,
-  buildVariant?: 'cuda' | 'rocm' | 'cpu' | null
+  buildVariant?: 'cuda' | 'rocm' | 'cpu' | 'vulkan' | null
 ): LlmBackendInstallPlan {
+  if (buildVariant === 'vulkan') {
+    return {
+      status: 'bundled',
+      unavailable: false,
+      primary: null,
+      fallbacks: [],
+      reason: 'Vulkan版のllama-serverはアプリに同梱されています。見つからない場合はアプリを再インストールしてください。'
+    };
+  }
   // The packaged edition is authoritative for the proofreading engine. A
   // hybrid PC can expose nvidia-smi while running the AMD edition; selecting
   // CUDA there prevents the required ROCm/Vulkan downloads. Hardware support

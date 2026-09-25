@@ -1,0 +1,23 @@
+{
+  "build": {
+    "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev-vulkan.bat",
+    "devUrl": "http://127.0.0.1:4200",
+    "frontendDist": "../frontend"
+  },
+  "bundle": {
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "../python_sidecar/proofread_llm_cli.py",
+      "../python_sidecar/overall_proofread_cli.py",
+      "../python_sidecar/download_gemma_gguf_cli.py",
+      "../python_sidecar/encrypt_office_cli.py",
+      "../python_sidecar/prompt_templates",
+      "resources/proofread/punctuation_rules",
+      "resources/ffmpeg",
+      "resources/llama-server-vulkan"
+    ]
+  }
+}

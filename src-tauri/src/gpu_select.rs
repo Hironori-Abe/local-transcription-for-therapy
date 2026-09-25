@@ -141,6 +141,30 @@ fn enumerate_in_process() -> Result<Vec<VulkanDevice>, String> {
 // ---- 列挙（アプリ側） ----------------------------------------------------------------
 
 static CACHE: Mutex<Option<Vec<VulkanDevice>>> = Mutex::new(None);
+/// 設定タブで選ばれた GPU（UUID）。フロントが設定の読み込み時・変更時に渡す。
+/// 要求ごとに UUID を受け取らない経路（音声入力など）もこれで同じ GPU を使う。
+static PREFERRED_UUID: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_preferred_uuid(uuid: Option<String>) {
+    if let Ok(mut p) = PREFERRED_UUID.lock() {
+        *p = uuid.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    }
+}
+
+pub fn preferred_uuid() -> Option<String> {
+    PREFERRED_UUID.lock().ok().and_then(|p| p.clone())
+}
+
+/// 設定に従って使う GPU（要求で UUID が来ればそれを、無ければ設定の値を使う）。
+pub fn resolve_preferred(requested_uuid: Option<&str>) -> Option<VulkanDevice> {
+    let devices = vulkan_devices(false);
+    let fallback = preferred_uuid();
+    let uuid = requested_uuid
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .or(fallback.as_deref());
+    resolve(&devices, uuid).cloned()
+}
 
 /// Vulkan の GPU 一覧を返す。`refresh` が偽ならアプリ起動中の前回結果を使う。
 /// Vulkan ドライバーが無い・列挙に失敗した・タイムアウトした場合は空。

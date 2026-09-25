@@ -71,3 +71,14 @@ test('GPU runtime is resolved only when both CUDA and transcription probes succe
     transcriptionRuntimeAvailable: true
   }), true);
 });
+
+test('vulkan build is resolved by the bundled engines alone and never schedules a delayed recheck', () => {
+  const vulkan: DelayedGpuRecheckState = {
+    ...linuxNvidia,
+    buildVariant: 'vulkan',
+    transcriptionRuntimeAvailable: true
+  };
+  assert.equal(isGpuRuntimeResolved(vulkan), true);
+  assert.equal(isGpuRuntimeResolved({ ...vulkan, transcriptionRuntimeAvailable: false }), false);
+  assert.equal(shouldScheduleDelayedGpuRecheck({ ...vulkan, transcriptionRuntimeAvailable: false }), false);
+});

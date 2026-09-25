@@ -26,6 +26,8 @@ encoding_rs = "0.8"
 regex = "1"
 # Vulkan の GPU 一覧（ggml エンジンの GPU 選択用）。ローダーは実行時に動的に読み込む（無い環境でも起動できる）
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
+# ダウンロードしたモデルの検証（Vulkan 版のセットアップ）
+sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -50,6 +52,9 @@ custom-protocol = ["tauri/custom-protocol"]
 # 公式配布では有効にしない。LM Studio / Ollama 連携が必要な利用者が
 # ソースから専用インストーラーをビルドするときだけ指定する。
 local-llm-apps = []
+# Vulkan 統一版（NVIDIA / AMD / Intel 共通のインストーラー）。文字起こし・話者分離は同梱の
+# ggml エンジン、校正は同梱の Vulkan 版 llama-server を使う（scripts/setup-build-tools.bat --vulkan）。
+vulkan = []
 
 # WebView2 のクラッシュダンプが Microsoft へ自動送信されないよう、
 # EnvironmentOptions を設定する最小パッチを適用した Wry。

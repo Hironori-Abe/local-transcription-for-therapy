@@ -86,6 +86,7 @@ import {
   resolveAutoLlmParallelValue,
   resolveLlmDeviceVramMibValue,
   resolveRuntimeBuildFlagsValue,
+  isBuildVariantValue,
   resolveStepForStageValue,
   secondsToEstimatedMinutesValue,
   selectedFileNameValue,
@@ -1158,4 +1159,14 @@ test('vulkan GPU labels show VRAM, mark integrated GPUs, and name the auto choic
   assert.equal(effectiveVulkanGpuUuidValue('a', list), 'a');
   assert.equal(effectiveVulkanGpuUuidValue('gone', list), '');
   assert.equal(effectiveVulkanGpuUuidValue('', list), '');
+});
+
+test('runtime build flags treat the vulkan variant as a GPU build with AI proofreading', () => {
+  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, 'vulkan'), {
+    cpuOnlyBuild: false,
+    aiProofreadBuild: true,
+    cpuVoiceInputBuild: false
+  });
+  assert.equal(isBuildVariantValue('vulkan'), true);
+  assert.equal(isBuildVariantValue('metal'), false);
 });

@@ -138,3 +138,17 @@ test('LLM backend install plan preserves primary and optional fallback ordering'
   assert.equal(llmBackendLabel('llamacpp:cpu'), 'CPU');
   assert.equal(llmBackendLabel(null), '未選択');
 });
+
+test('vulkan build uses the bundled llama-server and requires the MTP draft', () => {
+  const status = browserSetupStatus();
+  const input = {
+    editorOnlyBuild: false, tauriRuntime: true, setupChecked: true, status,
+    transcriptionTabVisible: true, aiProofreadBuild: true, buildVariant: 'vulkan'
+  };
+  assert.equal(needsFullSetup(input), false);
+  assert.equal(needsFullSetup({ ...input, status: { ...status, gemmaMtpGguf: false } }), true);
+  const plan = llmBackendInstallPlan(false, false, 'vulkan');
+  assert.equal(plan.status, 'bundled');
+  assert.equal(plan.unavailable, false);
+  assert.match(plan.reason ?? '', /Vulkan版/);
+});

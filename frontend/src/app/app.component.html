@@ -51,7 +51,7 @@
       <div class="tab-content">
         <!-- GPU未検出バナー（CUDA/ROCm未インストール時） -->
         <!-- 開発用プレビュー: LOTT_DEV_EMULATION_MODE=no_cuda で表示 -->
-        <div *ngIf="!runtimeCpuOnlyBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
+        <div *ngIf="!runtimeCpuOnlyBuild() && !vulkanBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
             <span class="gpu-setup-title">
@@ -154,6 +154,35 @@
           </div>
         </div>
 
+        <!-- Vulkan 版: 同梱エンジンが見つからない（インストールの破損） -->
+        <div *ngIf="vulkanBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
+          <div class="gpu-setup-banner-header">
+            <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
+            <span class="gpu-setup-title">文字起こし・話者分離のエンジンが見つかりません</span>
+          </div>
+          <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
+          <p class="gpu-setup-desc">インストールが壊れている可能性があります。アプリを再インストールしてください（ダウンロード済みのモデルはそのまま使えます）。</p>
+        </div>
+
+        <!-- Vulkan 版: GPU が見つからない（CPU で動くが遅い） -->
+        <div *ngIf="vulkanBuild() && vulkanAvailable() === false && !isTranscriptionTabDisabled()" class="gpu-setup-banner cpu-setup-banner">
+          <div class="gpu-setup-banner-header">
+            <mat-icon class="material-symbols-outlined gpu-setup-icon">info</mat-icon>
+            <span class="gpu-setup-title">GPU が見つからないため、CPU で処理します</span>
+          </div>
+          <p class="gpu-setup-desc">
+            このままでも使えますが、文字起こし・話者分離・AI校正に時間がかかります（目安: GPU の数倍〜十数倍）。
+            GPU を搭載している場合は、GPU メーカー（NVIDIA / AMD / Intel）の最新ドライバーを入れてから「GPU を再確認」を押してください。
+          </p>
+          <div class="gpu-setup-recheck">
+            <button mat-flat-button color="primary" class="gpu-setup-recheck-btn" [disabled]="gpuRechecking()"
+              (click)="recheckGpuRuntime()">
+              <mat-icon class="material-symbols-outlined">refresh</mat-icon>
+              {{ gpuRechecking() ? '再確認中...' : 'GPU を再確認' }}
+            </button>
+          </div>
+        </div>
+
         <!-- CPUランタイム未検出バナー（通常セットアップ完了後の実行環境エラー） -->
         <div *ngIf="isCpuRuntimeSetupBannerVisible()" class="gpu-setup-banner cpu-setup-banner">
           <div class="gpu-setup-banner-header">
@@ -200,12 +229,12 @@
                 [class.setup-comp-downloading]="setupProgressMap()['whisper_turbo']?.status === 'downloading'">{{
                 setupProgressMap()['whisper_turbo']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.whisperTurbo || setupProgressMap()['whisper_turbo']?.status === 'done' || setupProgressMap()['whisper_turbo']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">音声認識モデル（faster-whisper turbo）</span>
-              <span class="setup-comp-size">約 1.5 GB</span>
+              <span class="setup-comp-name">{{ vulkanBuild() ? '音声認識モデル（Whisper large-v3-turbo・無音検出）' : '音声認識モデル（faster-whisper turbo）' }}</span>
+              <span class="setup-comp-size">{{ vulkanBuild() ? '約 1.6 GB' : '約 1.5 GB' }}</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['whisper_turbo']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['whisper_turbo']?.status === 'done' || setupProgressMap()['whisper_turbo']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['whisper_turbo'] as p">{{ p.message }}</span>
+                *ngIf="setupProgressMap()['whisper_turbo'] as p">{{ setupProgressLabel(p) }}</span>
             </div>
             <!-- 話者分離モデル -->
             <div class="setup-component-row" *ngIf="transcriptionTabVisible()">
@@ -215,12 +244,13 @@
                 [class.setup-comp-downloading]="setupProgressMap()['diarization']?.status === 'downloading'">{{
                 setupProgressMap()['diarization']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.diarization || setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">話者分離モデル（pyannote community-1）</span>
-              <span class="setup-comp-note">要Hugging Face トークン（下記参照）</span>
+              <span class="setup-comp-name">{{ vulkanBuild() ? '話者分離モデル（Nemotron-3-Diarization）' : '話者分離モデル（pyannote community-1）' }}</span>
+              <span class="setup-comp-size" *ngIf="vulkanBuild()">約 0.1 GB</span>
+              <span class="setup-comp-note" *ngIf="!vulkanBuild()">要Hugging Face トークン（下記参照）</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['diarization']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : p.message }}</span>
+                *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : setupProgressLabel(p) }}</span>
             </div>
             <!-- AI校正実行エンジン: バンドル済みバイナリがある場合は非表示 -->
             <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !allSetupStatus()?.llmBackend">
@@ -253,7 +283,7 @@
                 *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && buildVariant() === 'cuda'">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && (buildVariant() === 'cuda' || vulkanBuild())">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
@@ -277,15 +307,17 @@
               <div class="diarization-error-title">話者分離モデルのダウンロードに失敗しました</div>
               <div class="diarization-error-message">{{ setupProgressMap()['diarization']?.message }}</div>
               <div class="diarization-error-actions">
-                <button mat-stroked-button color="primary" (click)="openDiarizationConsentPage()">同意ページを開く</button>
-                <button mat-stroked-button color="primary" (click)="openHuggingFaceTokenPage()">トークン作成ページを開く</button>
+                <ng-container *ngIf="!vulkanBuild()">
+                  <button mat-stroked-button color="primary" (click)="openDiarizationConsentPage()">同意ページを開く</button>
+                  <button mat-stroked-button color="primary" (click)="openHuggingFaceTokenPage()">トークン作成ページを開く</button>
+                </ng-container>
                 <button mat-flat-button color="primary" [disabled]="setupRunning() || setupNeedsHfToken()" (click)="runFullSetup()">もう一度ダウンロード</button>
               </div>
             </div>
           </div>
 
           <!-- HF トークンセクション（話者分離モデルが未インストールの場合のみ） -->
-          <ng-container *ngIf="transcriptionTabVisible() && !allSetupStatus()?.diarization">
+          <ng-container *ngIf="transcriptionTabVisible() && !allSetupStatus()?.diarization && !vulkanBuild()">
             <div class="unified-setup-guide">
               <p>話者分離モデルのダウンロードには Hugging Face アクセストークンが必要です。</p>
               <ol>
@@ -642,7 +674,7 @@
                         {{ option.label }}
                       </mat-option>
                     </mat-select>
-                    <mat-hint *ngIf="largeV3Installed() === false && !largeV3Downloading()">
+                    <mat-hint *ngIf="!vulkanBuild() && largeV3Installed() === false && !largeV3Downloading()">
                       large-v3はダウンロードが必要です
                     </mat-hint>
                   </mat-form-field>
@@ -653,7 +685,7 @@
                     <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
                   </div>
                 </div>
-                <ng-container *ngIf="!runtimeCpuOnlyBuild()">
+                <ng-container *ngIf="!runtimeCpuOnlyBuild() && !vulkanBuild()">
                   <ng-container *ngIf="computeEnvInfo(); else envLoading">
                     <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
                       [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
@@ -683,7 +715,7 @@
                     <span class="compute-env-no-dev">演算環境を確認中...</span>
                   </ng-template>
                 </ng-container>
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>計算方式</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
                     [value]="computeType()" (valueChange)="onComputeTypeChange($event)">
@@ -720,7 +752,7 @@
               </div>
               <!-- 音声エンジン: 既定は標準（faster-whisper / pyannote）。ggml は whisper.cpp / Nemotron-3-Diarization の試験的経路。 -->
               <div class="actions-row settings-llm-row">
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>文字起こしエンジン</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
                     [value]="transcriptionEngine()" (valueChange)="onTranscriptionEngineChange($event)">
@@ -728,7 +760,7 @@
                     <mat-option value="ggml">whisper.cpp（試験的）</mat-option>
                   </mat-select>
                 </mat-form-field>
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
+                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>話者分離エンジン</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
                     [value]="diarizationEngine()" (valueChange)="onDiarizationEngineChange($event)">
@@ -739,7 +771,7 @@
                 <!-- Vulkan 版の ggml エンジンが使う GPU。自動は「単体 GPU の中で VRAM 最大 → 無ければ内蔵 GPU」。 -->
                 <mat-form-field *ngIf="ggmlGpuSelectorVisible()" appearance="outline"
                   class="settings-llm-field settings-field-device">
-                  <mat-label>音声エンジンの GPU</mat-label>
+                  <mat-label>{{ vulkanBuild() ? '使用する GPU（文字起こし・話者分離・AI校正）' : '音声エンジンの GPU' }}</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
                     [value]="ggmlGpuSelectValue()" (valueChange)="onGgmlGpuChange($event)">
                     <mat-option value="">{{ ggmlGpuAutoLabel() }}</mat-option>

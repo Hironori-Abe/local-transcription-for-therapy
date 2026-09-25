@@ -1,0 +1,38 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm.cmd --prefix frontend run build -- --configuration production"
+  },
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "../python_sidecar/proofread_llm_cli.py",
+      "../python_sidecar/overall_proofread_cli.py",
+      "../python_sidecar/download_gemma_gguf_cli.py",
+      "../python_sidecar/encrypt_office_cli.py",
+      "../python_sidecar/prompt_templates",
+      "resources/proofread/punctuation_rules",
+      "resources/python312-vulkan",
+      "resources/ffmpeg",
+      "resources/llama-server-vulkan",
+      "resources/speech-engines"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/nvidia-hooks.nsh",
+        "languages": [
+          "Japanese"
+        ],
+        "customLanguageFiles": {
+          "Japanese": "nsis/Japanese.nsh"
+        },
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

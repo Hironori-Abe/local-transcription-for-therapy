@@ -872,26 +872,25 @@ fn list_local_openai_models(
     })
 }
 
-/// バンドルされた llama-server バイナリのパスを返す。
-/// resources/llama-server/llama-server(.exe) を探す。
-fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
+/// 同梱リソース `resources/<name>/` の候補ディレクトリを、見つけやすい順に返す。
+fn bundled_resource_dir_candidates(app: &AppHandle, name: &str) -> Vec<PathBuf> {
     let path_api = app.path();
     let mut search_dirs: Vec<PathBuf> = Vec::new();
 
     if let Ok(rd) = path_api.resource_dir() {
-        search_dirs.push(rd.join("resources").join("llama-server"));
-        search_dirs.push(rd.join("llama-server"));
+        search_dirs.push(rd.join("resources").join(name));
+        search_dirs.push(rd.join(name));
     }
 
     if let Ok(ed) = path_api.executable_dir() {
-        search_dirs.push(ed.join("resources").join("llama-server"));
-        search_dirs.push(ed.join("llama-server"));
-        search_dirs.push(ed.join("_up_").join("resources").join("llama-server"));
-        search_dirs.push(ed.join("_up_").join("llama-server"));
+        search_dirs.push(ed.join("resources").join(name));
+        search_dirs.push(ed.join(name));
+        search_dirs.push(ed.join("_up_").join("resources").join(name));
+        search_dirs.push(ed.join("_up_").join(name));
     }
 
     // dev ビルドではリソースが target/debug 配下にコピーされず resource_dir() からも
-    // 解決できないため、ソースツリーの src-tauri/resources/llama-server を直接参照する。
+    // 解決できないため、ソースツリーの src-tauri/resources/<name> を直接参照する。
     // これにより NVIDIA dev でも CUDA 版 llama-server が見つかり、Vulkan 経路を
     // 介さず CUDA で AI 校正が動く。cfg(debug_assertions) ガードのためリリース挙動・配布物・
     // ライセンス前提は不変で、AMD リリースにも影響しない。
@@ -899,17 +898,33 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     search_dirs.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
-            .join("llama-server"),
+            .join(name),
     );
+    search_dirs
+}
 
+fn find_bundled_llama_server_in(app: &AppHandle, name: &str) -> Option<String> {
     let exe = std::env::consts::EXE_SUFFIX;
-    for dir in &search_dirs {
-        let path = dir.join(format!("llama-server{exe}"));
-        if llama_server_binary_is_usable(&path) {
-            return Some(path.to_string_lossy().into_owned());
-        }
+    bundled_resource_dir_candidates(app, name)
+        .into_iter()
+        .map(|dir| dir.join(format!("llama-server{exe}")))
+        .find(|path| llama_server_binary_is_usable(path))
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// バンドルされた llama-server バイナリのパスを返す。
+/// resources/llama-server/llama-server(.exe) を探す。
+fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
+    find_bundled_llama_server_in(app, "llama-server")
+}
+
+/// Vulkan 版で同梱する llama-server（公式 Vulkan ビルド）のパスを返す。
+/// CUDA 版の `resources/llama-server` と取り違えないよう、別ディレクトリに置く。
+fn find_bundled_vulkan_llama_server_bin(app: &AppHandle) -> Option<String> {
+    if !is_vulkan_build(app) {
+        return None;
     }
-    None
+    find_bundled_llama_server_in(app, "llama-server-vulkan")
 }
 
 /// NVIDIA Full版で使用する同梱 CUDA `llama-server` のパスを返す。
@@ -921,7 +936,7 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
 ///
 /// AMD/CPU版から同梱ファイルを誤ってCUDA候補として扱わないよう、ビルド識別子も確認する。
 fn find_bundled_cuda_llama_server_bin(app: &AppHandle) -> Option<String> {
-    if is_cpu_only_build(app) || is_amd_gpu_build(app) {
+    if is_cpu_only_build(app) || is_amd_gpu_build(app) || is_vulkan_build(app) {
         return None;
     }
 
@@ -1243,6 +1258,25 @@ fn choose_llm_parallelism(
 /// CPU へ逃がす。12B の gemma4-assistant ドラフトは `-ngl` 明示（auto-fit 無効）下で GPU へ
 /// オフロードするとロードに失敗するが、auto-fit 有効なら GPU に載っても正常に動く。
 /// false（E4B 既定）なら従来どおり `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。
+/// 同梱 llama-server に渡す GPU の指定。CUDA 版と Vulkan 版で起動引数（ngl・MTP・
+/// FlashAttention・auto-fit）は同じで、GPU の選び方だけが違う。
+#[derive(Clone, Copy, Debug)]
+enum LlamaGpu {
+    /// nvidia-smi の index（CUDA_VISIBLE_DEVICES）。None は llama.cpp 既定。
+    Cuda(Option<i32>),
+    /// Vulkan の並び順（GGML_VK_VISIBLE_DEVICES）。None は GPU 無し（CPU で動く）。
+    Vulkan(Option<u32>),
+}
+
+impl LlamaGpu {
+    fn label(self) -> &'static str {
+        match self {
+            LlamaGpu::Cuda(_) => "CUDA",
+            LlamaGpu::Vulkan(_) => "Vulkan",
+        }
+    }
+}
+
 fn try_start_llama_server_cuda(
     bin_path: &str,
     model_path: &str,
@@ -1251,7 +1285,7 @@ fn try_start_llama_server_cuda(
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
-    device_index: Option<i32>,
+    gpu: LlamaGpu,
     autofit: bool,
 ) -> Result<(Child, Arc<AtomicBool>), String> {
     #[cfg(unix)]
@@ -1276,9 +1310,21 @@ fn try_start_llama_server_cuda(
     // 選択された NVIDIA GPU（llmHipDeviceIndex / nvidia-smi index）のみを見せる。
     // PCI_BUS_ID 順で nvidia-smi の index と一致させる。明示選択(>=0)のときだけ限定し、
     // 未指定(None/-1)は llama.cpp 既定（複数 GPU 時はレイヤー分割）を保つ。
-    cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
-    if let Some(idx) = device_index.filter(|&i| i >= 0) {
-        cmd.env("CUDA_VISIBLE_DEVICES", idx.to_string());
+    match gpu {
+        LlamaGpu::Cuda(device_index) => {
+            cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+            if let Some(idx) = device_index.filter(|&i| i >= 0) {
+                cmd.env("CUDA_VISIBLE_DEVICES", idx.to_string());
+            }
+        }
+        // Vulkan 版: 音声エンジンと同じ規則で選んだ GPU だけを見せる（iGPU の誤選択を避ける）。
+        // GPU が無いときは Vulkan デバイスを見せず、CPU で動かす。
+        LlamaGpu::Vulkan(Some(idx)) => {
+            cmd.env("GGML_VK_VISIBLE_DEVICES", idx.to_string());
+        }
+        LlamaGpu::Vulkan(None) => {
+            cmd.env("GGML_VK_VISIBLE_DEVICES", "");
+        }
     }
     let ctx_s = ctx_size.to_string();
     let np_s = n_parallel.to_string();
@@ -1338,7 +1384,7 @@ fn try_start_llama_server_cuda(
             assign_to_kill_on_close_job(&child);
             child
         })
-        .map_err(|e| format!("AI校正エンジン (CUDA) の起動に失敗しました: {e}"))?;
+        .map_err(|e| format!("AI校正エンジン ({}) の起動に失敗しました: {e}", gpu.label()))?;
     let oom_flag = Arc::new(AtomicBool::new(false));
     if let Some(stderr) = child.stderr.take() {
         let flag = Arc::clone(&oom_flag);
@@ -1722,13 +1768,14 @@ fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
     // 以前は NVIDIA Linux がセットアップで取得した Vulkan を CUDA版のバックエンドと
     // して扱っていた。Linux NVIDIA は管理下の同梱 CUDA ビルドだけを候補にし、Vulkan の
     // 有無でインストール済みと判定しない。
-    match build_variant_for_identifier(app.config().identifier.as_str()) {
+    match app_build_variant(&app) {
         "cpu" => find_llm_cpu_llama_server(&app).is_some(),
         "rocm" => {
             find_llm_rocm_llama_server(&app).is_some()
                 || find_llm_vulkan_llama_server(&app).is_some()
         }
         "cuda" => find_bundled_cuda_llama_server_bin(&app).is_some(),
+        "vulkan" => find_bundled_vulkan_llama_server_bin(&app).is_some(),
         _ => false,
     }
 }
@@ -2478,13 +2525,14 @@ fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> 
     } else if has_process {
         "starting".to_string()
     } else {
-        let has_candidate = match build_variant_for_identifier(app.config().identifier.as_str()) {
+        let has_candidate = match app_build_variant(&app) {
             "cuda" => find_bundled_cuda_llama_server_bin(&app).is_some(),
             "rocm" => {
                 find_llm_rocm_llama_server(&app).is_some()
                     || find_llm_vulkan_llama_server(&app).is_some()
             }
             "cpu" => find_llm_cpu_llama_server(&app).is_some(),
+            "vulkan" => find_bundled_vulkan_llama_server_bin(&app).is_some(),
             _ => false,
         };
         if has_candidate {
@@ -2541,7 +2589,7 @@ fn start_cuda_llama_blocking(
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
-    device_index: Option<i32>,
+    gpu: LlamaGpu,
     autofit: bool,
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
@@ -2554,7 +2602,7 @@ fn start_cuda_llama_blocking(
         port,
         n_parallel,
         ctx_size,
-        device_index,
+        gpu,
         autofit,
     ) {
         Ok(result) => result,
@@ -2570,7 +2618,10 @@ fn start_cuda_llama_blocking(
             let _ = child.kill();
             let _ = child.wait();
             mode_arc.store(0, Ordering::Relaxed);
-            return Err("AI校正エンジン (CUDA) の状態管理に失敗しました。".to_string());
+            return Err(format!(
+                "AI校正エンジン ({}) の状態管理に失敗しました。",
+                gpu.label()
+            ));
         }
     };
     *guard = Some(child);
@@ -2624,7 +2675,10 @@ fn start_cuda_llama_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
-    Err("AI校正エンジン (CUDA) の起動タイムアウト（180秒）".to_string())
+    Err(format!(
+        "AI校正エンジン ({}) の起動タイムアウト（180秒）",
+        gpu.label()
+    ))
 }
 
 #[tauri::command]
@@ -2635,6 +2689,7 @@ async fn start_llm_server(
     llm_parallel: Option<u32>,
     llm_ctx: Option<u32>,
     proofread_tier: Option<String>,
+    gpu_uuid: Option<String>,
 ) -> Result<String, String> {
     let port = state.port.load(Ordering::Relaxed) as u16;
     if llm_server_port_open(port) {
@@ -2650,8 +2705,24 @@ async fn start_llm_server(
     // NVIDIA GPU + 管理下の同梱 CUDA llama-server + GGUF モデルが揃っている場合だけ
     // 直接起動する。Linux NVIDIAでもVulkanを代替経路として選ばない。公式リリースに
     // Linux CUDAアセットがないため、LinuxのCUDAビルドはパッケージの管理下で生成・同梱する。
-    let nvidia_list = nvidia_gpu_priority_list();
-    let llama_server_bin = find_bundled_cuda_llama_server_bin(&app);
+    // Vulkan 版は同梱の Vulkan 版 llama-server を、音声エンジンと同じ GPU で起動する
+    // （NVIDIA / AMD / Intel 共通。nvidia-smi は呼ばない）。
+    let vulkan_build = is_vulkan_build(&app);
+    let vulkan_device = if vulkan_build {
+        gpu_select::resolve_preferred(gpu_uuid.as_deref())
+    } else {
+        None
+    };
+    let nvidia_list = if vulkan_build {
+        Vec::new()
+    } else {
+        nvidia_gpu_priority_list()
+    };
+    let llama_server_bin = if vulkan_build {
+        find_bundled_vulkan_llama_server_bin(&app)
+    } else {
+        find_bundled_cuda_llama_server_bin(&app)
+    };
     let effective_tier = proofread_tier
         .as_deref()
         .map(GemmaTier::from_marker)
@@ -2680,18 +2751,29 @@ async fn start_llm_server(
     let parallel_arc = Arc::clone(&state.parallel);
     let purpose_arc = Arc::clone(&state.purpose);
 
-    if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
+    if (vulkan_build || !nvidia_list.is_empty())
+        && llama_server_bin.is_some()
+        && model_path.is_some()
+    {
         let bin = llama_server_bin.unwrap();
         let mpath = model_path.clone().unwrap();
         let mtp_path = mtp_model_path;
         // 選択された GPU（llmHipDeviceIndex / nvidia-smi index）の VRAM（MiB）を使う。
         // 未指定(-1/None)や該当なしのときは最良 GPU（VRAM 降順の先頭）にフォールバック。
         let sel_idx = hip_device_index.filter(|&i| i >= 0);
-        let vram_mib = sel_idx
-            .and_then(|idx| nvidia_list.iter().find(|g| g.0 == idx as u32))
-            .or_else(|| nvidia_list.first())
-            .map(|g| g.2)
-            .unwrap_or(0);
+        let (gpu, vram_mib) = if vulkan_build {
+            (
+                LlamaGpu::Vulkan(vulkan_device.as_ref().map(|d| d.index)),
+                vulkan_device.as_ref().map(|d| d.vram_mb).unwrap_or(0),
+            )
+        } else {
+            let vram_mib = sel_idx
+                .and_then(|idx| nvidia_list.iter().find(|g| g.0 == idx as u32))
+                .or_else(|| nvidia_list.first())
+                .map(|g| g.2)
+                .unwrap_or(0);
+            (LlamaGpu::Cuda(sel_idx), vram_mib)
+        };
         let (n_parallel, ctx_size) = choose_llm_parallelism(vram_mib, llm_parallel, llm_ctx);
         // 12B は auto-fit 起動（ドラフト含め GPU/CPU を llama.cpp が自動配置）。8GB クラスで本体を
         // 多く GPU に載せ高速化するため、ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
@@ -2714,7 +2796,7 @@ async fn start_llm_server(
                 resolved_port,
                 n_parallel,
                 ctx_size,
-                sel_idx,
+                gpu,
                 is_12b,
                 &child_arc,
                 &mode_arc,
@@ -2724,6 +2806,13 @@ async fn start_llm_server(
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
+    } else if vulkan_build {
+        let message = if llama_server_bin.is_none() {
+            "Vulkan版 llama-server がアプリに見つかりません。アプリを再インストールしてください。"
+        } else {
+            "Gemma 4 校正モデルが見つかりません。設定タブでモデルの導入を完了してください。"
+        };
+        Err(message.to_string())
     } else if !is_amd_gpu_build(&app) && !is_cpu_only_build(&app) {
         // NVIDIA Full版はCUDA直起動だけを許可する。Vulkanへ暗黙に切り替えると、
         // 「CUDA版なのにVulkanで動く」状態を設定画面から把握できず、性能・互換性の
@@ -3088,6 +3177,38 @@ fn start_full_voice_input_server_blocking(
     };
     port_arc.store(resolved_port as u32, Ordering::Relaxed);
 
+    // 0) Vulkan 版: 同梱の Vulkan 版 llama-server を、設定の GPU で auto-fit 起動する。
+    if is_vulkan_build(app) {
+        let bin = find_bundled_vulkan_llama_server_bin(app).ok_or_else(|| {
+            "Vulkan版 llama-server がアプリに見つかりません。アプリを再インストールしてください。"
+                .to_string()
+        })?;
+        let device = gpu_select::resolve_preferred(None);
+        mode_arc.store(1, Ordering::Relaxed);
+        parallel_arc.store(1, Ordering::Relaxed);
+        start_cuda_llama_blocking(
+            &bin,
+            &model_path,
+            None, // 音声入力は MTP を使わない
+            Some(&mmproj_path),
+            resolved_port,
+            1,
+            VOICE_INPUT_GPU_CTX_SIZE,
+            LlamaGpu::Vulkan(device.map(|d| d.index)),
+            true, // autofit
+            child_arc,
+            mode_arc,
+        )
+        .map_err(|e| {
+            e.replace("AI校正エンジン", "音声入力エンジン").replace(
+                "並列処理数を下げて再試行してください",
+                "GPUを使用中の他のアプリを終了して再試行してください",
+            )
+        })?;
+        purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
+        return Ok(resolved_port);
+    }
+
     // 1) NVIDIA: 同梱 CUDA llama-server を auto-fit 起動（校正の12Bと同方式。小VRAM機でも
     //    本体+mmprojが収まらない分は CPU へ自動配置され安全）。
     let nvidia_list = nvidia_gpu_priority_list();
@@ -3103,7 +3224,7 @@ fn start_full_voice_input_server_blocking(
                 resolved_port,
                 1,
                 VOICE_INPUT_GPU_CTX_SIZE,
-                None,
+                LlamaGpu::Cuda(None),
                 true, // autofit
                 child_arc,
                 mode_arc,
@@ -5218,7 +5339,14 @@ fn get_python_bin(_app: &AppHandle) -> String {
         }
 
         if let Ok(resource_dir) = _app.path().resource_dir() {
-            for subdir in &["resources/python312", "python312"] {
+            // Vulkan 版は校正・暗号化保存・Gemma 取得に使う最小限のパッケージを入れた Python を
+            // 別ディレクトリに同梱する（初回セットアップで pip を使わない）。
+            let subdirs: &[&str] = if is_vulkan_build(_app) {
+                &["resources/python312-vulkan", "python312-vulkan"]
+            } else {
+                &["resources/python312", "python312"]
+            };
+            for subdir in subdirs {
                 let bundled = resource_dir.join(subdir).join("python.exe");
                 if bundled.exists() {
                     return bundled.to_string_lossy().to_string();
@@ -7311,6 +7439,31 @@ fn check_transcription_runtime_support_blocking(
     app: AppHandle,
     retry: bool,
 ) -> Result<TranscriptionRuntimeStatusResponse, String> {
+    // Vulkan 版は同梱の ggml エンジンで動く（GPU が無ければ CPU）。Python / CUDA の確認はしない。
+    if is_vulkan_build(&app) {
+        let paths = resolve_ggml_speech_paths(&app)?;
+        let mut missing = Vec::new();
+        if !paths.whisper_cli.is_file() {
+            missing.push(paths.whisper_cli.display().to_string());
+        }
+        if !paths.nemo_speech.is_file() {
+            missing.push(paths.nemo_speech.display().to_string());
+        }
+        return Ok(if missing.is_empty() {
+            TranscriptionRuntimeStatusResponse {
+                available: true,
+                reason: String::new(),
+            }
+        } else {
+            TranscriptionRuntimeStatusResponse {
+                available: false,
+                reason: format!(
+                    "文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。\n不足: {}",
+                    missing.join(" / ")
+                ),
+            }
+        });
+    }
     // A package/model install can finish while the first CUDA/ROCm context
     // initialization is still settling. Retry Linux GPU editions only;
     // Windows keeps the previous single-probe behavior.
@@ -7881,6 +8034,41 @@ fn is_amd_gpu_build(app: &AppHandle) -> bool {
     app.config().identifier.contains("amd")
 }
 
+/// Vulkan 統一版（`--features vulkan` でビルド）かどうか。
+///
+/// identifier は CUDA 版と同じ `net.gakkousya.lott` を引き継ぐ（上書きインストールで
+/// ダウンロード済みの Gemma を再利用するため）ので、identifier ではなくビルド時の feature で
+/// 見分ける。文字起こし・話者分離は ggml エンジン、校正は同梱の Vulkan 版 llama-server を使い、
+/// Python / PyTorch の標準経路は持たない。Editor 版・CPU 版には適用しない。
+fn is_vulkan_build(app: &AppHandle) -> bool {
+    vulkan_build_for_identifier(cfg!(feature = "vulkan"), app.config().identifier.as_str())
+}
+
+fn vulkan_build_for_identifier(feature_enabled: bool, identifier: &str) -> bool {
+    feature_enabled
+        && !identifier.contains("editor")
+        && !identifier.contains("lott-cpu")
+        && !identifier.contains("amd")
+}
+
+/// 画面から指定された音声エンジン。Vulkan 版は標準（Python）経路を持たないため常に ggml。
+fn requested_speech_engine(app: &AppHandle, requested: Option<&str>) -> SpeechEngine {
+    if is_vulkan_build(app) {
+        SpeechEngine::Ggml
+    } else {
+        SpeechEngine::parse(requested)
+    }
+}
+
+/// 実行時のビルド種別。`build_variant_for_identifier` に Vulkan 版の判定を加えたもの。
+fn app_build_variant(app: &AppHandle) -> &'static str {
+    if is_vulkan_build(app) {
+        "vulkan"
+    } else {
+        build_variant_for_identifier(app.config().identifier.as_str())
+    }
+}
+
 /// Return the packaged GPU/CPU flavor from the Tauri identifier.
 ///
 /// This is kept separate from `check_gpu_availability_blocking` so the CPU
@@ -8173,7 +8361,17 @@ fn replace_backend_directory(staging: &Path, dest: &Path, backup: &Path) -> Resu
 }
 
 fn install_llm_backend_blocking(app: &AppHandle, backend: &str) -> Result<String, String> {
-    let build_variant = build_variant_for_identifier(app.config().identifier.as_str());
+    let build_variant = app_build_variant(app);
+    if build_variant == "vulkan" {
+        return if find_bundled_vulkan_llama_server_bin(app).is_some() {
+            Ok("Vulkan版 llama-server はアプリに同梱済みです。".to_string())
+        } else {
+            Err(
+                "Vulkan版 llama-server がパッケージに見つかりません。アプリを再インストールしてください。"
+                    .to_string(),
+            )
+        };
+    }
     if build_variant == "cuda" && backend != "llamacpp:cuda" {
         return Err(
             "NVIDIA CUDA版ではVulkan/ROCm/CPUのllama.cppバックエンドを使用しません。管理下のCUDA llama-serverをアプリパッケージへ同梱してください。"
@@ -9138,6 +9336,9 @@ fn dev_delete_editor_voice_input_pack(app: AppHandle) -> EditorVoiceInputPackDel
 
 #[tauri::command]
 fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
+    if is_vulkan_build(&app) {
+        return check_all_setup_status_vulkan(&app);
+    }
     let whisper_turbo = if should_emulate_missing_community_1() {
         false
     } else {
@@ -9178,6 +9379,35 @@ fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
     })
 }
 
+/// Vulkan 版のセットアップ状態。項目は CUDA 版と同じ構造体に載せ、画面の行をそのまま使う
+/// （whisper_turbo = whisper.cpp のモデルと VAD、diarization = Nemotron）。
+/// Python は校正・暗号化保存に使う最小限だけをインストーラーに同梱するため、導入手順は無い
+/// （python_env_expected_path を空にして画面の行を出さない）。
+fn check_all_setup_status_vulkan(app: &AppHandle) -> Result<AllSetupStatus, String> {
+    let models_root = resolve_ggml_models_root(app)?;
+    let whisper_turbo = !should_emulate_missing_community_1()
+        && ggml_speech::ggml_models_installed(&models_root, "whisper_turbo");
+    let diarization = !should_emulate_missing_community_1()
+        && ggml_speech::ggml_models_installed(&models_root, "diarization");
+    let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
+    let (gemma_mtp_gguf, gemma_mtp_gguf_expected_path) = get_gemma_mtp_gguf_info(app);
+    Ok(AllSetupStatus {
+        whisper_turbo,
+        diarization,
+        diarization_expected_path: models_root
+            .join(ggml_speech::DIAR_MODELS_SUBDIR)
+            .to_string_lossy()
+            .to_string(),
+        gemma_gguf,
+        gemma_gguf_expected_path,
+        gemma_mtp_gguf,
+        gemma_mtp_gguf_expected_path,
+        llm_backend: find_bundled_vulkan_llama_server_bin(app).is_some(),
+        python_env: true,
+        python_env_expected_path: String::new(),
+    })
+}
+
 #[tauri::command]
 fn get_dev_emulation_status() -> DevEmulationStatusResponse {
     let mode = read_dev_emulation_mode();
@@ -9207,7 +9437,7 @@ async fn check_gpu_availability(app: AppHandle, retry: Option<bool>) -> serde_js
 }
 
 fn check_gpu_availability_blocking(app: AppHandle, retry: bool) -> serde_json::Value {
-    let build_variant = build_variant_for_identifier(app.config().identifier.as_str());
+    let build_variant = app_build_variant(&app);
 
     // CPU版ではホストの nvidia-smi / rocm-smi を確認する必要がない。
     // CPU版を NVIDIA/AMD 機で起動しても、これらの外部コマンドが見つからない
@@ -9217,6 +9447,23 @@ fn check_gpu_availability_blocking(app: AppHandle, retry: bool) -> serde_json::V
         return serde_json::json!({
             "cudaAvailable": false,
             "rocmAvailable": false,
+            "buildVariant": build_variant,
+            "runtimePlatform": std::env::consts::OS,
+            "localLlmAppsEnabled": local_llm_apps_enabled(&app),
+        });
+    }
+
+    // Vulkan 版は nvidia-smi / rocm-smi を使わず、Vulkan の GPU 一覧で判定する
+    // （NVIDIA / AMD / Intel 共通）。GPU が無くても ggml エンジンは CPU で動くため、
+    // vulkanAvailable=false は「遅いが使える」を意味し、機能を止める理由にはしない。
+    if build_variant == "vulkan" {
+        let devices = gpu_select::vulkan_devices(retry);
+        let auto = gpu_select::choose_auto(&devices);
+        return serde_json::json!({
+            "cudaAvailable": false,
+            "rocmAvailable": false,
+            "vulkanAvailable": auto.is_some(),
+            "vulkanGpuName": auto.map(|d| d.name.clone()),
             "buildVariant": build_variant,
             "runtimePlatform": std::env::consts::OS,
             "localLlmAppsEnabled": local_llm_apps_enabled(&app),
@@ -11007,6 +11254,30 @@ mod tests {
     }
 
     #[test]
+    fn vulkan_feature_applies_only_to_the_full_identifier() {
+        assert!(vulkan_build_for_identifier(true, "net.gakkousya.lott"));
+        assert!(!vulkan_build_for_identifier(false, "net.gakkousya.lott"));
+        assert!(!vulkan_build_for_identifier(true, "net.gakkousya.lott-editor"));
+        assert!(!vulkan_build_for_identifier(true, "net.gakkousya.lott-cpu"));
+        assert!(!vulkan_build_for_identifier(true, "net.gakkousya.lott-amd"));
+    }
+
+    #[test]
+    fn ggml_model_table_is_pinned_and_verifiable() {
+        for model in ggml_speech::GGML_MODEL_FILES.iter() {
+            assert!(matches!(model.component, "whisper_turbo" | "diarization"));
+            assert_eq!(model.sha256.len(), 64);
+            assert!(model.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert!(model.url.starts_with("https://huggingface.co/"));
+            // revision は commit（40桁）で固定し、main など動く参照を使わない
+            let rev = model.url.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+            assert_eq!(rev.len(), 40, "{}", model.url);
+            assert!(model.url.ends_with(model.file));
+            assert!(model.size > 0);
+        }
+    }
+
+    #[test]
     fn build_variant_matches_packaged_identifier_and_prioritizes_cpu() {
         assert_eq!(
             build_variant_for_identifier("net.gakkousya.lott-cpu"),
@@ -12112,8 +12383,9 @@ fn run_diarization_blocking(
     request: RunDiarizationRequest,
 ) -> Result<RunDiarizationResponse, String> {
     set_cancel_requested(RunningTaskKind::Diarization, false);
-    let script_path = resolve_diarize_script_path(&app)?;
-    if !script_path.exists() {
+    let diarization_engine = requested_speech_engine(&app, request.diarization_engine.as_deref());
+    let script_path = resolve_speech_script_path(&app, "diarize_cli.py", diarization_engine)?;
+    if diarization_engine == SpeechEngine::Standard && !script_path.exists() {
         return Ok(RunDiarizationResponse {
             success: false,
             result: None,
@@ -12132,7 +12404,6 @@ fn run_diarization_blocking(
     }
 
     let speaker_count = request.speaker_count.unwrap_or(2).clamp(1, 5);
-    let diarization_engine = SpeechEngine::parse(request.diarization_engine.as_deref());
     let amd_gpu_required = is_amd_gpu_build(&app);
     let requested_device = if is_cpu_only_build(&app) {
         "cpu".to_string()
@@ -12344,15 +12615,15 @@ fn run_transcription_blocking(
         request.parallel_diarization.unwrap_or(false)
     );
     set_cancel_requested(RunningTaskKind::Transcription, false);
-    let transcription_engine = SpeechEngine::parse(request.transcription_engine.as_deref());
-    let diarization_engine = SpeechEngine::parse(request.diarization_engine.as_deref());
+    let transcription_engine = requested_speech_engine(&app, request.transcription_engine.as_deref());
+    let diarization_engine = requested_speech_engine(&app, request.diarization_engine.as_deref());
     let keep_fillers = request.keep_fillers.unwrap_or(true);
     eprintln!(
         "[LoTT][transcription][run_id={run_id}][stage=engine] transcription={transcription_engine:?} diarization={diarization_engine:?} keep_fillers={keep_fillers}"
     );
     let amd_gpu_required = is_amd_gpu_build(&app);
-    let script_path = resolve_sidecar_script_path(&app)?;
-    if !script_path.exists() {
+    let script_path = resolve_speech_script_path(&app, "transcribe_cli.py", transcription_engine)?;
+    if transcription_engine == SpeechEngine::Standard && !script_path.exists() {
         return Ok(RunTranscriptionResponse {
             success: false,
             result: None,
@@ -12479,8 +12750,8 @@ fn run_transcription_blocking(
     // 文字起こしと並行して話者分離を起動する（高速モード時のみ）
     let parallel_diar_handle: Option<thread::JoinHandle<Result<SidecarExecResult, String>>> =
         if request.diarization && use_parallel_diarization {
-            match resolve_diarize_script_path(&app) {
-                Ok(dscript) if dscript.exists() => {
+            match resolve_speech_script_path(&app, "diarize_cli.py", diarization_engine) {
+                Ok(dscript) if diarization_engine == SpeechEngine::Ggml || dscript.exists() => {
                     let app_par = app.clone();
                     let diar_bin = resolve_diarization_python_bin(&app, &python_bin);
                     let audio_par = request.audio_path.clone();
@@ -12699,7 +12970,8 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
             let mut result = json.get("result").cloned();
 
             if request.diarization {
-                let diarize_script_path = resolve_diarize_script_path(&app)?;
+                let diarize_script_path =
+                    resolve_speech_script_path(&app, "diarize_cli.py", diarization_engine)?;
                 let diarization_python_bin = resolve_diarization_python_bin(&app, &python_bin);
                 let mut diarization_output = if let Some(handle) = parallel_diar_handle {
                     emit_progress(
@@ -13299,11 +13571,35 @@ fn resolve_ggml_speech_paths(app: &AppHandle) -> Result<GgmlSpeechPaths, String>
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("app_local_data_dir の解決に失敗しました: {e}"))?;
-    let models_root = release_models_root(app).unwrap_or_else(|| data_dir.join("models"));
-    Ok(GgmlSpeechPaths::resolve(
-        &data_dir.join("speech-engines"),
-        &models_root,
-    ))
+    let models_root = resolve_ggml_models_root(app)?;
+    // Vulkan 版はエンジンをインストーラーに同梱する（resources/speech-engines）。
+    let engines_root = bundled_resource_dir_candidates(app, "speech-engines")
+        .into_iter()
+        .find(|dir| dir.is_dir())
+        .unwrap_or_else(|| data_dir.join("speech-engines"));
+    Ok(GgmlSpeechPaths::resolve(&engines_root, &models_root))
+}
+
+/// ggml モデルの置き場所（dev: python_sidecar/models、release: app_local_data_dir()/models）。
+fn resolve_ggml_models_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        let manifest_base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("python_sidecar");
+        let base = if manifest_base.exists() {
+            manifest_base
+        } else {
+            env::current_dir()
+                .map_err(|e| format!("カレントディレクトリ解決に失敗: {e}"))?
+                .join("python_sidecar")
+        };
+        return Ok(base.join("models"));
+    }
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir の解決に失敗しました: {e}"))?;
+    Ok(release_models_root(app).unwrap_or_else(|| data_dir.join("models")))
 }
 
 #[cfg(unix)]
@@ -13449,8 +13745,7 @@ fn apply_ggml_vulkan_device(
     if backend != Some("vulkan") || env::var_os("GGML_VK_VISIBLE_DEVICES").is_some() {
         return None;
     }
-    let devices = gpu_select::vulkan_devices(false);
-    let device = gpu_select::resolve(&devices, preferred_uuid)?.clone();
+    let device = gpu_select::resolve_preferred(preferred_uuid)?;
     cmd.env("GGML_VK_VISIBLE_DEVICES", device.index.to_string());
     Some(device)
 }
@@ -13890,6 +14185,12 @@ struct VulkanGpuList {
     devices: Vec<gpu_select::VulkanDevice>,
     /// 自動選択で使われる GPU の UUID（GPU が無ければ null）
     auto_uuid: Option<String>,
+}
+
+/// 設定タブで選ばれた GPU（UUID。None / 空は自動）を記録する。
+#[tauri::command]
+fn set_preferred_vulkan_gpu(uuid: Option<String>) {
+    gpu_select::set_preferred_uuid(uuid);
 }
 
 /// 設定タブ用: Vulkan の GPU 一覧と、自動選択で使われる GPU を返す。
@@ -14586,6 +14887,20 @@ fn resolve_sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     )
 }
 
+/// 音声処理の Python スクリプトのパス。ggml 経路では使わないため、Python スクリプトを同梱しない
+/// Vulkan 版でも失敗しないよう、名前だけのパスを返す（存在確認もしない）。
+fn resolve_speech_script_path(
+    app: &AppHandle,
+    name: &str,
+    engine: SpeechEngine,
+) -> Result<PathBuf, String> {
+    match (engine, name) {
+        (SpeechEngine::Ggml, _) => Ok(PathBuf::from(name)),
+        (SpeechEngine::Standard, "transcribe_cli.py") => resolve_sidecar_script_path(app),
+        (SpeechEngine::Standard, _) => resolve_diarize_script_path(app),
+    }
+}
+
 fn resolve_diarize_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     resolve_named_sidecar_script_path(
         app,
@@ -15221,6 +15536,183 @@ fn download_gemma_12b_blocking(app: &AppHandle) -> Result<(), String> {
     run_download_streaming(app, &mut cmd, "gemma_12b").map(|_| ())
 }
 
+fn emit_setup_progress_bytes(
+    app: &AppHandle,
+    component: &str,
+    status: &str,
+    message: &str,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+) {
+    app.emit(
+        "setup_progress",
+        SetupProgressPayload {
+            component: component.to_string(),
+            status: status.to_string(),
+            message: message.to_string(),
+            downloaded_bytes: Some(downloaded_bytes),
+            total_bytes: Some(total_bytes),
+        },
+    )
+    .ok();
+}
+
+/// ファイルの SHA-256（小文字16進）。1.6GB のモデルでも数秒で終わるよう 1MiB ずつ読む。
+fn sha256_file_hex(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut file =
+        fs::File::open(path).map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0_u8; 1 << 20];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("ファイルを読めませんでした: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// 途中から再開できるダウンロード（curl の `-C -`）。`.part` を残しておけば、回線が切れても
+/// 次のセットアップで続きから取得する。curl が無い Windows では PowerShell で最初から取得する。
+fn spawn_resumable_download(url: &str, part_file: &Path) -> Result<Child, String> {
+    let curl_name = if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "curl"
+    };
+    let mut curl = Command::new(curl_name);
+    apply_windows_no_window(&mut curl);
+    apply_host_command_env(&mut curl);
+    curl.args([
+        "-fL",
+        "--retry",
+        "3",
+        "--retry-delay",
+        "5",
+        "--silent",
+        "--show-error",
+        "-C",
+        "-",
+        "-o",
+    ])
+    .arg(part_file)
+    .arg(url)
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    match curl.spawn() {
+        Ok(child) => Ok(child),
+        Err(curl_err) if cfg!(target_os = "windows") => {
+            let _ = fs::remove_file(part_file);
+            spawn_file_download(url, part_file)
+                .map_err(|e| format!("{e}（curl を起動できませんでした: {curl_err}）"))
+        }
+        Err(curl_err) => Err(format!(
+            "ダウンロードに使う curl を起動できませんでした: {curl_err}。curl をインストールしてから再試行してください。"
+        )),
+    }
+}
+
+/// Vulkan 版の ggml モデルを1つ取得する。固定 revision の URL から `.part` へ取得し、
+/// サイズと SHA-256 が一致したものだけを配置する（一致しなければ消して失敗にする）。
+fn download_ggml_model_blocking(
+    app: &AppHandle,
+    model: &ggml_speech::GgmlModelFile,
+    models_root: &Path,
+) -> Result<(), String> {
+    let dest = model.path(models_root);
+    if model.is_installed(models_root) {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("保存先フォルダを作成できませんでした（{}）: {e}", parent.display()))?;
+    }
+    let part = dest.with_file_name(format!("{}.part", model.file));
+    let part_len = || part.metadata().map(|m| m.len()).unwrap_or(0);
+    if part_len() > model.size {
+        let _ = fs::remove_file(&part);
+    }
+
+    let message = format!("{}をダウンロード中...", model.label);
+    if part_len() < model.size {
+        emit_setup_progress_bytes(app, model.component, "downloading", &message, part_len(), model.size);
+        let mut child = spawn_resumable_download(model.url, &part)?;
+        let mut last_emitted = 0_u64;
+        loop {
+            match child
+                .try_wait()
+                .map_err(|e| format!("ダウンロード処理の確認に失敗しました: {e}"))?
+            {
+                Some(status) if status.success() => break,
+                Some(_) => {
+                    return Err(format!(
+                        "{}のダウンロードが途中で止まりました。インターネット接続を確認して、もう一度「不足しているファイルをすべてダウンロード」を押してください（続きから再開します）。",
+                        model.label
+                    ));
+                }
+                None => {
+                    let downloaded = part_len();
+                    if downloaded >= last_emitted + 8 * 1024 * 1024 {
+                        last_emitted = downloaded;
+                        emit_setup_progress_bytes(
+                            app,
+                            model.component,
+                            "downloading",
+                            &message,
+                            downloaded,
+                            model.size,
+                        );
+                    }
+                    thread::sleep(Duration::from_millis(800));
+                }
+            }
+        }
+    }
+
+    emit_setup_progress(
+        app,
+        model.component,
+        "downloading",
+        &format!("{}を検証中...", model.label),
+    );
+    let size = part_len();
+    let sha = sha256_file_hex(&part)?;
+    if size != model.size || sha != model.sha256 {
+        let _ = fs::remove_file(&part);
+        return Err(format!(
+            "{}の検証に失敗しました（ファイルが壊れているか、配布元の内容が変わっています）。もう一度ダウンロードしてください。繰り返し失敗する場合は開発者に連絡してください。",
+            model.label
+        ));
+    }
+    if dest.exists() {
+        fs::remove_file(&dest)
+            .map_err(|e| format!("既存のファイルを置き換えられませんでした: {e}"))?;
+    }
+    fs::rename(&part, &dest)
+        .map_err(|e| format!("ダウンロードしたファイルを配置できませんでした: {e}"))?;
+    Ok(())
+}
+
+/// 進捗単位（whisper_turbo / diarization）ごとに、Vulkan 版の ggml モデルをまとめて取得する。
+fn install_ggml_models_blocking(app: &AppHandle, component: &str) -> Result<(), String> {
+    let models_root = resolve_ggml_models_root(app)?;
+    for model in ggml_speech::GGML_MODEL_FILES
+        .iter()
+        .filter(|m| m.component == component)
+    {
+        download_ggml_model_blocking(app, model, &models_root)?;
+    }
+    Ok(())
+}
+
 fn emit_setup_progress(app: &AppHandle, component: &str, status: &str, message: &str) {
     app.emit(
         "setup_progress",
@@ -15581,6 +16073,12 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     let mut hf_token = SensitiveOptionalString::new(hf_token);
     let mut all_ok = true;
 
+    if is_vulkan_build(&app) {
+        // Vulkan 版はトークン不要。受け取っていても使わずに消す。
+        hf_token.clear();
+        return Ok(run_ggml_model_setup_blocking(&app) && run_gemma_setup_blocking(&app));
+    }
+
     // 0. Python venv（Windows のみ）
     {
         let (venv_ok, _) = check_python_venv(&app);
@@ -15664,22 +16162,59 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     }
 
     // 3. Gemma 4 E4B GGUF + MTP draft model
-    let (gemma_ok, _) = get_gemma_gguf_info(&app);
+    if !run_gemma_setup_blocking(&app) {
+        all_ok = false;
+    }
+
+    Ok(all_ok)
+}
+
+/// Vulkan 版: whisper.cpp のモデルと VAD、Nemotron を取得する（トークン不要・SHA-256 検証）。
+fn run_ggml_model_setup_blocking(app: &AppHandle) -> bool {
+    let mut all_ok = true;
+    let models_root = match resolve_ggml_models_root(app) {
+        Ok(root) => root,
+        Err(e) => {
+            emit_setup_progress(app, "whisper_turbo", "error", &format!("エラー: {e}"));
+            emit_setup_progress(app, "diarization", "error", &format!("エラー: {e}"));
+            return false;
+        }
+    };
+    for component in ["whisper_turbo", "diarization"] {
+        if ggml_speech::ggml_models_installed(&models_root, component) {
+            emit_setup_progress(app, component, "skipped", "インストール済みです");
+            continue;
+        }
+        match install_ggml_models_blocking(app, component) {
+            Ok(()) => emit_setup_progress(app, component, "done", "ダウンロード完了"),
+            Err(e) => {
+                emit_setup_progress(app, component, "error", &e);
+                all_ok = false;
+            }
+        }
+    }
+    all_ok
+}
+
+/// Gemma 4 E4B GGUF と MTP ドラフトを取得する（CUDA 版・Vulkan 版で共通）。
+fn run_gemma_setup_blocking(app: &AppHandle) -> bool {
+    let mut all_ok = true;
+    let (gemma_ok, _) = get_gemma_gguf_info(app);
     let gemma_mtp_needed = !app.config().identifier.contains("amd");
     let gemma_mtp_ok = if gemma_mtp_needed {
-        get_gemma_mtp_gguf_info(&app).0
+        get_gemma_mtp_gguf_info(app).0
     } else {
         true
     };
     if gemma_ok && gemma_mtp_ok {
-        emit_setup_progress(&app, "gemma_gguf", "skipped", "インストール済みです");
+        emit_setup_progress(app, "gemma_gguf", "skipped", "インストール済みです");
         if gemma_mtp_needed {
-            emit_setup_progress(&app, "gemma_mtp_gguf", "skipped", "インストール済みです");
+            emit_setup_progress(app, "gemma_mtp_gguf", "skipped", "インストール済みです");
         }
     } else {
         if !gemma_ok {
             emit_setup_progress(
-                &app,
+                app,
                 "gemma_gguf",
                 "downloading",
                 "Gemma 4 E4Bモデルをダウンロード中（約4.3GB）...",
@@ -15687,25 +16222,25 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
         }
         if gemma_mtp_needed && !gemma_mtp_ok {
             emit_setup_progress(
-                &app,
+                app,
                 "gemma_mtp_gguf",
                 "downloading",
                 "Gemma 4 E4B MTPモデルをダウンロード中（約60MB）...",
             );
         }
-        match download_gemma_gguf_blocking(&app) {
+        match download_gemma_gguf_blocking(app) {
             Ok(_) => {
-                let (gemma_ok_after, _) = get_gemma_gguf_info(&app);
+                let (gemma_ok_after, _) = get_gemma_gguf_info(app);
                 let gemma_mtp_ok_after = if gemma_mtp_needed {
-                    get_gemma_mtp_gguf_info(&app).0
+                    get_gemma_mtp_gguf_info(app).0
                 } else {
                     true
                 };
                 if gemma_ok {
-                    emit_setup_progress(&app, "gemma_gguf", "skipped", "インストール済みです");
+                    emit_setup_progress(app, "gemma_gguf", "skipped", "インストール済みです");
                 } else {
                     emit_setup_progress(
-                        &app,
+                        app,
                         "gemma_gguf",
                         if gemma_ok_after { "done" } else { "error" },
                         if gemma_ok_after {
@@ -15718,14 +16253,14 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
                 if gemma_mtp_needed {
                     if gemma_mtp_ok {
                         emit_setup_progress(
-                            &app,
+                            app,
                             "gemma_mtp_gguf",
                             "skipped",
                             "インストール済みです",
                         );
                     } else {
                         emit_setup_progress(
-                            &app,
+                            app,
                             "gemma_mtp_gguf",
                             if gemma_mtp_ok_after { "done" } else { "error" },
                             if gemma_mtp_ok_after {
@@ -15743,21 +16278,21 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
             Err(e) => {
                 // ダウンロード前から揃っていたコンポーネントまでエラー表示にしない
                 if gemma_ok {
-                    emit_setup_progress(&app, "gemma_gguf", "skipped", "インストール済みです");
+                    emit_setup_progress(app, "gemma_gguf", "skipped", "インストール済みです");
                 } else {
-                    emit_setup_progress(&app, "gemma_gguf", "error", &format!("エラー: {e}"));
+                    emit_setup_progress(app, "gemma_gguf", "error", &format!("エラー: {e}"));
                 }
                 if gemma_mtp_needed {
                     if gemma_mtp_ok {
                         emit_setup_progress(
-                            &app,
+                            app,
                             "gemma_mtp_gguf",
                             "skipped",
                             "インストール済みです",
                         );
                     } else {
                         emit_setup_progress(
-                            &app,
+                            app,
                             "gemma_mtp_gguf",
                             "error",
                             &format!("エラー: {e}"),
@@ -15769,7 +16304,7 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
         }
     }
 
-    Ok(all_ok)
+    all_ok
 }
 
 #[tauri::command]
@@ -16096,6 +16631,7 @@ pub fn run() {
             cancel_diarization,
             check_ggml_speech_status,
             list_vulkan_gpus,
+            set_preferred_vulkan_gpu,
             cancel_proofread,
             cancel_llm_proofread,
             list_llm_models,

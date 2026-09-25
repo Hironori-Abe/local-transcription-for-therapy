@@ -44,6 +44,10 @@ src-tauri/resources/llama-server/*.exe
 src-tauri/resources/llama-server/*.dll
 # Python 3.12 Embeddable（setup-build-tools.bat でダウンロード、git に含めない）
 src-tauri/resources/python312/
+# Vulkan 版の同梱物（scripts/prepare-vulkan-bundle-windows.ps1 が生成）
+src-tauri/resources/python312-vulkan/
+src-tauri/resources/llama-server-vulkan/
+src-tauri/resources/speech-engines/
 # LGPL FFmpeg バイナリ（scripts/setup_ffmpeg_lgpl.py でダウンロード、git に含めない）
 src-tauri/resources/ffmpeg/ffmpeg
 src-tauri/resources/ffmpeg/ffmpeg.exe

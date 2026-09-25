@@ -34,6 +34,72 @@ pub(crate) const VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
 pub(crate) const DIAR_MODELS_SUBDIR: &str = "nemotron-3-diarization";
 pub(crate) const DIAR_MODEL_FILE: &str = "Nemotron-3-Diarization.q8_0.gguf";
 
+/// Vulkan 版のセットアップでダウンロードするモデル。revision を commit で固定し、SHA-256 で検証する
+/// （scripts/setup-ggml-speech-windows.ps1 / setup-ggml-speech-linux.sh と同じ値。変えるときは揃える）。
+/// どれも利用規約への同意やトークンなしで取得できる。
+pub(crate) struct GgmlModelFile {
+    /// UI の進捗表示の単位（"whisper_turbo" = 音声認識、"diarization" = 話者分離）。
+    pub component: &'static str,
+    pub label: &'static str,
+    pub subdir: &'static str,
+    pub file: &'static str,
+    pub url: &'static str,
+    pub sha256: &'static str,
+    pub size: u64,
+}
+
+pub(crate) const GGML_MODEL_FILES: [GgmlModelFile; 3] = [
+    GgmlModelFile {
+        component: "whisper_turbo",
+        label: "音声認識モデル（Whisper large-v3-turbo）",
+        subdir: WHISPER_MODELS_SUBDIR,
+        file: "ggml-large-v3-turbo.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin",
+        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        size: 1_624_555_275,
+    },
+    GgmlModelFile {
+        component: "whisper_turbo",
+        label: "無音検出モデル（Silero VAD）",
+        subdir: WHISPER_MODELS_SUBDIR,
+        file: VAD_MODEL_FILE,
+        url: "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin",
+        sha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+        size: 885_098,
+    },
+    GgmlModelFile {
+        component: "diarization",
+        label: "話者分離モデル（Nemotron-3-Diarization）",
+        subdir: DIAR_MODELS_SUBDIR,
+        file: DIAR_MODEL_FILE,
+        url: "https://huggingface.co/nvidia/Nemotron-3-Diarization/resolve/f667ed73aee57d40cc39428eb768b4fd87a0a29e/Nemotron-3-Diarization.q8_0.gguf",
+        sha256: "08456d9e22cd9a323c0364d98375f3746d6e68507ebb705cd46438c534c7a3a1",
+        size: 107_012_128,
+    },
+];
+
+impl GgmlModelFile {
+    pub(crate) fn path(&self, models_root: &Path) -> PathBuf {
+        models_root.join(self.subdir).join(self.file)
+    }
+
+    /// 配置済みとみなすか。起動や状態確認のたびに 1.6GB をハッシュしないよう、ここではサイズだけを見る
+    /// （SHA-256 はダウンロード直後に検証し、一致したものだけを配置する）。
+    pub(crate) fn is_installed(&self, models_root: &Path) -> bool {
+        std::fs::metadata(self.path(models_root))
+            .map(|m| m.is_file() && m.len() == self.size)
+            .unwrap_or(false)
+    }
+}
+
+/// 指定した進捗単位のモデルがすべて配置済みか。
+pub(crate) fn ggml_models_installed(models_root: &Path, component: &str) -> bool {
+    GGML_MODEL_FILES
+        .iter()
+        .filter(|m| m.component == component)
+        .all(|m| m.is_installed(models_root))
+}
+
 /// VAD はアプリ既定（faster-whisper の vad_parameters）と同じ値を明示する。
 /// whisper.cpp の既定値（speech_pad 30ms など）は faster-whisper と異なるため省略しない。
 const VAD_THRESHOLD: &str = "0.5";

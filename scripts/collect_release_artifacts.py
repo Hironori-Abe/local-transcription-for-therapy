@@ -19,6 +19,8 @@ VARIANT_TOKENS = {
     "amd": "rocm",
     "cpu": "cpu",
     "editor": "editor",
+    # NVIDIA / AMD / Intel 共通の Vulkan 版（scripts/setup-build-tools.bat --vulkan）
+    "vulkan": "vulkan",
 }
 
 CHECKSUMS_NAME = "SHA256SUMS.txt"

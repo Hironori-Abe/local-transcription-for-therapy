@@ -16,6 +16,7 @@ set "BUILD_CONFIG=tauri.nvidia.windows.override.json"
 set "BUILD_LINE=NVIDIA CUDA"
 set "BUILD_VARIANT=nvidia"
 set "BUILD_OPTION="
+set "CARGO_FEATURES="
 set "DRY_RUN=0"
 
 REM Keep the historical no-argument invocation on the NVIDIA line, while
@@ -56,6 +57,16 @@ if /I "%~1"=="--cpu" (
   shift
   goto parse_args
 )
+if /I "%~1"=="--vulkan" (
+  if defined BUILD_OPTION goto duplicate_variant
+  set "BUILD_OPTION=--vulkan"
+  set "BUILD_LINE=Vulkan (NVIDIA / AMD / Intel)"
+  set "BUILD_CONFIG=tauri.vulkan.windows.override.json"
+  set "BUILD_VARIANT=vulkan"
+  set "CARGO_FEATURES=--features vulkan"
+  shift
+  goto parse_args
+)
 if /I "%~1"=="--editor" (
   if defined BUILD_OPTION goto duplicate_variant
   set "BUILD_OPTION=--editor"
@@ -79,11 +90,12 @@ if not exist "%BUILD_CONFIG%" (
   goto :hold_error
 )
 if "%DRY_RUN%"=="1" (
-  echo [DRY-RUN] cargo tauri build --bundles nsis --config %BUILD_CONFIG%
+  echo [DRY-RUN] cargo tauri build --bundles nsis --config %BUILD_CONFIG% %CARGO_FEATURES%
   echo [DRY-RUN] collect_release_artifacts.py --platform windows --variant %BUILD_VARIANT%
   goto :hold_success
 )
 echo.
+if /I "%BUILD_VARIANT%"=="vulkan" goto :describe_vulkan
 echo Included in installer:
 echo   - App executable (lott.exe)
 echo   - Python 3.12 Embeddable runtime (resources/python312/)
@@ -98,6 +110,24 @@ echo   - Whisper turbo model
 if /I not "%BUILD_VARIANT%"=="editor" echo   - Gemma 4 E4B GGUF model (Full editions; optional for CPU)
 echo   - Diarization model (pyannote community-1)
 echo.
+goto :after_describe
+
+:describe_vulkan
+echo Included in installer:
+echo   - App executable (lott.exe, built with --features vulkan)
+echo   - whisper.cpp / NeMo-Speech.cpp Vulkan builds (resources/speech-engines/)
+echo   - llama.cpp llama-server Vulkan build (resources/llama-server-vulkan/)
+echo   - Minimal Python 3.12 for proofreading / encrypted export (resources/python312-vulkan/)
+echo   - LGPL FFmpeg CLI (resources/ffmpeg/)
+echo   - Third-party license texts (licenses/)
+echo.
+echo Not included (downloaded after install via setup UI, no token required):
+echo   - Whisper large-v3-turbo ggml model + Silero VAD
+echo   - Nemotron-3-Diarization model
+echo   - Gemma 4 E4B GGUF model + MTP draft
+echo.
+
+:after_describe
 
 :: --- cargo check ---
 where cargo >nul 2>&1
@@ -121,6 +151,19 @@ if errorlevel 1 (
 )
 for /f "delims=" %%i in ('cargo tauri -V') do echo [OK] %%i
 echo.
+
+:: --- Vulkan: engines / llama-server / minimal Python ---
+if /I not "%BUILD_VARIANT%"=="vulkan" goto :after_vulkan_bundle
+echo [INFO] Preparing Vulkan bundle (engines, llama-server, minimal Python)...
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1
+if errorlevel 1 (
+  echo [ERROR] Failed to prepare the Vulkan bundle.
+  goto :hold_error
+)
+set "PYTHON312_DEST=src-tauri\resources\python312-vulkan"
+goto :after_get_pip_vulkan
+
+:after_vulkan_bundle
 
 :: --- Download Python 3.12 Embeddable ---
 set "PYTHON_VERSION=3.12.10"
@@ -214,6 +257,8 @@ if exist "%PYTHON312_DEST%\get-pip.py" (
   )
   echo [OK] Resumable pip is ready.
 )
+
+:after_get_pip_vulkan
 echo.
 
 :: --- LLM runtime: direct llama-server launch ---
@@ -234,6 +279,7 @@ set "LICENSE_VENV=.venv312-nvidia"
 if /I "%BUILD_VARIANT%"=="amd" set "LICENSE_VENV=.venv312-amd"
 if /I "%BUILD_VARIANT%"=="cpu" set "LICENSE_VENV=.venv312-cpu"
 if /I "%BUILD_VARIANT%"=="editor" set "LICENSE_VENV=.venv312-cpu"
+if /I "%BUILD_VARIANT%"=="vulkan" set "LICENSE_VENV=src-tauri\resources\python312-vulkan"
 if exist "%LICENSE_VENV%\Lib\site-packages" (
   "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --venv "%LICENSE_VENV%" --frontend frontend --tauri src-tauri --out licenses
   if errorlevel 1 (
@@ -266,7 +312,7 @@ if exist "%TAURI_RELEASE_UP%" (
 echo [INFO] Building %BUILD_LINE% installer (frontend build is included)...
 echo [INFO] This may take several minutes.
 echo.
-cargo tauri build --bundles nsis --config "%BUILD_CONFIG%"
+cargo tauri build --bundles nsis --config "%BUILD_CONFIG%" %CARGO_FEATURES%
 if errorlevel 1 (
   echo.
   echo [ERROR] Build failed.
@@ -287,7 +333,7 @@ if errorlevel 1 (
 )
 echo [OK] Release artifacts and SHA256SUMS.txt were collected under the output path listed above.
 echo.
-echo [INFO] Python packages are installed via the app's setup UI after first launch.
+if /I not "%BUILD_VARIANT%"=="vulkan" echo [INFO] Python packages are installed via the app's setup UI after first launch.
 goto :hold_success
 
 :normalize_python_pth
@@ -295,7 +341,7 @@ powershell -NoProfile -NonInteractive -Command "$path = '%~1'; $lines = [System.
 exit /b %ERRORLEVEL%
 
 :duplicate_variant
-echo [ERROR] Specify only one Windows build line: --amd, --cpu, or --editor.
+echo [ERROR] Specify only one Windows build line: --vulkan, --amd, --cpu, or --editor.
 goto :show_help
 
 :unknown_option
@@ -303,9 +349,10 @@ echo [ERROR] Unknown option: %~1
 goto :show_help
 
 :show_help
-echo Usage: scripts\setup-build-tools.bat [--amd ^| --cpu ^| --editor] [--dry-run] [--no-hold] [--trace]
+echo Usage: scripts\setup-build-tools.bat [--vulkan ^| --amd ^| --cpu ^| --editor] [--dry-run] [--no-hold] [--trace]
 echo.
 echo   (default)  Build the NVIDIA CUDA NSIS installer.
+echo   --vulkan   Build the Vulkan installer (NVIDIA / AMD / Intel, ggml speech engines).
 echo   --amd      Build the AMD ROCm Windows installer.
 echo   --cpu      Build the CPU Windows installer.
 echo   --editor   Build the lightweight Editor Windows installer.

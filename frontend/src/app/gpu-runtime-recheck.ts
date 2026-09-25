@@ -7,7 +7,7 @@ export const DELAYED_GPU_RECHECK_DELAY_MS = 60_000;
 
 export type DelayedGpuRecheckState = {
   platform: 'windows' | 'linux' | 'macos' | 'other' | 'unknown';
-  buildVariant: 'cuda' | 'rocm' | 'cpu' | null;
+  buildVariant: 'cuda' | 'rocm' | 'cpu' | 'vulkan' | null;
   cudaAvailable: boolean | null;
   rocmAvailable: boolean | null;
   transcriptionRuntimeAvailable: boolean;
@@ -26,6 +26,10 @@ export function shouldScheduleDelayedGpuRecheck(state: DelayedGpuRecheckState): 
 }
 
 export function isGpuRuntimeResolved(state: DelayedGpuRecheckState): boolean {
+  // Vulkan 版は GPU が無くても CPU で動くため、エンジンの有無だけで判定する。
+  if (state.buildVariant === 'vulkan') {
+    return state.transcriptionRuntimeAvailable === true;
+  }
   const driverAvailable = state.buildVariant === 'rocm'
     ? state.rocmAvailable === true
     : state.cudaAvailable === true;

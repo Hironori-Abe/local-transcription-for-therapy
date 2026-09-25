@@ -369,6 +369,23 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 
 サイズは Vulkan 版でそれぞれ約50〜60MB（PoC、Linux）。サイズが問題になる場合は、`install_llm_backend` と同様のセットアップ後ダウンロードに切り替える。
 
+### 8.1 Vulkan 版インストーラー（2026-09-25 実装、開発モードで動作確認）
+
+方針（AGENTS.md Distribution Strategy）に沿って、NVIDIA / AMD / Intel 共通の Vulkan 版を追加した。
+
+- 判定: Rust の feature `vulkan`（identifier は CUDA 版の `net.gakkousya.lott` を引き継ぐ）。文字起こし・話者分離は常に ggml、標準（Python）経路は持たない
+- ビルド: `scripts\setup-build-tools.bat --vulkan` → `scripts\prepare-vulkan-bundle-windows.ps1`（エンジン 109MB・llama-server 89MB・最小 Python 44MB。CUDA 版の llama-server 約1.1GB は不要）
+- 初回セットアップ: モデルは `ggml_speech::GGML_MODEL_FILES`（固定 revision・SHA-256・サイズ）を Rust で取得（`.part` から続きを再開、検証一致後に配置）。Gemma は従来どおり同梱 Python で取得
+- GPU: 設定タブの1つの欄で、文字起こし・話者分離・校正・音声入力に同じ GPU を使う（`set_preferred_vulkan_gpu`）。GPU が無いときは CPU で動き、その旨を表示する
+
+未完了（次の作業）:
+
+1. インストーラーを実際にビルドし、別フォルダ・別 PC・オフラインで起動確認する
+2. ライセンス: Nemotron（OpenMDW-1.1）・Silero VAD・llama.cpp の本文を `licenses/manual/` に置き、セットアップ画面から参照できるようにする。`collect_licenses.py --venv src-tauri\resources\python312-vulkan` で Python 分を再生成する
+3. CUDA 版から上書きした利用者向けに、不要になった Python パッケージ・faster-whisper / pyannote モデルを削除するボタン
+4. README（日本語・英語）と AGENTS.md の Proofreading Policy（CUDA / ROCm 前提の記述）の置き換え
+5. Editor 版の llama-server を Vulkan 版へ差し替える（音声入力の Vulkan 起動処理は実装済み）
+
 ## 9. ライセンス
 
 | コンポーネント | ライセンス | 配布時の対応 |

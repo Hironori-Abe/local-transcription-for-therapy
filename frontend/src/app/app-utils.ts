@@ -35,7 +35,8 @@ export function resolveRuntimeBuildFlagsValue(
 ): RuntimeBuildFlagsValue {
   const hasRuntimeVariant = runtimeBuildVariant === 'cuda'
     || runtimeBuildVariant === 'rocm'
-    || runtimeBuildVariant === 'cpu';
+    || runtimeBuildVariant === 'cpu'
+    || runtimeBuildVariant === 'vulkan';
   const cpuOnlyBuild = hasRuntimeVariant
     ? runtimeBuildVariant === 'cpu'
     : compileTimeCpuOnlyBuild;
@@ -44,6 +45,16 @@ export function resolveRuntimeBuildFlagsValue(
     aiProofreadBuild: !editorOnlyBuild && !cpuOnlyBuild,
     cpuVoiceInputBuild: editorOnlyBuild || cpuOnlyBuild
   };
+}
+
+/**
+ * 配布物の種類。vulkan は NVIDIA / AMD / Intel 共通の Vulkan 版（文字起こし・話者分離は
+ * ggml エンジン、校正は同梱の Vulkan 版 llama-server。Python / CUDA の導入手順を持たない）。
+ */
+export type BuildVariant = 'cuda' | 'rocm' | 'cpu' | 'vulkan';
+
+export function isBuildVariantValue(value: unknown): value is BuildVariant {
+  return value === 'cuda' || value === 'rocm' || value === 'cpu' || value === 'vulkan';
 }
 
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';

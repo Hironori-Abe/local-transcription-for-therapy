@@ -97,8 +97,20 @@ scripts\setup-dev-cpu.bat     & scripts\run-dev-cpu.bat
 ggml 音声エンジン（whisper.cpp / Nemotron-3-Diarization）の開発用ビルドとモデル取得（固定 commit・SHA-256 検証。詳細は `docs/ggml-speech-engine-design.md`）:
 
 ```bat
-powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1 -Backend vulkan
+powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
 ```
+
+Vulkan 版（NVIDIA / AMD / Intel 共通。Rust の feature `vulkan`）の開発起動とインストーラー作成:
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines
+scripts\run-dev-vulkan.bat
+scripts\setup-build-tools.bat --vulkan
+```
+
+- Vulkan 版は identifier `net.gakkousya.lott` を CUDA 版から引き継ぎ（上書きインストールで Gemma を再利用）、feature `vulkan` で見分ける（`is_vulkan_build` / フロントは `buildVariant === 'vulkan'`）
+- 同梱物: `resources/speech-engines`（ggml エンジン）、`resources/llama-server-vulkan`（公式 b10075 Vulkan 版）、`resources/python312-vulkan`（校正・暗号化保存・Gemma 取得用の最小 Python。`python_sidecar/requirements-vulkan.txt`）。いずれも VC++ ランタイムを同梱する
+- 初回セットアップは whisper.cpp モデル・VAD・Nemotron（Rust で取得。固定 revision・SHA-256 検証・中断再開。トークン不要）と Gemma のみ。Python の pip セットアップは無い
 
 ## Setup and Run (Ubuntu / Linux)
 

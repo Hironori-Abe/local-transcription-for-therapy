@@ -14187,6 +14187,140 @@ struct VulkanGpuList {
     auto_uuid: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LegacyDataItem {
+    label: String,
+    path: String,
+    bytes: u64,
+}
+
+fn dir_size_bytes(path: &Path) -> u64 {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| dir_size_bytes(&e.path()))
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// CUDA 版から Vulkan 版へ上書きしたときに残る、使われなくなったデータ。
+/// リリース版の Vulkan 版だけが対象（開発環境の venv・モデルは消さない）。
+/// Gemma（models/llm）と ggml のモデルは Vulkan 版でも使うので対象にしない。
+fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
+    if cfg!(debug_assertions) || !is_vulkan_build(app) {
+        return Vec::new();
+    }
+    let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(models) = release_models_root(app) {
+        candidates.push((
+            "話者分離モデル（pyannote community-1）".to_string(),
+            models.join("pyannote-speaker-diarization-community-1"),
+        ));
+    }
+    let hub = get_app_hf_hub_cache(app);
+    if let Ok(entries) = fs::read_dir(&hub) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("models--") && name.contains("faster-whisper") {
+                candidates.push((
+                    format!("音声認識モデル（{}）", name.trim_start_matches("models--")),
+                    entry.path(),
+                ));
+            }
+        }
+    }
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        for sub in ["resources/python312", "python312"] {
+            candidates.push((
+                "CUDA 版の Python と追加パッケージ（torch など）".to_string(),
+                resource_dir.join(sub),
+            ));
+        }
+    }
+    if let Ok(data_dir) = app.path().app_local_data_dir() {
+        candidates.push((
+            "CUDA 版の Python 追加パッケージ".to_string(),
+            data_dir.join("python312-site-packages"),
+        ));
+    }
+    candidates
+        .into_iter()
+        .filter(|(_, path)| path.exists())
+        .map(|(label, path)| LegacyDataItem {
+            label,
+            bytes: dir_size_bytes(&path),
+            path: path.to_string_lossy().into_owned(),
+        })
+        .collect()
+}
+
+/// 設定タブ用: CUDA 版から残った不要データの一覧（Vulkan 版のリリースのみ。無ければ空）。
+#[tauri::command]
+async fn list_legacy_cuda_data(app: AppHandle) -> Result<Vec<LegacyDataItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || legacy_cuda_data_items(&app))
+        .await
+        .map_err(|e| format!("不要データの確認に失敗しました: {e}"))
+}
+
+/// CUDA 版から残った不要データを削除する。一覧と同じ規則で対象を決め直し、画面から渡された
+/// パスは使わない（任意のフォルダを消せる経路を作らない）。削除できなかったものは一覧で返す。
+#[tauri::command]
+async fn delete_legacy_cuda_data(app: AppHandle) -> Result<Vec<LegacyDataItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        for item in legacy_cuda_data_items(&app) {
+            let path = PathBuf::from(&item.path);
+            let _ = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+        }
+        legacy_cuda_data_items(&app)
+    })
+    .await
+    .map_err(|e| format!("不要データの削除に失敗しました: {e}"))
+}
+
+/// セットアップ画面に表示するライセンス本文（`licenses/manual/`）。読めるのはこの一覧だけ。
+const VIEWABLE_LICENSES: &[(&str, &str)] = &[(
+    "nemotron",
+    "Nemotron-3-Diarization-OpenMDW-1.1.txt",
+)];
+
+#[tauri::command]
+fn read_bundled_license(app: AppHandle, name: String) -> Result<String, String> {
+    let file = VIEWABLE_LICENSES
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, file)| *file)
+        .ok_or_else(|| "表示できないライセンスです。".to_string())?;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = app.path().resource_dir() {
+        // tauri.conf の "../licenses" は resource_dir/_up_/licenses に置かれる
+        dirs.push(rd.join("_up_").join("licenses"));
+        dirs.push(rd.join("licenses"));
+    }
+    if cfg!(debug_assertions) {
+        dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("licenses"));
+    }
+    dirs.into_iter()
+        .map(|d| d.join("manual").join(file))
+        .find_map(|p| fs::read_to_string(p).ok())
+        .ok_or_else(|| format!("ライセンス本文が見つかりません（{file}）。アプリを再インストールしてください。"))
+}
+
 /// 設定タブで選ばれた GPU（UUID。None / 空は自動）を記録する。
 #[tauri::command]
 fn set_preferred_vulkan_gpu(uuid: Option<String>) {
@@ -16632,6 +16766,9 @@ pub fn run() {
             check_ggml_speech_status,
             list_vulkan_gpus,
             set_preferred_vulkan_gpu,
+            list_legacy_cuda_data,
+            read_bundled_license,
+            delete_legacy_cuda_data,
             cancel_proofread,
             cancel_llm_proofread,
             list_llm_models,

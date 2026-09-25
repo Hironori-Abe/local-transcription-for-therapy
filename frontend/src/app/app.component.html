@@ -246,6 +246,8 @@
                 (allSetupStatus()?.diarization || setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
               <span class="setup-comp-name">{{ vulkanBuild() ? '話者分離モデル（Nemotron-3-Diarization）' : '話者分離モデル（pyannote community-1）' }}</span>
               <span class="setup-comp-size" *ngIf="vulkanBuild()">約 0.1 GB</span>
+              <button *ngIf="vulkanBuild()" mat-button type="button" class="setup-license-btn"
+                (click)="toggleNemotronLicense()">{{ setupLicenseText() ? 'ライセンスを閉じる' : 'ライセンス（OpenMDW-1.1）' }}</button>
               <span class="setup-comp-note" *ngIf="!vulkanBuild()">要Hugging Face トークン（下記参照）</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['diarization']?.status === 'error'"
@@ -297,6 +299,12 @@
                 [class.setup-comp-progress-done]="setupProgressMap()['gemma_mtp_gguf']?.status === 'done' || setupProgressMap()['gemma_mtp_gguf']?.status === 'skipped'"
                 *ngIf="setupProgressMap()['gemma_mtp_gguf'] as p">{{ p.message }}</span>
             </div>
+          </div>
+
+          <!-- Nemotron-3-Diarization のライセンス本文（ダウンロード前に確認できるようにする） -->
+          <div *ngIf="vulkanBuild() && setupLicenseText()" class="setup-license-panel">
+            <p class="setup-guide-note">話者分離モデル Nemotron-3-Diarization（NVIDIA）は、次のライセンスで提供されています。ダウンロードすると、この条件に同意したものとみなされます。</p>
+            <pre class="setup-license-text">{{ setupLicenseText() }}</pre>
           </div>
 
           <!-- 話者分離ダウンロードのエラー詳細（困惑しないよう手厚く案内する） -->
@@ -789,6 +797,31 @@
                   <mat-icon class="material-symbols-outlined">warning</mat-icon>
                   {{ ggmlSpeechWarning() }}
                 </div>
+              </div>
+              <!-- Vulkan 版: CUDA 版から上書きしたときに残った不要データの削除 -->
+              <div *ngIf="vulkanBuild() && (legacyCudaData().length > 0 || legacyCudaDataMessage())" class="legacy-data-block">
+                <ng-container *ngIf="legacyCudaData().length > 0">
+                  <p class="estimate-line">
+                    以前の CUDA 版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。ダウンロード済みの AI 校正モデル（Gemma）や、この版の音声認識・話者分離モデルは削除しません。
+                  </p>
+                  <ul class="dev-delete-list">
+                    <li *ngFor="let item of legacyCudaData()">{{ item.label }}（{{ (item.bytes / 1073741824).toFixed(1) }} GB）</li>
+                  </ul>
+                  <div class="actions-row">
+                    <button *ngIf="!legacyCudaDataConfirming()" mat-stroked-button color="warn"
+                      [disabled]="legacyCudaDataDeleting() || running() || proofreadRunning() || diarizationRunning()"
+                      (click)="legacyCudaDataConfirming.set(true)">
+                      <mat-icon class="material-symbols-outlined">delete</mat-icon>
+                      {{ legacyCudaDataDeleting() ? '削除中...' : '不要なデータを削除' }}
+                    </button>
+                    <ng-container *ngIf="legacyCudaDataConfirming()">
+                      <span class="copy-status">元に戻せません。削除しますか？</span>
+                      <button mat-flat-button color="warn" (click)="deleteLegacyCudaData()">削除する</button>
+                      <button mat-stroked-button (click)="legacyCudaDataConfirming.set(false)">やめる</button>
+                    </ng-container>
+                  </div>
+                </ng-container>
+                <p *ngIf="legacyCudaDataMessage()" class="copy-status">{{ legacyCudaDataMessage() }}</p>
               </div>
             </ng-container>
 

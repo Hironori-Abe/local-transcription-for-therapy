@@ -26,6 +26,10 @@
 |---|---|---|---|
 | **Python 3.12 runtime**（Windows: `resources/python312/`、Linux: `resources/python312-linux/`） | Python ランタイム | PSF License Agreement | ライセンス本文を各配布リソースへ同梱。Linux版はUbuntu 24.04コンテナで基本ランタイムを構成 |
 | **llama.cpp** (`resources/llama-server/` の Windows DLL / Linux `cuda/llama-server` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | Windowsは公式CUDA archive、Linux CUDAは固定commit b10075 source build。著作権表示＋MIT本文の同梱。再ビルド手順は `scripts/build-llama-server-cuda-linux.sh` |
+| **whisper.cpp / ggml**（Vulkan 版: `resources/speech-engines/whisper/`） | 文字起こし | **MIT** (ggml-org/whisper.cpp) | 固定 commit のソースビルド。`LICENSE-whisper.cpp.txt` を同梱 |
+| **NeMo-Speech.cpp**（Vulkan 版: `resources/speech-engines/nemo/`） | 話者分離 | **Apache-2.0**（NVIDIA 著作分）＋ sentencepiece（Apache-2.0、静的リンク） | 固定 commit のソースビルド。`LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` を同梱。sentencepiece は `licenses/manual/sentencepiece-LICENSE.txt` |
+| **llama.cpp Vulkan 版**（Vulkan 版: `resources/llama-server-vulkan/`） | LLM 推論サーバー | **MIT** | 公式 b10075 Windows Vulkan archive（SHA-256 固定）。本文は `licenses/manual/llama.cpp-LICENSE.txt` |
+| **Microsoft VC++ ランタイム**（Vulkan 版の各実行ファイルの隣） | C/C++ 実行時 | Visual Studio の再頒布可能ファイル（Distributable Code） | VS Build Tools の `VC\Redist\MSVC` から、変更せずにアプリローカル配置 |
 | ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV変換 / LinuxのAAC再生用FLAC変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows・Linux配布リソースへ同梱。`--enable-gpl` / `--enable-nonfree` / GPL系encoderなし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt`を同梱 |
 | ✅ **GStreamer core / base / good / ALSA / PulseAudio plugins**（Linux AppImage） | WebKitGTKの音声再生 | **LGPL-2.1（プラグインによりLGPL互換のMIT / BSDを含む）** | `bundleMediaFramework`で同梱。`plugins-ugly` / `gst-libav` / `faad`等は導入せず、GPL系プラグイン名の混入をビルド時に拒否。公式licensing FAQ: `https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html` |
 | ✅ **NVIDIA CUDA 再頒布ランタイム** (`cublas*`, `cudart*`, `nvrtc*` 等 — CUDA 12.4 devel imageからLinux source build時に抽出 / Windows公式ビルド由来DLL) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3）。Linux source buildは公式コンテナ内のEULA/LICENSE候補を `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt` にもコピーし、見つからなければビルド失敗。`libcuda.so.1`（NVIDIAドライバー）は同梱しない |
@@ -90,6 +94,9 @@
 |---|---|---|
 | 🔴 **pyannote speaker-diarization-community-1** | **CC-BY-4.0** | **帰属表示が必須**。作者クレジット＋ライセンスへのリンク＋（改変した場合）変更の明示。アプリの About / NOTICE に記載 |
 | **Whisper turbo**（faster-whisper / Systran 変換版） | MIT（OpenAI Whisper 由来） | 著作権＋本文同梱 |
+| **Whisper large-v3-turbo（ggml 変換版、Vulkan 版）**（`ggerganov/whisper.cpp`） | MIT（OpenAI Whisper 由来） | 固定 revision・SHA-256 で取得 |
+| **Silero VAD v6.2.0（ggml 変換版、Vulkan 版）**（`ggml-org/whisper-vad`） | **MIT**（Silero Team） | 本文は `licenses/manual/silero-vad-LICENSE.txt` |
+| 🟡 **Nemotron-3-Diarization（Vulkan 版）**（`nvidia/Nemotron-3-Diarization`） | **OpenMDW-1.1** | 商用利用・改変・再配布可。再配布時はライセンス文と帰属表示を残す。特許・著作権訴訟を起こすと権利が終了する条項あり。アプリには同梱せずダウンロードするが、本文を `licenses/manual/Nemotron-3-Diarization-OpenMDW-1.1.txt` に置く |
 | **Gemma 4 E4B GGUF**（`unsloth/gemma-4-E4B-it-qat-GGUF`） | ✅ **Apache-2.0**（Gemma 4 は旧 Gemma Terms / 禁止用途ポリシー非適用。確認済み） | Google DeepMind ＋ Unsloth を Apache-2.0 として帰属表示（F-2 参照） |
 | **Gemma 4 12B GGUF + MTP draft**（`unsloth/gemma-4-12B-it-qat-GGUF`） | ✅ **Apache-2.0** | 本体と`mtp-gemma-4-12B-it.gguf`をオプション取得。Google DeepMind＋Unslothを帰属表示（F-2参照） |
 

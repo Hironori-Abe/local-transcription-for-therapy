@@ -1,6 +1,6 @@
 [package]
 name = "lott"
-version = "0.9.8"
+version = "0.9.9"
 description = "Local Japanese transcription desktop app"
 authors = ["you"]
 edition = "2021"

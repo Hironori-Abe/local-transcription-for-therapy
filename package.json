@@ -1,7 +1,7 @@
 {
   "name": "lott",
   "private": true,
-  "version": "0.9.8",
+  "version": "0.9.9",
   "scripts": {
     "setup": "npm install && npm --prefix frontend install && py python_sidecar/setup_venv_cli.py python_sidecar/requirements-runtime.txt",
     "frontend:dev": "npm --prefix frontend run start",

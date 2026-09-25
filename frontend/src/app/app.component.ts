@@ -582,6 +582,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** Vulkan 版: Vulkan で使える GPU があるか（null は未確認）と、自動選択される GPU の名前。 */
   readonly vulkanAvailable = signal<boolean | null>(null);
   readonly vulkanGpuName = signal<string>('');
+  /** Vulkan 版: CUDA 版から上書きしたときに残った不要データ（リリース版のみ。無ければ空）。 */
+  readonly legacyCudaData = signal<{ label: string; path: string; bytes: number }[]>([]);
+  readonly legacyCudaDataConfirming = signal<boolean>(false);
+  /** セットアップ画面で開いているライセンス本文（Nemotron。空なら閉じている）。 */
+  readonly setupLicenseText = signal<string>('');
+  readonly legacyCudaDataDeleting = signal<boolean>(false);
+  readonly legacyCudaDataMessage = signal<string>('');
+  readonly legacyCudaDataTotalLabel = computed(() => {
+    const bytes = this.legacyCudaData().reduce((sum, item) => sum + item.bytes, 0);
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  });
   /**
    * 配布物のAngular設定とRust側identifierが食い違った場合に備えた実行時能力。
    * startup中はコンパイル時値を使い、Rustのcheck_gpu_availability完了後は
@@ -2686,6 +2697,48 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.syncPreferredVulkanGpu();
   }
 
+  async toggleNemotronLicense(): Promise<void> {
+    if (this.setupLicenseText()) {
+      this.setupLicenseText.set('');
+      return;
+    }
+    try {
+      const text = await invoke<string>('read_bundled_license', { name: 'nemotron' });
+      this.ngZone.run(() => this.setupLicenseText.set(text));
+    } catch (e) {
+      this.ngZone.run(() => this.setupLicenseText.set(this.normalizeErrorMessage(e)));
+    }
+  }
+
+  async refreshLegacyCudaData(): Promise<void> {
+    if (!this.isTauriRuntime()) return;
+    try {
+      const items = await invoke<{ label: string; path: string; bytes: number }[]>('list_legacy_cuda_data');
+      this.ngZone.run(() => this.legacyCudaData.set(items));
+    } catch {
+      this.ngZone.run(() => this.legacyCudaData.set([]));
+    }
+  }
+
+  async deleteLegacyCudaData(): Promise<void> {
+    if (this.legacyCudaDataDeleting()) return;
+    this.legacyCudaDataDeleting.set(true);
+    this.legacyCudaDataConfirming.set(false);
+    try {
+      const remaining = await invoke<{ label: string; path: string; bytes: number }[]>('delete_legacy_cuda_data');
+      this.ngZone.run(() => {
+        this.legacyCudaData.set(remaining);
+        this.legacyCudaDataMessage.set(remaining.length === 0
+          ? '不要なデータを削除しました。'
+          : '一部を削除できませんでした。アプリを再起動してから、もう一度お試しください（使用中のファイルは削除できません）。');
+      });
+    } catch (e) {
+      this.ngZone.run(() => this.legacyCudaDataMessage.set(`削除に失敗しました: ${this.normalizeErrorMessage(e)}`));
+    } finally {
+      this.ngZone.run(() => this.legacyCudaDataDeleting.set(false));
+    }
+  }
+
   /** 選んだ GPU を Rust 側へ伝える（音声入力など、要求ごとに GPU を渡さない処理も同じ GPU を使う）。 */
   private syncPreferredVulkanGpu(): void {
     if (!this.isTauriRuntime()) return;
@@ -4330,6 +4383,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } else if (this.vulkanBuild()) {
       // Vulkan 版は Python の GPU 検出（detect_env_cli）を使わず、Vulkan の GPU 一覧を使う。
       void this.refreshVulkanGpus(false);
+      void this.refreshLegacyCudaData();
     } else {
       void this.loadComputeEnv();
     }

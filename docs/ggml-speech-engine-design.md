@@ -381,9 +381,9 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 未完了（次の作業）:
 
 1. インストーラーを実際にビルドし、別フォルダ・別 PC・オフラインで起動確認する
-2. ライセンス: Nemotron（OpenMDW-1.1）・Silero VAD・llama.cpp の本文を `licenses/manual/` に置き、セットアップ画面から参照できるようにする。`collect_licenses.py --venv src-tauri\resources\python312-vulkan` で Python 分を再生成する
-3. CUDA 版から上書きした利用者向けに、不要になった Python パッケージ・faster-whisper / pyannote モデルを削除するボタン
-4. README（日本語・英語）と AGENTS.md の Proofreading Policy（CUDA / ROCm 前提の記述）の置き換え
+2. ライセンス: Nemotron（OpenMDW-1.1）・Silero VAD・llama.cpp の本文は `licenses/manual/` に配置済み、`THIRD_PARTY_LICENSES.md` にも追記済み（2026-09-25）。セットアップ画面の話者分離の行から Nemotron の本文を表示できる（`read_bundled_license`）。残りは配布前の`collect_licenses.py --venv src-tauri\resources\python312-vulkan` で Python 分を再生成する
+3. ~~不要データの削除ボタン~~ 実装済み（設定タブ。`list_legacy_cuda_data` / `delete_legacy_cuda_data`。リリース版の Vulkan 版のみ、対象は Rust 側で決め直す）。インストーラーでの実機確認が残り
+4. README（日本語・英語）に Vulkan 版の説明を追記済み（v0.9.9）。AGENTS.md の Proofreading Policy には Vulkan 版の起動方法を追記済み（CUDA / ROCm の記述は現行実装の説明として残している）
 5. Editor 版の llama-server を Vulkan 版へ差し替える（音声入力の Vulkan 起動処理は実装済み）
 
 ## 9. ライセンス

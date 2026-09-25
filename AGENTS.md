@@ -205,6 +205,8 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ### 校正エンジンのライフサイクル（VRAM解放）
 
+**Vulkan 版（feature `vulkan`）の校正・音声入力**: 同梱の `resources/llama-server-vulkan`（公式 b10075 Vulkan 版）を、下記の CUDA 直起動と同じ引数（E4B は `-ngl 99` + MTP・FlashAttention on、12B と音声入力は `--fit on`）で起動する。GPU は `GGML_VK_VISIBLE_DEVICES` で、音声エンジンと同じ設定（`gpu_select::resolve_preferred`）の GPU を選ぶ。GPU が無いときは Vulkan デバイスを見せず CPU で動かす。起動関数は `try_start_llama_server_cuda` / `start_cuda_llama_blocking` を `LlamaGpu::Vulkan` で共用している。以下の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、CUDA 版・AMD 版の現行実装の説明。
+
 基本方針: **校正用に起動した llama-server はジョブ完了時に解放し、音声入力用は次の音声入力・区間再文字起こしに備えて保持する**。保持中の音声入力用サーバーは、校正・文字起こし・話者分離の開始時とアプリ終了時（強制終了含む）に解放する。実装は **Rust 側に集約**しており、フロントから二重に停止しない。配信は NVIDIA=CUDA / AMD=ROCm・Vulkan のいずれも「llama-server 直起動」で統一する。現行の校正経路に外部のランタイム管理デーモンやCLIはなく、状態管理構造体は `LlmServer` とする。キャッシュの正式名称は `llm-engine` とし、既存ユーザーのために旧 `lemonade` キャッシュを移行期間中だけフォールバックとして読み取る。
 
 - **per-job 解放（Rust）**: `proofread_transcription_llm` / `run_overall_proofread` はサイドカー終了後（成功・中止・失敗すべて）に、内蔵 llama-server 経路なら次を行う。

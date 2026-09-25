@@ -1172,6 +1172,25 @@ $shortcut-hint-slot-percentage: math.percentage(math.div(1, $shortcut-hint-slot-
   ol { margin: 0 0 8px 18px; padding: 0; }
 }
 
+.setup-license-btn {
+  margin-left: 4px;
+}
+
+.setup-license-panel {
+  margin: 8px 0 12px;
+}
+
+.setup-license-text {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid var(--mat-sys-outline-variant, rgba(128, 128, 128, 0.4));
+  border-radius: 6px;
+}
+
 .diarization-error-panel {
   display: flex;
   gap: 10px;

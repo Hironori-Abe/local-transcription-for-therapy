@@ -44,9 +44,19 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 | Edition | Description |
 | --- | --- |
 | **LoTT Full CUDA** | Main Windows and Linux distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
+| LoTT Vulkan (v0.9.9+, experimental) | New edition that supports NVIDIA / AMD / Intel GPUs with a single installer. Transcription uses whisper.cpp, speaker diarization uses Nemotron-3-Diarization, and proofreading uses llama.cpp (all on Vulkan). No CUDA Toolkit, cuDNN, or Hugging Face token is required. On PCs without a GPU it runs on the CPU (slower) |
 | LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. After diarization, punctuation is added automatically with Gemma 4 E4B (the LLM prefers ROCm with Vulkan fallback) |
 | LoTT CPU | Trial edition. Runs transcription and speaker diarization on the CPU, then automatically applies simple rule-based punctuation. Overall proofreading is not included. Voice input and segment re-listen become available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
 | LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription, diarization, automatic punctuation, and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input and segment re-listen with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
+
+### Vulkan Edition
+
+The Vulkan edition is an experimental edition that is planned to become the main distribution (testing on Intel Arc and other GPUs is in progress).
+
+- Only the latest driver from your GPU vendor is required. There is no CUDA Toolkit / cuDNN installation and no Python package setup
+- The initial setup downloads the speech recognition model (about 1.6 GB), the Nemotron-3-Diarization speaker diarization model (about 0.1 GB, NVIDIA OpenMDW-1.1 license; the full text can be viewed on the setup screen), and the Gemma 4 E4B proofreading model (about 4.3 GB). No Hugging Face account or token is needed
+- On PCs with multiple GPUs, the GPU with the most VRAM other than the integrated GPU is used automatically. You can change it in the Settings tab
+- When installed over the Full CUDA edition, the already downloaded proofreading model is reused. Data used only by the CUDA edition (several GB) can be deleted from the Settings tab
 
 ### AMD GPU Edition
 
@@ -165,6 +175,7 @@ Use the button at the left of the tab row to cycle among System (default), Light
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper (turbo by default / optional higher-accuracy large-v3, downloaded later) / Diarization: pyannote.audio / Audio decoding: LGPL-configured ffmpeg CLI
+- Vulkan edition: transcription with whisper.cpp (large-v3-turbo, Silero VAD) / speaker diarization with NeMo-Speech.cpp + Nemotron-3-Diarization / proofreading with llama.cpp llama-server (all on Vulkan; CPU when no GPU is available)
 - Voice input & segment re-listen: Gemma 4 E4B with an audio mmproj (llama.cpp llama-server, OpenAI-compatible `input_audio`, loopback only)
 - LLM proofreading: Gemma 4 E4B by default / Gemma 4 12B QAT+MTP as the optional high-accuracy model, downloaded later. Windows and Linux NVIDIA use direct CUDA launch; AMD prefers ROCm with Vulkan fallback. The engine uses bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
 

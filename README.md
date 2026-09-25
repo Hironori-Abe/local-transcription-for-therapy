@@ -40,9 +40,19 @@
 | エディション | 内容 |
 | --- | --- |
 | **LoTT Full CUDA** | Windows / Linuxの主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離後にGemma 4 E4Bで句読点を自動付与し、校正機能も利用可能 |
+| LoTT Vulkan（v0.9.9〜・試験的） | NVIDIA / AMD / Intel の GPU に1つのインストーラーで対応する新しい版。文字起こしは whisper.cpp、話者分離は Nemotron-3-Diarization、校正は llama.cpp（いずれも Vulkan）。CUDA Toolkit・cuDNN・Hugging Face トークンは不要。GPU が無い PC では CPU で動作（時間がかかる） |
 | LoTT Full AMD (ROCm / Vulkan) | experimental / 自己ビルド向け。AMD GPU 向け。話者分離後にGemma 4 E4Bで句読点を自動付与（LLM は ROCm 優先・Vulkan フォールバック） |
 | LoTT CPU | お試し版。CPUで文字起こし・話者分離を行い、その後に単純な句読点を自動付与する。全体校正は非搭載。音声入力パックを導入すると音声入力・区間聞き直しも利用可能。処理時間の目安は音声時間の約1.5〜2.5倍 |
 | LoTT Editor | JSONの校正・編集に特化した軽量版。文字起こし・話者分離・自動句読点付与・LLM 校正ランタイムは非搭載。音声入力パック（任意ダウンロード）を導入すると CPU 版ローカル AI による音声入力・区間聞き直しを利用可能（メモリ 16GB 未満では非推奨） |
+
+### Vulkan 版について
+
+Vulkan 版は、今後の主配布にする予定の試験的な版です（現在は Intel Arc などでの動作確認中）。
+
+- 必要なのは GPU メーカーの最新ドライバーだけです。CUDA Toolkit・cuDNN の導入や、Python パッケージのセットアップはありません
+- 初回セットアップでダウンロードするのは、音声認識モデル（約1.6GB）、話者分離モデル Nemotron-3-Diarization（約0.1GB、NVIDIA の OpenMDW-1.1 ライセンス。セットアップ画面から本文を確認できます）、校正モデル Gemma 4 E4B（約4.3GB）です。Hugging Face のアカウントやトークンは不要です
+- GPU が複数ある PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動で使います。設定タブで変更できます
+- Full CUDA 版に上書きインストールすると、ダウンロード済みの校正モデルはそのまま使えます。CUDA 版で使っていた不要なデータ（数GB）は、設定タブから削除できます
 
 ### AMD GPU版について
 
@@ -160,6 +170,7 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper（turbo 既定 / large-v3 高精度・後付けダウンロード） / Diarization: pyannote.audio / 音声デコード: LGPL 構成 ffmpeg CLI
+- Vulkan 版: 文字起こし whisper.cpp（large-v3-turbo・Silero VAD）/ 話者分離 NeMo-Speech.cpp + Nemotron-3-Diarization / 校正 llama.cpp llama-server（すべて Vulkan。GPU が無い場合は CPU）
 - 音声入力・区間聞き直し: Gemma 4 E4B + 音声 mmproj（llama.cpp llama-server、OpenAI 互換 `input_audio`、loopback 限定）
 - LLM 校正: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。Windows/Linux NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan フォールバック）+ 同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）
 

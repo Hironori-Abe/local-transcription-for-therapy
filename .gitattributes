@@ -15,6 +15,8 @@
 *.toml text eol=lf
 *.rs text eol=lf
 *.txt text eol=lf
+*.lock text eol=lf
+*.patch text eol=lf
 
 # Binary files
 *.exe binary

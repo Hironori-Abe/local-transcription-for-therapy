@@ -72,8 +72,42 @@ function Invoke-Native {
     param([string]$LogFile, [string]$Exe, [string[]]$Arguments)
     $ErrorActionPreference = 'Continue'
     "> $Exe $($Arguments -join ' ')" | Out-File -Append -Encoding utf8 $LogFile
-    & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-File -Append -Encoding utf8 $LogFile
+    & $Exe @Arguments 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    } | Out-File -Append -Encoding utf8 $LogFile
     if ($LASTEXITCODE -ne 0) { throw "$Exe が失敗しました（exit=$LASTEXITCODE）。ログ: $LogFile" }
+}
+
+function Invoke-CmakeConfigure {
+    param([string]$LogFile, [string[]]$Arguments)
+    try {
+        Invoke-Native $LogFile cmake $Arguments
+    } catch {
+        $missingRules = Select-String -LiteralPath $LogFile -Pattern "loading 'CMakeFiles\rules.ninja'" -SimpleMatch -Quiet
+        if (-not $missingRules) { throw }
+        Log 'CMake の一時ビルドで Ninja の rules.ninja を読み込めませんでした。古い構成状態を破棄して再構成します。'
+        Move-Item -LiteralPath $LogFile -Destination "$LogFile.first-failure" -Force
+        try {
+            Invoke-Native $LogFile cmake (@('--fresh') + $Arguments)
+        } catch {
+            $retryMissingRules = Select-String -LiteralPath $LogFile -Pattern "loading 'CMakeFiles\rules.ninja'" -SimpleMatch -Quiet
+            if (-not $retryMissingRules) { throw }
+            Log '再構成でも同じ一時ファイルのエラーが出ました。CMake の診断モードで一時ビルドを保持して再試行します。'
+            Move-Item -LiteralPath $LogFile -Destination "$LogFile.second-failure" -Force
+            Start-Sleep -Seconds 10
+            try {
+                Invoke-Native $LogFile cmake (@('--fresh', '--debug-trycompile') + $Arguments)
+            } catch {
+                $debugMissingRules = Select-String -LiteralPath $LogFile -Pattern "loading 'CMakeFiles\rules.ninja'" -SimpleMatch -Quiet
+                if (-not $debugMissingRules) { throw }
+                Log '診断モードでも rules.ninja を読み込めませんでした。以下のログを共有してください。'
+                Log "診断ログ: $LogFile"
+                Log "再構成ログ: $LogFile.second-failure"
+                Log "初回ログ: $LogFile.first-failure"
+                exit 1
+            }
+        }
+    }
 }
 
 # 引用符や空要素を取り除いた PATH にする（vcvars64.bat を壊さないため。このプロセス内だけ）
@@ -170,7 +204,7 @@ function Build-Whisper {
             $cmakeArgs += @('-DGGML_VULKAN=ON', "-DSPIRV-Headers_DIR=$env:VULKAN_SDK\Lib\cmake\SPIRV-Headers")
         }
     }
-    Invoke-Native $log cmake $cmakeArgs
+    Invoke-CmakeConfigure $log $cmakeArgs
     Invoke-Native $log cmake @('--build', $build, '-j', $Jobs, '--target', 'whisper-cli')
     Publish-Engine 'whisper' {
         param($dir)
@@ -249,7 +283,7 @@ function Build-Nemo {
     if ((Test-Path $cache) -and -not (Select-String -Path $cache -Pattern '/utf-8' -SimpleMatch -Quiet)) {
         Remove-Item -Force $cache  # 環境変数のフラグは初回 configure でしか読まれない
     }
-    Invoke-Native $log cmake $cmakeArgs
+    Invoke-CmakeConfigure $log $cmakeArgs
     Invoke-Native $log cmake @('--build', $build, '-j', $Jobs)
     Publish-Engine 'nemo' {
         param($dir)
@@ -285,6 +319,17 @@ function Get-Models {
             throw "SHA-256 が一致しません: $rel"
         }
         Move-Item -Force $partial $path
+    }
+}
+
+if (-not $SkipBuild -and $Backend -eq 'vulkan') {
+    $spirvHeaders = if ($env:VULKAN_SDK) { Join-Path $env:VULKAN_SDK 'Lib\cmake\SPIRV-Headers' } else { $null }
+    if (-not $spirvHeaders -or -not (Test-Path -LiteralPath $spirvHeaders -PathType Container)) {
+        Log 'Vulkan 版のビルドには LunarG Vulkan SDK が必要です。'
+        Log 'SDK をインストールしてください: winget install KhronosGroup.VulkanSDK'
+        Log 'インストール後、このセットアップコマンドを再実行してください。'
+        if ($env:VULKAN_SDK) { Log "現在の VULKAN_SDK: $env:VULKAN_SDK（SPIRV-Headers が見つかりません）" }
+        exit 1
     }
 }
 

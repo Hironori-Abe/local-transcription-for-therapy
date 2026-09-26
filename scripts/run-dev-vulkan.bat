@@ -4,19 +4,19 @@ setlocal EnableExtensions
 set "HOLD_ON_EXIT=1"
 if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
 
-REM Vulkan 版（NVIDIA / AMD / Intel 共通）の開発起動。
-REM 文字起こし・話者分離は python_sidecar\speech-engines の ggml エンジン、
-REM 校正は src-tauri\resources\llama-server-vulkan の llama-server を使う（Rust の feature "vulkan"）。
-REM 準備:
+REM Vulkan development launcher for NVIDIA, AMD, and Intel.
+REM Speech engines: python_sidecar\speech-engines.
+REM Proofreading engine: src-tauri\resources\llama-server-vulkan.
+REM Setup commands:
 REM   powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
-REM   powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines
+REM   powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
 cd /d "%~dp0.."
 
 if not exist "python_sidecar\speech-engines\whisper\bin\whisper-cli.exe" goto :err_engines
 if not exist "python_sidecar\speech-engines\nemo\bin\nemo-speech.exe" goto :err_engines
 if not exist "src-tauri\resources\llama-server-vulkan\llama-server.exe" goto :err_bundle
 
-REM Vulkan 版は Python を使わない（校正・暗号化保存・モデル取得はすべて Rust）
+REM The Vulkan build uses Rust for proofreading, encrypted export, and model downloads.
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
 
 where npm >nul 2>&1
@@ -25,7 +25,7 @@ if errorlevel 1 goto :err_npm
 echo Starting Angular dev server in background...
 start /b cmd /c "npm.cmd --prefix frontend run start"
 echo Waiting 8 seconds for frontend startup...
-timeout /t 8 >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 8"
 
 echo Starting Tauri dev (Vulkan)...
 call npm run tauri:dev -- --config tauri.vulkan.dev.windows.override.json --features vulkan
@@ -38,8 +38,8 @@ echo         powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-
 goto :hold_error
 
 :err_bundle
-echo [ERROR] Vulkan llama-server was not found. Run:
-echo         powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines
+echo [SETUP REQUIRED] Vulkan llama-server is not installed. Run:
+echo         powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
 goto :hold_error
 
 :err_npm

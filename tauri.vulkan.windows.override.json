@@ -14,7 +14,6 @@
       "../python_sidecar/prompt_templates",
       "resources/proofread/punctuation_rules",
       "resources/ffmpeg",
-      "resources/llama-server-vulkan",
       "resources/speech-engines"
     ],
     "windows": {

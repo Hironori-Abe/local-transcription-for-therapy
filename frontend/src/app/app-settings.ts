@@ -135,7 +135,6 @@ export interface ResolvedLlmAppSettingsValue {
 export interface ResolveLlmAppSettingsOptions {
   localLlmAppsEnabled: boolean;
   aiProofreadBuild: boolean;
-  vulkanBuild?: boolean;
 }
 
 export interface CurrentLlmSelectionSettingsValue {

@@ -177,6 +177,7 @@ scripts\run-dev-cpu.bat
 ## 校正機能の内部仕様
 
 - ルールベース校正は Tauri (Rust) 内で完結します。校正ルール: `src-tauri/resources/proofread/punctuation_rules/`
+- Vulkan 版は LLM 校正・全体校正を搭載しません。句読点付与はこのルールベース経路を使います。
 - LLM校正はローカルバックエンドのみを使います。
   - 既定: Gemma 4 E4B（同梱/DL の llama.cpp llama-server 直起動）
   - 追加: ローカルGGUF / llama.cpp 系

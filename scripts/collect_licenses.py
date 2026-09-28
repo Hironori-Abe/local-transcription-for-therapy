@@ -332,11 +332,12 @@ def collect_node(frontend: Path) -> tuple[list, list]:
 #   - 自動収集で本文が取れないもの: pywin32 / sentencepiece / selectors (MPL-2.0)
 #   - 同梱バイナリの条件文書: NVIDIA CUDA Toolkit EULA（Attachment A/B 含む）
 # ----------------------------------------------------------------------------
-def collect_manual(manual_dir: Path) -> list[tuple[str, str]]:
+def collect_manual(manual_dir: Path, excluded_names: set[str] | None = None) -> list[tuple[str, str]]:
     if not manual_dir.is_dir():
         return []
+    excluded = excluded_names or set()
     return [(f.name, read_text(f)) for f in sorted(manual_dir.glob("*.txt"))
-            if read_text(f).strip()]
+            if f.name not in excluded and read_text(f).strip()]
 
 
 def render_manual(files: list[tuple[str, str]]) -> str:
@@ -385,6 +386,13 @@ def main() -> int:
         action="store_true",
         help="Python パッケージを同梱しない配布（Vulkan 版）。Python の節を作らない",
     )
+    ap.add_argument(
+        "--exclude-manual",
+        action="append",
+        default=[],
+        metavar="FILENAME",
+        help="手動ライセンス補完から指定ファイルを除外する（複数回指定可）",
+    )
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -424,7 +432,7 @@ def main() -> int:
         body = render(title, e, m)
         (out / fname).write_text(body, encoding="utf-8")
         combined.append(body)
-    manual_files = collect_manual(out / "manual")
+    manual_files = collect_manual(out / "manual", set(args.exclude_manual))
     if manual_files:
         combined.append(render_manual(manual_files))
     (out / "THIRD_PARTY_FULL.txt").write_text("\n".join(combined), encoding="utf-8")

@@ -69,6 +69,13 @@ export interface SetupStatusProjection {
  */
 export type LlmBackendInstallPlan =
   | {
+      status: 'not_applicable';
+      unavailable: false;
+      primary: null;
+      fallbacks: [];
+      reason: string;
+    }
+  | {
       status: 'ready';
       unavailable: false;
       primary: string;
@@ -131,11 +138,12 @@ export function setupErrorProgress(component: string, message: string): SetupPro
 export function needsFullSetup(input: NeedsFullSetupInput): boolean {
   if (input.editorOnlyBuild || !input.tauriRuntime || !input.setupChecked) return false;
   if (!input.status) return true;
+  const needsAiProofreadSetup = input.aiProofreadBuild && input.buildVariant !== 'vulkan';
   return !input.status.pythonEnv
     || (input.transcriptionTabVisible && (!input.status.whisperTurbo || !input.status.diarization))
-    || (input.aiProofreadBuild && input.buildVariant !== 'vulkan' && !input.status.gemmaGguf)
-    || (input.aiProofreadBuild && (input.buildVariant === 'cuda') && !input.status.gemmaMtpGguf)
-    || (input.aiProofreadBuild && !input.status.llmBackend);
+    || (needsAiProofreadSetup && !input.status.gemmaGguf)
+    || (needsAiProofreadSetup && input.buildVariant === 'cuda' && !input.status.gemmaMtpGguf)
+    || (needsAiProofreadSetup && !input.status.llmBackend);
 }
 
 export function projectSetupStatus(status: AllSetupStatus): SetupStatusProjection {
@@ -196,11 +204,11 @@ export function llmBackendInstallPlan(
 ): LlmBackendInstallPlan {
   if (buildVariant === 'vulkan') {
     return {
-      status: 'bundled',
+      status: 'not_applicable',
       unavailable: false,
       primary: null,
       fallbacks: [],
-      reason: 'Vulkan版のllama-serverはアプリに同梱されています。見つからない場合はアプリを再インストールしてください。'
+      reason: 'Vulkan版にはAI校正エンジンは含まれていません。'
     };
   }
   // The packaged edition is authoritative for the proofreading engine. A

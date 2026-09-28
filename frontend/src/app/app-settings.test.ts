@@ -153,11 +153,10 @@ test('persisted LLM settings discard stale models and unsupported values', () =>
   });
   assert.deepEqual(resolveLlmAppSettingsValue({ llm: { proofreadModelTier: 'e4b' } }, {
     localLlmAppsEnabled: false,
-    aiProofreadBuild: true,
-    vulkanBuild: true
+    aiProofreadBuild: false
   }), {
     backendMode: undefined,
-    proofreadModelTier: '12b'
+    proofreadModelTier: 'e4b'
   });
 });
 

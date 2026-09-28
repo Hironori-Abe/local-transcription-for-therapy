@@ -148,7 +148,6 @@ import {
   isVramOomErrorValue,
   levenshteinDistanceValue,
   llmBackendModeHintValue,
-  parseOverallProofreadSafeRetryValue,
   llmBackendModeOptionsValue,
   llmBackendSelectionValue,
   llmNCtxHintValue,
@@ -394,7 +393,7 @@ interface OverallProofreadResultData {
 
 type ProofreadRunSource = 'transcription' | 'reader';
 type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'openSettingsForGemma12b' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory' | 'deletePythonRuntime';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory' | 'deletePythonRuntime';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 interface ConfirmDialogState {
   actionKind: ConfirmDialogActionKind;
@@ -673,6 +672,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   ));
   readonly llmBackendSetupLabel = computed(() => {
     const plan = this.llmBackendSetupPlan();
+    if (plan.status === 'not_applicable') return '対象外';
     if (plan.status === 'checking') return '判定中';
     if (plan.status === 'unavailable') return 'GPU未検出';
     if (plan.status === 'bundled') return this.vulkanBuild() ? 'Vulkan（同梱）' : 'CUDA（NVIDIA・同梱）';
@@ -680,6 +680,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
   readonly llmBackendSetupNote = computed(() => {
     const plan = this.llmBackendSetupPlan();
+    if (plan.status === 'not_applicable') return plan.reason;
     if (plan.status === 'ready') {
       return `${llmBackendLabel(plan.primary)}を使用します。`;
     }
@@ -1016,7 +1017,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   /** Vulkan 版の ggml エンジンを使う設定のときだけ GPU 選択欄を出す（CUDA 版は既存の「使用デバイス」）。 */
   readonly ggmlGpuSelectorVisible = computed(() => {
     if (this.vulkanBuild()) {
-      // Vulkan 版は音声エンジン・校正とも同じ GPU を使う。GPU が1つでも表示して、使う GPU を見せる。
+      // Vulkan 版は音声エンジンで使う GPU を選べるよう、GPU が1つでも表示する。
       return (this.vulkanGpus()?.devices.length ?? 0) > 0;
     }
     const status = this.ggmlSpeechStatus();
@@ -1079,7 +1080,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly largeV3DownloadBytesLabel = computed(() => {
     return downloadProgressBytesLabel(this.largeV3DownloadProgress());
   });
-  // 内蔵校正AIモデルの階層。Vulkan版は実行時ビルド判定後に12Bへ固定する。
+  // 内蔵校正AIモデルの階層（CUDA / AMD 版）。
   readonly proofreadModelTier = signal<'e4b' | '12b'>('e4b');
   readonly gemma12bInstalled = signal<boolean | null>(null);
   readonly gemma12bDownloading = signal<boolean>(false);
@@ -1093,7 +1094,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   });
   /**
    * 12B関連 UI（説明アイコン・ダウンロード進捗）の表示条件:
-   * Editor版以外・内蔵バックエンド時のみ。Vulkan版では12Bが唯一の内蔵モデル。
+   * Editor版以外・内蔵バックエンド時のみ。
    * それ以外のビルドでは
    * 「AI校正バックエンド」セレクタ（llmBackendSelection）へ統合済み。
    */
@@ -1729,8 +1730,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     const llm = resolveLlmAppSettingsValue(this.appSettings, {
       localLlmAppsEnabled: this.localLlmAppsEnabled(),
-      aiProofreadBuild: this.runtimeAiProofreadBuild(),
-      vulkanBuild: this.vulkanBuild()
+      aiProofreadBuild: this.runtimeAiProofreadBuild()
     });
     if (llm.modelPath !== undefined) this.llmModelPath.set(llm.modelPath);
     if (llm.backendMode !== undefined) this.llmBackendMode.set(llm.backendMode);
@@ -1934,9 +1934,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.loadEstimateSamples();
     void this.initializeStartupState();
     void this.refreshGgmlSpeechStatus();
-    this.ngZone.runOutsideAngular(() => {
-      window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
-    });
+    if (!this.vulkanBuild()) {
+      this.ngZone.runOutsideAngular(() => {
+        window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
+      });
+    }
   }
 
   ngAfterViewInit(): void {
@@ -2956,7 +2958,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     try {
       if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
-        if (this.transcriptionEngine() === 'ggml') {
+        if (this.vulkanBuild() || this.transcriptionEngine() === 'ggml') {
           // whisper.cpp は、フィラーの例文（句読点を含む）をまねて句読点を付けて出力する
           // （実測で99%の行が句読点で終わる）。LLM は使わず、ルールで全角化と欠けた文末だけを補う。
           console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=rule_punctuation_start]`);
@@ -3109,7 +3111,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.llmProgressOffset = 0;
       this.llmTotalProcessedCount = 0;
       this.proofreadUpdatedCount.set(0);
-      if (this.transcriptionEngine() === 'ggml') {
+      if (this.vulkanBuild() || this.transcriptionEngine() === 'ggml') {
         // whisper.cpp の文字起こしは句読点付きなので、ルールだけで補う（LLM は使わない）。
         await this.runProofread(autoEntityCheckSource, false, 'punct');
       } else if (this.runtimeAiProofreadBuild()) {
@@ -3315,6 +3317,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     segments?: ProofreadSegmentInput[],
     backendOverride?: 'llama_cpp' | 'llama_cpp_rocm' | 'llama_server' | 'openai_compatible',
   ): Promise<void> {
+    if (this.vulkanBuild()) return;
     if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
       return;
     }
@@ -3669,7 +3672,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     const message = kind === 'transcription'
       ? '文字起こし処理を中止しますか？'
-      : kind === 'transcriptionPipeline' ? `文字起こし・話者分離・${this.transcriptionEngine() === 'ggml' ? '句読点付与' : 'AI句読点付与'}の一括処理を中止しますか？`
+      : kind === 'transcriptionPipeline' ? `文字起こし・話者分離・${this.vulkanBuild() || this.transcriptionEngine() === 'ggml' ? '句読点付与' : 'AI句読点付与'}の一括処理を中止しますか？`
       : kind === 'proofread' ? '校正処理を中止しますか？'
       : kind === 'llmProofread' ? 'LLM校正処理を中止しますか？\n中断後は未処理の行から再開できます。'
       : '話者分離処理を中止しますか？';
@@ -3786,11 +3789,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.runOverallProofread(this.pendingOverallProofreadTier);
     }
 
-    if (dialog.actionKind === 'openSettingsForGemma12b') {
-      this.onTabIndexChange(this.getSettingsTabIndex());
-      return;
-    }
-
     if (dialog.actionKind === 'downloadGemma12bForOverallProofread') {
       const downloaded = await this.downloadGemma12b();
       if (downloaded) {
@@ -3824,10 +3822,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   openOrRunOverallProofread(withConfirm: boolean, proofreadTier: 'e4b' | '12b' = 'e4b'): void {
-    if (this.vulkanBuild()) {
-      void this.openOrRunOverallProofreadWith12b(withConfirm);
-      return;
-    }
+    if (this.vulkanBuild()) return;
     this.openOrRunOverallProofreadForTier(withConfirm, proofreadTier);
   }
 
@@ -3853,6 +3848,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async openOrRunOverallProofreadWith12b(withConfirm: boolean): Promise<void> {
+    if (this.vulkanBuild()) return;
     if (this.overallProofreadHasPendingItems()) {
       this.overallProofreadDialogOpen.set(true);
       return;
@@ -3865,19 +3861,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch {
       // 状態を確認できない場合にE4Bへ黙ってフォールバックしないよう、未導入として扱う。
       installed = false;
-    }
-    if (!installed && this.vulkanBuild()) {
-      // Vulkan 版の全体校正は 12B だけを使う。E4B へは切り替えず、設定画面からの取得を案内する。
-      this.openConfirmDialog({
-        actionKind: 'openSettingsForGemma12b',
-        title: '事前にダウンロードが必要です',
-        message: '全体校正には高精度モデル（Gemma 4 12B、約7GB）を使います。設定画面の「AI校正バックエンド」で「内蔵モデル（Gemma4 12B・高精度・要DL）」を選ぶと、ダウンロードが始まります。事前にダウンロード・設定してください。',
-        confirmLabel: '設定を開く',
-        cancelLabel: '閉じる',
-        confirmColor: 'primary',
-        cancelColor: null,
-      });
-      return;
     }
     if (!installed) {
       this.openConfirmDialog({
@@ -3894,13 +3877,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.openOrRunOverallProofreadForTier(withConfirm, '12b');
   }
 
-  /**
-   * @param safeRetry 12B の高速起動設定で失敗したあと、従来の設定でやり直している回（やり直しは1回だけ）。
-   */
-  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b', safeRetry = false): Promise<void> {
-    if (this.vulkanBuild()) {
-      proofreadTier = '12b';
-    }
+  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b'): Promise<void> {
+    if (this.vulkanBuild()) return;
     if (this.overallProofreadRunning()) return;
     if (this.running() || this.proofreadRunning() || this.diarizationRunning() || this.llmProofreadRunning()) {
       this.overallProofreadError.set('他の処理が実行中のため、全体校正を開始できません。');
@@ -3961,9 +3939,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     // VRAM不足で並列処理数を下げる確認ダイアログを出した場合は、結果ダイアログを開かない
     let oomHandled = false;
-    // 12B の高速起動設定のまま失敗した場合は、従来の設定で1回だけやり直す（Rust がエンジンを止め、
-    // 次の起動から従来の設定を使う）。
-    let retryWithSafeLaunch = false;
     try {
       const response = await invoke<{ success: boolean; result?: OverallProofreadResultData; errorMessage?: string }>(
         'run_overall_proofread',
@@ -3983,11 +3958,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       );
 
       if (!response.success || !response.result) {
-        const parsed = parseOverallProofreadSafeRetryValue(response.errorMessage ?? '全体校正に失敗しました。');
-        const msg = parsed.message;
-        if (parsed.retry && !safeRetry && !this.overallProofreadCanceling()) {
-          retryWithSafeLaunch = true;
-        } else if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
+        const msg = response.errorMessage ?? '全体校正に失敗しました。';
+        if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
           oomHandled = true;
           this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
         } else {
@@ -4015,13 +3987,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const wasCanceled = this.overallProofreadCanceling();
       this.overallProofreadRunning.set(false);
       this.overallProofreadCanceling.set(false);
-      if (!wasCanceled && !oomHandled && !retryWithSafeLaunch && !this.amdGpuFailureDialog()) {
+      if (!wasCanceled && !oomHandled && !this.amdGpuFailureDialog()) {
         this.overallProofreadDialogOpen.set(true);
       }
-    }
-    if (retryWithSafeLaunch) {
-      this.overallProofreadStatus.set('AI校正エンジンの設定を切り替えて、全体校正をやり直しています...');
-      await this.runOverallProofread(proofreadTier, true);
     }
   }
 
@@ -4570,7 +4538,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
           // Vulkan 版は ggml エンジンだけを持つ（標準の Python 経路は同梱しない）。
           this.transcriptionEngine.set('ggml');
           this.diarizationEngine.set('ggml');
-          this.proofreadModelTier.set('12b');
           if (this.whisperModel() !== 'turbo') {
             this.whisperModel.set('turbo');
           }
@@ -4660,9 +4627,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  /** 起動時に、バックエンドの階層マーカーと 12B 導入状態をフロントへ同期する。Vulkan 版は常に 12B。 */
+  /** 起動時に、バックエンドの階層マーカーと 12B 導入状態をフロントへ同期する。 */
   private async initProofreadModelTier(): Promise<void> {
-    if (!this.isTauriRuntime() || !this.runtimeAiProofreadBuild()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime() || !this.runtimeAiProofreadBuild()) return;
     try {
       const tier = await invoke<string>('get_proofread_model_tier');
       this.ngZone.run(() => {
@@ -4680,7 +4647,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async onProofreadModelTierChange(value: 'e4b' | '12b'): Promise<void> {
-    const tier: 'e4b' | '12b' = this.vulkanBuild() || value === '12b' ? '12b' : 'e4b';
+    if (this.vulkanBuild()) return;
+    const tier: 'e4b' | '12b' = value === '12b' ? '12b' : 'e4b';
     this.proofreadModelTier.set(tier);
     this.persistLlmSettings();
     // バックエンドのマーカー（サーバ起動時に参照される真実）へ反映する。
@@ -4702,12 +4670,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  async downloadGemma12bFromSettings(): Promise<void> {
-    await this.onProofreadModelTierChange('12b');
-  }
-
   private async downloadGemma12b(): Promise<boolean> {
-    if (this.gemma12bDownloading()) return false;
+    if (this.vulkanBuild() || this.gemma12bDownloading()) return false;
     await this.ensureSetupProgressListener();
     this.gemma12bDownloading.set(true);
     this.gemma12bDownloadMessage.set('Gemma 4 12B（QAT+MTP）をダウンロード中... （約7GB・数分〜十数分かかります）');
@@ -4771,13 +4735,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * そもそも校正前から保持しない形で徹底する）。
    */
   private async refreshLlmUiState(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     if (!this.llmEngineUiVisible()) return;
     await this.checkLlmStatus();
   }
 
   private async initDefaultLlmModelPath(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     if (this.llmModelPath()) {
       void this.loadLlmModels();
       return;
@@ -4797,7 +4761,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async loadLlmModels(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     try {
       const models = await invoke<LlmModelEntry[]>('list_llm_models');
       this.availableLlmModels.set(models);
@@ -4856,6 +4820,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
    * 内蔵モデルは backendMode='local_gguf' に統一し、階層は proofreadModelTier で表す。
    */
   async onLlmBackendSelectionChange(value: LlmBackendSelection): Promise<void> {
+    if (this.vulkanBuild()) return;
     if (value === 'local_gguf_12b') {
       this.onLlmBackendModeChange('local_gguf');
       // 12B 選択。未導入なら onProofreadModelTierChange 内でダウンロードを開始する。
@@ -4864,10 +4829,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     if (value === 'local_gguf') {
       this.onLlmBackendModeChange('local_gguf');
-      if (this.vulkanBuild()) {
-        await this.onProofreadModelTierChange('12b');
-        return;
-      }
       // 内蔵モデルを E4B（標準）へ戻す。
       if (this.proofreadModelTier() === '12b') {
         await this.onProofreadModelTierChange('e4b');
@@ -4879,6 +4840,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   onLlmBackendModeChange(value: LlmBackendMode): void {
+    if (this.vulkanBuild()) return;
     this.llmBackendMode.set(value);
     // 内蔵 llama-server の状態確認は local_gguf 選択時だけ有効にする。
     this.localOpenAiAvailableModels.set([]);
@@ -4909,7 +4871,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async loadLocalOpenAiModels(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     const baseUrl = this.activeOpenAiBaseUrl();
     this.localOpenAiModelsLoading.set(true);
     this.localOpenAiStatusMessage.set('モデル一覧を取得中...');
@@ -4936,7 +4898,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private async loadProofreadSystemPrompt(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     try {
       const [fixedResponse, defaultResponse] = await Promise.all([
         invoke<ReadTextFileResponse>('get_proofread_system_prompt'),
@@ -4952,7 +4914,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private async loadOverallProofreadSystemPrompt(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     try {
       const [fixedResponse, defaultResponse] = await Promise.all([
         invoke<ReadTextFileResponse>('get_overall_proofread_system_prompt'),
@@ -5101,6 +5063,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async checkLlmStatus(): Promise<void> {
+    if (this.vulkanBuild()) {
+      this.llmServerStatus.set('not_installed');
+      this.llmLoadedDevice.set('stopped');
+      return;
+    }
     if (!this.isTauriRuntime()) return;
     try {
       const status = await invoke<string>('get_llm_server_status');
@@ -5162,6 +5129,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   async startLlm(silent = false, proofreadTier?: 'e4b' | '12b'): Promise<void> {
+    if (this.vulkanBuild()) {
+      this.llmServerStatus.set('not_installed');
+      this.llmLoadedDevice.set('stopped');
+      return;
+    }
     if (!this.isTauriRuntime()) return;
     this.llmLastError = '';
     this.llmServerStatus.set('starting');
@@ -5173,8 +5145,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         hipDeviceIndex: llmDevIdx >= 0 ? llmDevIdx : null,
         llmParallel: llmPar > 0 ? llmPar : null,
         llmCtx: llmCtxVal > 0 ? llmCtxVal : null,
-        proofreadTier: proofreadTier ?? null,
-        gpuUuid: this.ggmlGpuUuid() || null
+        proofreadTier: proofreadTier ?? null
       });
       this.llmServerStatus.set('running');
       void this.refreshLlmLoadedDevice();
@@ -5205,7 +5176,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private async refreshLlmLoadedDevice(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
+    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
     if (this.llmServerStatus() !== 'running') {
       this.llmLoadedDevice.set('stopped');
       return;
@@ -5698,7 +5669,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
       // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
       // 関係なくGPUバックエンドを準備する。
-      if (this.runtimeAiProofreadBuild() && !this.allSetupStatus()?.llmBackend) {
+      if (!this.vulkanBuild() && this.runtimeAiProofreadBuild() && !this.allSetupStatus()?.llmBackend) {
         // セットアップ完了直後も、古い起動時判定のままバックエンドを選ばない
         // ように再確認してから計画を作る。
         await this.checkGpuAvailability(true);

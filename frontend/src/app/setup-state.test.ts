@@ -139,7 +139,7 @@ test('LLM backend install plan preserves primary and optional fallback ordering'
   assert.equal(llmBackendLabel(null), '未選択');
 });
 
-test('vulkan build uses the bundled llama-server without requiring E4B or its MTP draft', () => {
+test('vulkan build does not require an LLM backend or Gemma models', () => {
   const status = browserSetupStatus();
   const input = {
     editorOnlyBuild: false, tauriRuntime: true, setupChecked: true, status,
@@ -157,9 +157,9 @@ test('vulkan build uses the bundled llama-server without requiring E4B or its MT
   assert.equal(needsFullSetup({
     ...input,
     status: { ...status, gemmaGguf: false, gemmaMtpGguf: false, llmBackend: false }
-  }), true);
+  }), false);
   const plan = llmBackendInstallPlan(false, false, 'vulkan');
-  assert.equal(plan.status, 'bundled');
+  assert.equal(plan.status, 'not_applicable');
   assert.equal(plan.unavailable, false);
-  assert.match(plan.reason ?? '', /Vulkan版/);
+  assert.match(plan.reason ?? '', /Vulkan版にはAI校正エンジンは含まれていません/);
 });

@@ -1,5 +1,5 @@
-llama.cpp b10075 (official Windows Vulkan build, bundled as resources/llama-server-vulkan)
-Source: https://github.com/ggml-org/llama.cpp/tree/b10075
+llama.cpp (ggml-org), MIT License
+Source: https://github.com/ggml-org/llama.cpp
 
 MIT License
 

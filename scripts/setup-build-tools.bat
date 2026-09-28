@@ -116,15 +116,13 @@ goto :after_describe
 echo Included in installer:
 echo   - App executable (lott.exe, built with --features vulkan)
 echo   - whisper.cpp / NeMo-Speech.cpp Vulkan builds (resources/speech-engines/)
-echo   - llama.cpp llama-server Vulkan build (resources/llama-server-vulkan/)
 echo   - LGPL FFmpeg CLI (resources/ffmpeg/)
-echo   - No Python runtime (proofreading / encrypted export / downloads are built into lott.exe)
+echo   - No Python or LLM runtime / Gemma model (rule-based proofreading / encrypted export / downloads are built into lott.exe)
 echo   - Third-party license texts (licenses/)
 echo.
 echo Not included (downloaded after install via setup UI, no token required):
 echo   - Whisper large-v3-turbo ggml model + Silero VAD
 echo   - Nemotron-3-Diarization model
-echo   - Gemma 4 E4B GGUF model + MTP draft
 echo.
 
 :after_describe
@@ -152,9 +150,9 @@ if errorlevel 1 (
 for /f "delims=" %%i in ('cargo tauri -V') do echo [OK] %%i
 echo.
 
-:: --- Vulkan: engines / llama-server / build-only Python ---
+:: --- Vulkan: engines / build-only Python ---
 if /I not "%BUILD_VARIANT%"=="vulkan" goto :after_vulkan_bundle
-echo [INFO] Preparing Vulkan bundle (engines, llama-server, build-only Python)...
+echo [INFO] Preparing Vulkan bundle (engines, build-only Python)...
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1
 if errorlevel 1 (
   echo [ERROR] Failed to prepare the Vulkan bundle.
@@ -267,7 +265,7 @@ if exist "%PYTHON312_DEST%\get-pip.py" (
 :after_get_pip_vulkan
 echo.
 
-:: --- LLM runtime: direct llama-server launch ---
+:: --- LLM runtime: direct llama-server launch (CUDA / AMD editions) ---
 :: NVIDIA版は同梱CUDA llama-server、AMD版は取得済みROCm/Vulkan llama-serverを直接起動する。
 
 :: --- Download LGPL FFmpeg CLI ---
@@ -287,7 +285,7 @@ if /I "%BUILD_VARIANT%"=="cpu" set "LICENSE_VENV=.venv312-cpu"
 if /I "%BUILD_VARIANT%"=="editor" set "LICENSE_VENV=.venv312-cpu"
 :: Vulkan 版は Python パッケージを同梱しないので、Rust / Node と手動補完だけを集める
 if /I "%BUILD_VARIANT%"=="vulkan" (
-  "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --no-python --frontend frontend --tauri src-tauri --out licenses
+  "%PYTHON312_DEST%\python.exe" scripts\collect_licenses.py --no-python --exclude-manual llama.cpp-LICENSE.txt --frontend frontend --tauri src-tauri --out licenses
   if errorlevel 1 (
     echo [ERROR] Failed to collect third-party license texts.
     goto :hold_error

@@ -1,18 +1,17 @@
 ﻿<#
 .SYNOPSIS
-    Vulkan 版インストーラーに同梱するもの（ggml エンジン・llama-server）と、ビルド用の Python を用意する。
+    Vulkan 版インストーラーに同梱する音声 ggml エンジンと、ビルド用の Python を用意する。
 
 .DESCRIPTION
     scripts\setup-build-tools.bat --vulkan から呼ばれる。単独でも実行できる。
 
-      powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 [-SkipEngines] [-SkipLlama] [-SkipPython]
+      powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 [-SkipEngines] [-SkipPython]
 
     配置先（いずれも git 管理外）:
       src-tauri\resources\speech-engines\{whisper,nemo}\  whisper.cpp / NeMo-Speech.cpp の Vulkan 版（固定 commit からビルド）
-      src-tauri\resources\llama-server-vulkan\            公式 llama.cpp b10075 Vulkan 版（SHA-256 検証）から llama-server に必要なファイルだけ
       %LOCALAPPDATA%\lott-ggml-speech-build\python-<版>-build\  ビルド用の Python 3.12 embeddable（同梱しない）
 
-    - Vulkan 版は Python を同梱しない（校正・暗号化保存・モデル取得はすべて Rust）。
+    - Vulkan 版は LLM / Python を同梱しない。句読点付与はローカルルールを使い、暗号化保存・モデル取得は Rust で行う。
       ビルド用の Python は setup-build-tools.bat が ffmpeg 取得・ライセンス収集・成果物整理に使う（標準ライブラリのみ）
     - モデルは同梱しない（初回起動後にアプリのセットアップ画面から取得する）
     - VC++ ランタイム（MSVCP140 など）を各実行ファイルの隣へ置く。VC++ 再頒布パッケージが入っていない PC でも動かすため
@@ -23,7 +22,6 @@
 [CmdletBinding()]
 param(
     [switch]$SkipEngines,
-    [switch]$SkipLlama,
     [switch]$SkipPython
 )
 
@@ -31,18 +29,10 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Resources = Join-Path $RepoRoot 'src-tauri\resources'
 $EnginesDir = Join-Path $Resources 'speech-engines'
-$LlamaDir = Join-Path $Resources 'llama-server-vulkan'
 $Work = Join-Path $env:LOCALAPPDATA 'lott-ggml-speech-build'
 # 旧版で同梱していた Python（v0.9.9 開発中まで）。残っていれば消す
 $LegacyPythonDir = Join-Path $Resources 'python312-vulkan'
-
-# 公式 llama.cpp b10075 Vulkan 版（CUDA 版の同梱・CPU 版と同じビルド番号）
-$LlamaBuild = 'b10075'
-$LlamaZipUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$LlamaBuild/llama-$LlamaBuild-bin-win-vulkan-x64.zip"
-$LlamaZipSha = '763A46CF514443D597E7DC04330012D4E401E40CDB4D61AF1FB6145909AD41AE'
-# llama-server が読み込むもの（dumpbin /dependents で確認）。ggml-cpu-*.dll は CPU に合わせて実行時に選ばれる
-$LlamaFiles = @('llama-server.exe', 'llama-server-impl.dll', 'llama-common.dll', 'llama.dll', 'mtmd.dll',
-    'ggml.dll', 'ggml-base.dll', 'ggml-vulkan.dll', 'libomp140.x86_64.dll')
+$LegacyLlamaDir = Join-Path $Resources 'llama-server-vulkan'
 
 $PythonVersion = '3.12.10'
 $PythonZipUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
@@ -87,40 +77,11 @@ if (-not $SkipEngines) {
     }
 }
 
-# ---- 2. llama-server（公式 Vulkan 版） ------------------------------------------
-if (-not $SkipLlama) {
-    Log "llama.cpp $LlamaBuild Vulkan 版を取得"
-    $cache = Join-Path $Work "llama-$LlamaBuild-bin-win-vulkan-x64.zip"
-    New-Item -ItemType Directory -Force $Work | Out-Null
-    if (-not (Test-Path $cache) -or (Get-FileHash -Algorithm SHA256 $cache).Hash -ne $LlamaZipSha) {
-        Get-File $LlamaZipUrl "$cache.partial"
-        if ((Get-FileHash -Algorithm SHA256 "$cache.partial").Hash -ne $LlamaZipSha) {
-            Remove-Item -Force "$cache.partial"
-            throw 'llama.cpp の zip の SHA-256 が一致しません。'
-        }
-        Move-Item -Force "$cache.partial" $cache
-    }
-    $extract = Join-Path $Work "llama-$LlamaBuild-vulkan-extract"
-    if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
-    Expand-Archive -Path $cache -DestinationPath $extract
-    $tmp = "$LlamaDir.tmp"
-    if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-    New-Item -ItemType Directory -Force $tmp | Out-Null
-    foreach ($name in $LlamaFiles) {
-        $src = Join-Path $extract $name
-        if (-not (Test-Path $src)) { throw "llama.cpp の zip に $name がありません。" }
-        Copy-Item $src $tmp
-    }
-    Copy-Item (Join-Path $extract 'ggml-cpu-*.dll') $tmp
-    Copy-VcRuntime $tmp
-    Set-Content -Path (Join-Path $tmp 'LLAMA_CPP_BUILD_INFO.txt') -Encoding utf8 `
-        -Value "source_tag=$LlamaBuild`nasset=llama-$LlamaBuild-bin-win-vulkan-x64.zip`nsha256=$LlamaZipSha`nbackend=vulkan"
-    if (Test-Path $LlamaDir) { Remove-Item -Recurse -Force $LlamaDir }
-    Move-Item $tmp $LlamaDir
-    Remove-Item -Recurse -Force $extract
+# ---- 2. ビルド用 Python（同梱しない。標準ライブラリのみ） ------------------------
+if (Test-Path $LegacyLlamaDir) {
+    Log "旧版で同梱していた $LegacyLlamaDir を削除"
+    Remove-Item -Recurse -Force $LegacyLlamaDir
 }
-
-# ---- 3. ビルド用 Python（同梱しない。標準ライブラリのみ） ------------------------
 if (Test-Path $LegacyPythonDir) {
     Log "旧版で同梱していた $LegacyPythonDir を削除"
     Remove-Item -Recurse -Force $LegacyPythonDir
@@ -137,9 +98,7 @@ if (-not $SkipPython -and -not (Test-Path (Join-Path $BuildPythonDir 'python.exe
 }
 
 Log '完了'
-foreach ($dir in $EnginesDir, $LlamaDir) {
-    if (Test-Path $dir) {
-        $size = (Get-ChildItem -Recurse -File $dir | Measure-Object Length -Sum).Sum / 1MB
-        Log ('{0}: {1:N0} MB' -f $dir, $size)
-    }
+if (Test-Path $EnginesDir) {
+    $size = (Get-ChildItem -Recurse -File $EnginesDir | Measure-Object Length -Sum).Sum / 1MB
+    Log ('{0}: {1:N0} MB' -f $EnginesDir, $size)
 }

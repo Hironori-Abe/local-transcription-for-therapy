@@ -54,7 +54,6 @@ import {
   isVramOomErrorValue,
   levenshteinDistanceValue,
   llmBackendModeHintValue,
-  parseOverallProofreadSafeRetryValue,
   llmBackendModeOptionsValue,
   llmBackendSelectionValue,
   llmNCtxHintValue,
@@ -260,12 +259,8 @@ test('LLM prompt editor and backend option helpers preserve available selections
   assert.deepEqual(llmBackendModeOptionsValue(true, true).map((option) => option.value), [
     'local_gguf', 'local_gguf_12b', 'lmstudio', 'ollama'
   ]);
-  assert.deepEqual(llmBackendModeOptionsValue(true, false, true), [
-    { value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' }
-  ]);
-  assert.deepEqual(llmBackendModeOptionsValue(true, true, true).map((option) => option.value), [
-    'local_gguf_12b', 'lmstudio', 'ollama'
-  ]);
+  assert.deepEqual(llmBackendModeOptionsValue(true, false, true), []);
+  assert.deepEqual(llmBackendModeOptionsValue(true, true, true), []);
   assert.equal(llmBackendSelectionValue('local_gguf', '12b'), 'local_gguf_12b');
   assert.equal(llmBackendSelectionValue('local_gguf', 'e4b'), 'local_gguf');
   assert.equal(llmBackendSelectionValue('ollama', '12b'), 'ollama');
@@ -1158,23 +1153,12 @@ test('vulkan GPU labels show VRAM, mark integrated GPUs, and name the auto choic
   assert.equal(effectiveVulkanGpuUuidValue('', list), '');
 });
 
-test('runtime build flags treat the vulkan variant as a GPU build with AI proofreading', () => {
+test('runtime build flags disable AI proofreading for the Vulkan variant', () => {
   assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, 'vulkan'), {
     cpuOnlyBuild: false,
-    aiProofreadBuild: true,
+    aiProofreadBuild: false,
     cpuVoiceInputBuild: false
   });
   assert.equal(isBuildVariantValue('vulkan'), true);
   assert.equal(isBuildVariantValue('metal'), false);
-});
-
-test('parseOverallProofreadSafeRetryValue strips the 12B safe-retry marker', () => {
-  assert.deepEqual(parseOverallProofreadSafeRetryValue('[LOTT_12B_SAFE_RETRY] 接続が切れました'), {
-    retry: true,
-    message: '接続が切れました',
-  });
-  assert.deepEqual(parseOverallProofreadSafeRetryValue('全体校正に失敗しました。'), {
-    retry: false,
-    message: '全体校正に失敗しました。',
-  });
 });

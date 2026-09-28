@@ -921,15 +921,6 @@ fn find_bundled_llama_server_bin(app: &AppHandle) -> Option<String> {
     find_bundled_llama_server_in(app, "llama-server")
 }
 
-/// Vulkan 版で同梱する llama-server（公式 Vulkan ビルド）のパスを返す。
-/// CUDA 版の `resources/llama-server` と取り違えないよう、別ディレクトリに置く。
-fn find_bundled_vulkan_llama_server_bin(app: &AppHandle) -> Option<String> {
-    if !is_vulkan_build(app) {
-        return None;
-    }
-    find_bundled_llama_server_in(app, "llama-server-vulkan")
-}
-
 /// NVIDIA Full版で使用する同梱 CUDA `llama-server` のパスを返す。
 ///
 /// Linux の公式 llama.cpp リリースには CUDA 用の配布アセットがないため、Linux NVIDIA
@@ -1261,25 +1252,6 @@ fn choose_llm_parallelism(
 /// CPU へ逃がす。12B の gemma4-assistant ドラフトは `-ngl` 明示（auto-fit 無効）下で GPU へ
 /// オフロードするとロードに失敗するが、auto-fit 有効なら GPU に載っても正常に動く。
 /// false（E4B 既定）なら従来どおり `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。
-/// 同梱 llama-server に渡す GPU の指定。CUDA 版と Vulkan 版で起動引数（ngl・MTP・
-/// FlashAttention・auto-fit）は同じで、GPU の選び方だけが違う。
-#[derive(Clone, Copy, Debug)]
-enum LlamaGpu {
-    /// nvidia-smi の index（CUDA_VISIBLE_DEVICES）。None は llama.cpp 既定。
-    Cuda(Option<i32>),
-    /// Vulkan の並び順（GGML_VK_VISIBLE_DEVICES）。None は GPU 無し（CPU で動く）。
-    Vulkan(Option<u32>),
-}
-
-impl LlamaGpu {
-    fn label(self) -> &'static str {
-        match self {
-            LlamaGpu::Cuda(_) => "CUDA",
-            LlamaGpu::Vulkan(_) => "Vulkan",
-        }
-    }
-}
-
 fn try_start_llama_server_cuda(
     bin_path: &str,
     model_path: &str,
@@ -1288,9 +1260,8 @@ fn try_start_llama_server_cuda(
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
-    gpu: LlamaGpu,
+    gpu_device_index: Option<i32>,
     autofit: bool,
-    fast_fit: bool,
 ) -> Result<(Child, Arc<AtomicBool>), String> {
     #[cfg(unix)]
     {
@@ -1314,21 +1285,9 @@ fn try_start_llama_server_cuda(
     // 選択された NVIDIA GPU（llmHipDeviceIndex / nvidia-smi index）のみを見せる。
     // PCI_BUS_ID 順で nvidia-smi の index と一致させる。明示選択(>=0)のときだけ限定し、
     // 未指定(None/-1)は llama.cpp 既定（複数 GPU 時はレイヤー分割）を保つ。
-    match gpu {
-        LlamaGpu::Cuda(device_index) => {
-            cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
-            if let Some(idx) = device_index.filter(|&i| i >= 0) {
-                cmd.env("CUDA_VISIBLE_DEVICES", idx.to_string());
-            }
-        }
-        // Vulkan 版: 音声エンジンと同じ規則で選んだ GPU だけを見せる（iGPU の誤選択を避ける）。
-        // GPU が無いときは Vulkan デバイスを見せず、CPU で動かす。
-        LlamaGpu::Vulkan(Some(idx)) => {
-            cmd.env("GGML_VK_VISIBLE_DEVICES", idx.to_string());
-        }
-        LlamaGpu::Vulkan(None) => {
-            cmd.env("GGML_VK_VISIBLE_DEVICES", "");
-        }
+    cmd.env("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+    if let Some(idx) = gpu_device_index.filter(|&i| i >= 0) {
+        cmd.env("CUDA_VISIBLE_DEVICES", idx.to_string());
     }
     let ctx_s = ctx_size.to_string();
     let np_s = n_parallel.to_string();
@@ -1343,9 +1302,6 @@ fn try_start_llama_server_cuda(
         // auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置（-ngl は指定しない）。
         // 12B の gemma4-assistant ドラフトを GPU に載せても auto-fit 経由なら落ちない。
         cmd.arg("--fit").arg("on");
-        if fast_fit {
-            cmd.args(LLAMA_12B_FAST_FIT_ARGS);
-        }
     } else {
         cmd.arg("-ngl").arg("99"); // 本体の全レイヤーを GPU へオフロード（E4B 既定）
     }
@@ -1391,7 +1347,7 @@ fn try_start_llama_server_cuda(
             assign_to_kill_on_close_job(&child);
             child
         })
-        .map_err(|e| format!("AI校正エンジン ({}) の起動に失敗しました: {e}", gpu.label()))?;
+        .map_err(|e| format!("AI校正エンジン (CUDA) の起動に失敗しました: {e}"))?;
     let oom_flag = Arc::new(AtomicBool::new(false));
     if let Some(stderr) = child.stderr.take() {
         let flag = Arc::clone(&oom_flag);
@@ -1782,7 +1738,7 @@ fn check_llm_gpu_backend_installed(app: AppHandle) -> bool {
                 || find_llm_vulkan_llama_server(&app).is_some()
         }
         "cuda" => find_bundled_cuda_llama_server_bin(&app).is_some(),
-        "vulkan" => find_bundled_vulkan_llama_server_bin(&app).is_some(),
+        "vulkan" => false,
         _ => false,
     }
 }
@@ -1814,19 +1770,6 @@ const LLM_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
 // auto-fit で収まる安全値（実測で 8192 は VRAM 約8.0GB/8.5GB に収まり MTP も有効）。
 // 校正は話者ごと最大40セグメントのバッチで、短い発話なら 8192 トークンに十分収まる。
 const AMD_12B_CTX_SIZE: u32 = 8192;
-/// Vulkan 版の 12B を速く動かす起動設定（auto-fit の GPU 余白を既定の 1024MiB から 256MiB に減らし、
-/// KV キャッシュを 8bit にする）。空いた VRAM に本体の層を多く載せられ、CPU 側の計算待ちが減る。
-/// RTX 4060 Laptop 8GB の実測で、全体校正の所要時間が約4割短くなった（生成 36→60 tok/s）。
-/// 余白が小さいため、校正中に他のアプリが VRAM を増やすと足りなくなることがある。
-/// 起動や処理に失敗したら、アプリを閉じるまで従来の設定に戻す（`LLAMA_12B_FAST_LAUNCH_DISABLED`）。
-const LLAMA_12B_FAST_FIT_ARGS: [&str; 6] = ["--fit-target", "256", "-ctk", "q8_0", "-ctv", "q8_0"];
-/// 12B の高速起動設定で失敗したら true にし、以後は従来の設定で起動する。
-static LLAMA_12B_FAST_LAUNCH_DISABLED: AtomicBool = AtomicBool::new(false);
-/// 起動中の校正用サーバーが高速起動設定で動いているか（処理の失敗時に従来の設定へ戻すため）。
-static LLAMA_12B_FAST_LAUNCH_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// 全体校正が高速起動設定のまま失敗したときにエラー文へ付ける目印。フロントはこれを見て、
-/// 従来の設定でエンジンを起動し直し、1回だけやり直す。
-const LLAMA_12B_SAFE_RETRY_MARKER: &str = "[LOTT_12B_SAFE_RETRY]";
 // 既定（標準）モデル: Gemma 4 E4B QAT。従来どおりのデフォルト経路。
 const GEMMA_LLM_MODEL_DIR: &str = "gemma-4-e4b-it";
 const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
@@ -1855,22 +1798,11 @@ const EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS: usize = 400;
 const GEMMA_12B_LLM_MODEL_DIR: &str = "gemma-4-12b-it";
 const GEMMA_12B_MAIN_GGUF_FILENAME: &str = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_12B_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-12B-it.gguf";
-/// Vulkan 版で 12B が未取得のまま全体校正を始めたときの案内（フロントも同じ趣旨の案内を先に出す）。
-const GEMMA_12B_REQUIRED_MESSAGE: &str = "全体校正には高精度モデル（Gemma 4 12B、約7GB）の事前ダウンロードが必要です。設定画面の「AI校正バックエンド」で「内蔵モデル（Gemma4 12B・高精度・要DL）」を選び、ダウンロード・設定してください。";
-
 /// 校正AIモデルの選択肢。既定は E4b（標準）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GemmaTier {
     E4b,
     B12,
-}
-
-fn normalize_proofread_model_tier_for_build(tier: GemmaTier, vulkan_build: bool) -> GemmaTier {
-    if vulkan_build {
-        GemmaTier::B12
-    } else {
-        tier
-    }
 }
 
 impl GemmaTier {
@@ -2021,13 +1953,12 @@ fn proofread_model_tier_marker_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|d| d.join("proofread-model-tier.txt"))
 }
 
-/// ユーザーが選択した校正AIモデル階層を読む。既定は E4b、Vulkan 版は 12B 固定。
+/// ユーザーが選択した校正AIモデル階層を読む。既定は E4b。
 fn read_proofread_model_tier(app: &AppHandle) -> GemmaTier {
-    let tier = proofread_model_tier_marker_path(app)
+    proofread_model_tier_marker_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| GemmaTier::from_marker(&s))
-        .unwrap_or(GemmaTier::E4b);
-    normalize_proofread_model_tier_for_build(tier, is_vulkan_build(app))
+        .unwrap_or(GemmaTier::E4b)
 }
 
 /// 指定 tier の本体 GGUF を解決する（debug: プロジェクト相対 / release: app data）。
@@ -2088,18 +2019,15 @@ fn resolve_gemma_e4b_mmproj_path(app: &AppHandle) -> Option<String> {
     None
 }
 
-/// 実際にロードするモデル階層を決める。CUDA / AMD 版では選択が B12 でも本体 GGUF が無ければ
-/// E4b へフォールバックする（12B 未ダウンロードでもサーバは起動する）。Vulkan 版は B12 固定で、
-/// 未取得時のエラーは start_llm_server で返す。
+/// 実際にロードするモデル階層を決める。選択が B12 でも本体 GGUF が無ければ
+/// E4b へフォールバックする（12B 未ダウンロードでもサーバは起動する）。
 fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
     resolve_effective_proofread_tier_for(app, read_proofread_model_tier(app))
 }
 
 /// 保存設定を変更せず、単一ジョブ向けに指定された階層の実効値を解決する。
 fn resolve_effective_proofread_tier_for(app: &AppHandle, want: GemmaTier) -> GemmaTier {
-    if is_vulkan_build(app) {
-        GemmaTier::B12
-    } else if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
+    if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
         GemmaTier::B12
     } else {
         GemmaTier::E4b
@@ -2606,6 +2534,9 @@ fn nvidia_devices_for_env() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> String {
+    if is_vulkan_build(&app) {
+        return "not_installed".to_string();
+    }
     // このコマンドは校正エンジンのUI状態用。音声入力サーバーが保持中でも校正用としては
     // 未起動なので stopped を返し、start_llm_server に用途切替を行わせる。
     if state.purpose.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT {
@@ -2625,7 +2556,7 @@ fn get_llm_server_status(app: AppHandle, state: tauri::State<'_, LlmServer>) -> 
                     || find_llm_vulkan_llama_server(&app).is_some()
             }
             "cpu" => find_llm_cpu_llama_server(&app).is_some(),
-            "vulkan" => find_bundled_vulkan_llama_server_bin(&app).is_some(),
+            "vulkan" => false,
             _ => false,
         };
         if has_candidate {
@@ -2682,9 +2613,8 @@ fn start_cuda_llama_blocking(
     port: u16,
     n_parallel: u32,
     ctx_size: u32,
-    gpu: LlamaGpu,
+    gpu_device_index: Option<i32>,
     autofit: bool,
-    fast_fit: bool,
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
 ) -> Result<(), String> {
@@ -2696,9 +2626,8 @@ fn start_cuda_llama_blocking(
         port,
         n_parallel,
         ctx_size,
-        gpu,
+        gpu_device_index,
         autofit,
-        fast_fit,
     ) {
         Ok(result) => result,
         Err(error) => {
@@ -2713,10 +2642,7 @@ fn start_cuda_llama_blocking(
             let _ = child.kill();
             let _ = child.wait();
             mode_arc.store(0, Ordering::Relaxed);
-            return Err(format!(
-                "AI校正エンジン ({}) の状態管理に失敗しました。",
-                gpu.label()
-            ));
+            return Err("AI校正エンジン (CUDA) の状態管理に失敗しました。".to_string());
         }
     };
     *guard = Some(child);
@@ -2770,10 +2696,7 @@ fn start_cuda_llama_blocking(
         }
     }
     mode_arc.store(0, Ordering::Relaxed);
-    Err(format!(
-        "AI校正エンジン ({}) の起動タイムアウト（180秒）",
-        gpu.label()
-    ))
+    Err("AI校正エンジン (CUDA) の起動タイムアウト（180秒）".to_string())
 }
 
 #[tauri::command]
@@ -2784,8 +2707,10 @@ async fn start_llm_server(
     llm_parallel: Option<u32>,
     llm_ctx: Option<u32>,
     proofread_tier: Option<String>,
-    gpu_uuid: Option<String>,
 ) -> Result<String, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
     let port = state.port.load(Ordering::Relaxed) as u16;
     if llm_server_port_open(port) {
         if state.purpose.load(Ordering::Relaxed) == LLM_PURPOSE_VOICE_INPUT {
@@ -2800,33 +2725,9 @@ async fn start_llm_server(
     // NVIDIA GPU + 管理下の同梱 CUDA llama-server + GGUF モデルが揃っている場合だけ
     // 直接起動する。Linux NVIDIAでもVulkanを代替経路として選ばない。公式リリースに
     // Linux CUDAアセットがないため、LinuxのCUDAビルドはパッケージの管理下で生成・同梱する。
-    // Vulkan 版は同梱の Vulkan 版 llama-server を、音声エンジンと同じ GPU で起動する
-    // （NVIDIA / AMD / Intel 共通。nvidia-smi は呼ばない）。
-    let vulkan_build = is_vulkan_build(&app);
-    let vulkan_device = if vulkan_build {
-        gpu_select::resolve_preferred(gpu_uuid.as_deref())
-    } else {
-        None
-    };
-    let nvidia_list = if vulkan_build {
-        Vec::new()
-    } else {
-        nvidia_gpu_priority_list()
-    };
-    let llama_server_bin = if vulkan_build {
-        find_bundled_vulkan_llama_server_bin(&app)
-    } else {
-        find_bundled_cuda_llama_server_bin(&app)
-    };
-    let requested_tier = if vulkan_build {
-        Some(GemmaTier::B12)
-    } else {
-        proofread_tier.as_deref().map(GemmaTier::from_marker)
-    };
-    // Vulkan 版の全体校正は 12B だけを使う。12B が無いときに E4B へ黙って切り替えない。
-    if vulkan_build && resolve_gemma_main_path_for_tier(&app, GemmaTier::B12).is_none() {
-        return Err(GEMMA_12B_REQUIRED_MESSAGE.to_string());
-    }
+    let nvidia_list = nvidia_gpu_priority_list();
+    let llama_server_bin = find_bundled_cuda_llama_server_bin(&app);
+    let requested_tier = proofread_tier.as_deref().map(GemmaTier::from_marker);
     let effective_tier = requested_tier
         .map(|tier| resolve_effective_proofread_tier_for(&app, tier))
         .unwrap_or_else(|| resolve_effective_proofread_tier(&app));
@@ -2853,29 +2754,18 @@ async fn start_llm_server(
     let parallel_arc = Arc::clone(&state.parallel);
     let purpose_arc = Arc::clone(&state.purpose);
 
-    if (vulkan_build || !nvidia_list.is_empty())
-        && llama_server_bin.is_some()
-        && model_path.is_some()
-    {
+    if !nvidia_list.is_empty() && llama_server_bin.is_some() && model_path.is_some() {
         let bin = llama_server_bin.unwrap();
         let mpath = model_path.clone().unwrap();
         let mtp_path = mtp_model_path;
         // 選択された GPU（llmHipDeviceIndex / nvidia-smi index）の VRAM（MiB）を使う。
         // 未指定(-1/None)や該当なしのときは最良 GPU（VRAM 降順の先頭）にフォールバック。
         let sel_idx = hip_device_index.filter(|&i| i >= 0);
-        let (gpu, vram_mib) = if vulkan_build {
-            (
-                LlamaGpu::Vulkan(vulkan_device.as_ref().map(|d| d.index)),
-                vulkan_device.as_ref().map(|d| d.vram_mb).unwrap_or(0),
-            )
-        } else {
-            let vram_mib = sel_idx
-                .and_then(|idx| nvidia_list.iter().find(|g| g.0 == idx as u32))
-                .or_else(|| nvidia_list.first())
-                .map(|g| g.2)
-                .unwrap_or(0);
-            (LlamaGpu::Cuda(sel_idx), vram_mib)
-        };
+        let vram_mib = sel_idx
+            .and_then(|idx| nvidia_list.iter().find(|g| g.0 == idx as u32))
+            .or_else(|| nvidia_list.first())
+            .map(|g| g.2)
+            .unwrap_or(0);
         let (n_parallel, ctx_size) = choose_llm_parallelism(vram_mib, llm_parallel, llm_ctx);
         // 12B は auto-fit 起動（ドラフト含め GPU/CPU を llama.cpp が自動配置）。8GB クラスで本体を
         // 多く GPU に載せ高速化するため、ctx/np は AMD 12B と同じ単一スロット・8192 に揃える
@@ -2887,51 +2777,27 @@ async fn start_llm_server(
         } else {
             (n_parallel, ctx_size)
         };
-        // Vulkan 版の 12B は高速起動設定（LLAMA_12B_FAST_FIT_ARGS）を既定にし、失敗したら従来の設定で起動し直す。
-        let fast_fit =
-            vulkan_build && is_12b && !LLAMA_12B_FAST_LAUNCH_DISABLED.load(Ordering::Relaxed);
         tauri::async_runtime::spawn_blocking(move || {
             mode_arc.store(1, Ordering::Relaxed);
             parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
-            LLAMA_12B_FAST_LAUNCH_ACTIVE.store(false, Ordering::Relaxed);
-            let start = |fast: bool| {
-                start_cuda_llama_blocking(
-                    &bin,
-                    &mpath,
-                    mtp_path.as_deref(),
-                    None, // 校正は mmproj 無し
-                    resolved_port,
-                    n_parallel,
-                    ctx_size,
-                    gpu,
-                    is_12b,
-                    fast,
-                    &child_arc,
-                    &mode_arc,
-                )
-            };
-            match start(fast_fit) {
-                Ok(()) => LLAMA_12B_FAST_LAUNCH_ACTIVE.store(fast_fit, Ordering::Relaxed),
-                Err(error) if fast_fit => {
-                    eprintln!("[LoTT][llm] 12B の高速起動設定で起動できなかったため、従来の設定で起動し直します: {error}");
-                    LLAMA_12B_FAST_LAUNCH_DISABLED.store(true, Ordering::Relaxed);
-                    mode_arc.store(1, Ordering::Relaxed);
-                    start(false)?;
-                }
-                Err(error) => return Err(error),
-            }
+            start_cuda_llama_blocking(
+                &bin,
+                &mpath,
+                mtp_path.as_deref(),
+                None, // 校正は mmproj 無し
+                resolved_port,
+                n_parallel,
+                ctx_size,
+                sel_idx,
+                is_12b,
+                &child_arc,
+                &mode_arc,
+            )?;
             purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
             Ok("started".to_string())
         })
         .await
         .map_err(|e| format!("AI校正エンジンの起動に失敗しました: {e}"))?
-    } else if vulkan_build {
-        let message = if llama_server_bin.is_none() {
-            "Vulkan版 llama-server がアプリに見つかりません。アプリを再インストールしてください。"
-        } else {
-            "Gemma 4 校正モデルが見つかりません。設定タブでモデルの導入を完了してください。"
-        };
-        Err(message.to_string())
     } else if !is_amd_gpu_build(&app) && !is_cpu_only_build(&app) {
         // NVIDIA Full版はCUDA直起動だけを許可する。Vulkanへ暗黙に切り替えると、
         // 「CUDA版なのにVulkanで動く」状態を設定画面から把握できず、性能・互換性の
@@ -3258,6 +3124,9 @@ fn start_full_voice_input_server_blocking(
     parallel_arc: &Arc<AtomicU8>,
     purpose_arc: &Arc<AtomicU8>,
 ) -> Result<u16, String> {
+    if is_vulkan_build(app) {
+        return Err("この版の音声入力は whisper.cpp を使用します。AI 音声入力はありません。".to_string());
+    }
     let status = check_editor_voice_input_pack_status_impl(app);
     if !status.installed {
         return Err("音声入力モデルが未導入です。設定タブから導入してください。".to_string());
@@ -3296,39 +3165,6 @@ fn start_full_voice_input_server_blocking(
     };
     port_arc.store(resolved_port as u32, Ordering::Relaxed);
 
-    // 0) Vulkan 版: 同梱の Vulkan 版 llama-server を、設定の GPU で auto-fit 起動する。
-    if is_vulkan_build(app) {
-        let bin = find_bundled_vulkan_llama_server_bin(app).ok_or_else(|| {
-            "Vulkan版 llama-server がアプリに見つかりません。アプリを再インストールしてください。"
-                .to_string()
-        })?;
-        let device = gpu_select::resolve_preferred(None);
-        mode_arc.store(1, Ordering::Relaxed);
-        parallel_arc.store(1, Ordering::Relaxed);
-        start_cuda_llama_blocking(
-            &bin,
-            &model_path,
-            None, // 音声入力は MTP を使わない
-            Some(&mmproj_path),
-            resolved_port,
-            1,
-            VOICE_INPUT_GPU_CTX_SIZE,
-            LlamaGpu::Vulkan(device.map(|d| d.index)),
-            true, // autofit
-            false, // 高速起動設定は校正の 12B 専用
-            child_arc,
-            mode_arc,
-        )
-        .map_err(|e| {
-            e.replace("AI校正エンジン", "音声入力エンジン").replace(
-                "並列処理数を下げて再試行してください",
-                "GPUを使用中の他のアプリを終了して再試行してください",
-            )
-        })?;
-        purpose_arc.store(LLM_PURPOSE_VOICE_INPUT, Ordering::Relaxed);
-        return Ok(resolved_port);
-    }
-
     // 1) NVIDIA: 同梱 CUDA llama-server を auto-fit 起動（校正の12Bと同方式。小VRAM機でも
     //    本体+mmprojが収まらない分は CPU へ自動配置され安全）。
     let nvidia_list = nvidia_gpu_priority_list();
@@ -3344,9 +3180,8 @@ fn start_full_voice_input_server_blocking(
                 resolved_port,
                 1,
                 VOICE_INPUT_GPU_CTX_SIZE,
-                LlamaGpu::Cuda(None),
+                None,
                 true, // autofit
-                false, // 高速起動設定は校正の 12B 専用
                 child_arc,
                 mode_arc,
             )
@@ -7979,8 +7814,8 @@ fn is_amd_gpu_build(app: &AppHandle) -> bool {
 ///
 /// identifier は CUDA 版と同じ `net.gakkousya.lott` を引き継ぐ（上書きインストールで
 /// ダウンロード済みの Gemma を再利用するため）ので、identifier ではなくビルド時の feature で
-/// 見分ける。文字起こし・話者分離は ggml エンジン、校正は同梱の Vulkan 版 llama-server を使い、
-/// Python / PyTorch の標準経路は持たない。Editor 版・CPU 版には適用しない。
+/// 見分ける。文字起こし・話者分離は ggml エンジン、校正はルールベースのみで、LLM を含まない。
+/// Python / PyTorch の標準経路も持たない。Editor 版・CPU 版には適用しない。
 fn is_vulkan_build(app: &AppHandle) -> bool {
     vulkan_build_for_identifier(cfg!(feature = "vulkan"), app.config().identifier.as_str())
 }
@@ -8324,14 +8159,7 @@ fn replace_backend_directory(staging: &Path, dest: &Path, backup: &Path) -> Resu
 fn install_llm_backend_blocking(app: &AppHandle, backend: &str) -> Result<String, String> {
     let build_variant = app_build_variant(app);
     if build_variant == "vulkan" {
-        return if find_bundled_vulkan_llama_server_bin(app).is_some() {
-            Ok("Vulkan版 llama-server はアプリに同梱済みです。".to_string())
-        } else {
-            Err(
-                "Vulkan版 llama-server がパッケージに見つかりません。アプリを再インストールしてください。"
-                    .to_string(),
-            )
-        };
+        return Err("この版には AI 校正はありません。".to_string());
     }
     if build_variant == "cuda" && backend != "llamacpp:cuda" {
         return Err(
@@ -9189,6 +9017,9 @@ fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, Stri
 
 #[tauri::command]
 async fn install_editor_voice_input_pack(app: AppHandle) -> Result<bool, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版の音声入力は whisper.cpp を使用します。追加の音声入力パックはありません。".to_string());
+    }
     stop_retained_voice_input_server(&app);
     tauri::async_runtime::spawn_blocking(move || install_editor_voice_input_pack_blocking(app))
         .await
@@ -9342,18 +9173,14 @@ fn check_all_setup_status(app: AppHandle) -> Result<AllSetupStatus, String> {
 
 /// Vulkan 版のセットアップ状態。項目は CUDA 版と同じ構造体に載せ、画面の行をそのまま使う
 /// （whisper_turbo = whisper.cpp のモデルと VAD、diarization = Nemotron）。
-/// Python は校正・暗号化保存に使う最小限だけをインストーラーに同梱するため、導入手順は無い
-/// （python_env_expected_path を空にして画面の行を出さない）。
+/// LLM/Gemma 4 は含まず、Python も同梱しない。LLM 関連の状態項目は false/空で返して
+/// Vulkan のセットアップ画面に校正モデルやバックエンドの行を出さない。
 fn check_all_setup_status_vulkan(app: &AppHandle) -> Result<AllSetupStatus, String> {
     let models_root = resolve_ggml_models_root(app)?;
     let whisper_turbo = !should_emulate_missing_community_1()
         && ggml_speech::ggml_models_installed(&models_root, "whisper_turbo");
     let diarization = !should_emulate_missing_community_1()
         && ggml_speech::ggml_models_installed(&models_root, "diarization");
-    // E4B の実在状態は互換 UI / 旧データ確認用に返すが、Vulkan の初期セットアップ要件ではない。
-    // フロントの needsFullSetup とセットアップ行は E4B / MTP 状態を参照しない。
-    let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
-    let (gemma_mtp_gguf, gemma_mtp_gguf_expected_path) = get_gemma_mtp_gguf_info(app);
     Ok(AllSetupStatus {
         whisper_turbo,
         diarization,
@@ -9361,11 +9188,11 @@ fn check_all_setup_status_vulkan(app: &AppHandle) -> Result<AllSetupStatus, Stri
             .join(ggml_speech::DIAR_MODELS_SUBDIR)
             .to_string_lossy()
             .to_string(),
-        gemma_gguf,
-        gemma_gguf_expected_path,
-        gemma_mtp_gguf,
-        gemma_mtp_gguf_expected_path,
-        llm_backend: find_bundled_vulkan_llama_server_bin(app).is_some(),
+        gemma_gguf: false,
+        gemma_gguf_expected_path: String::new(),
+        gemma_mtp_gguf: false,
+        gemma_mtp_gguf_expected_path: String::new(),
+        llm_backend: false,
         python_env: true,
         python_env_expected_path: String::new(),
     })
@@ -9623,6 +9450,9 @@ async fn proofread_transcription_llm(
     app: AppHandle,
     request: LlmProofreadRequest,
 ) -> Result<ProofreadTranscriptionResponse, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
     let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
         Some(g) => g,
         None => {
@@ -9647,6 +9477,9 @@ async fn run_overall_proofread(
     app: AppHandle,
     request: LlmProofreadRequest,
 ) -> Result<OverallProofreadResponse, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
     let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
         Some(g) => g,
         None => {
@@ -9703,6 +9536,9 @@ fn get_llm_models_dir(app: &AppHandle) -> Option<PathBuf> {
 
 #[tauri::command]
 fn list_llm_models(app: AppHandle) -> Vec<LlmModelEntry> {
+    if is_vulkan_build(&app) {
+        return vec![];
+    }
     let Some(dir) = get_llm_models_dir(&app) else {
         return vec![];
     };
@@ -9749,6 +9585,9 @@ fn list_llm_models(app: AppHandle) -> Vec<LlmModelEntry> {
 
 #[tauri::command]
 fn open_llm_models_folder(app: AppHandle) -> Result<(), String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
     let dir = get_llm_models_dir(&app)
         .ok_or_else(|| "LLMモデルフォルダが見つかりません。".to_string())?;
     let dir_str = dir.to_string_lossy().to_string();
@@ -9785,24 +9624,30 @@ fn open_llm_models_folder(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_default_llm_model_path(app: AppHandle) -> Option<String> {
+    if is_vulkan_build(&app) {
+        return None;
+    }
     // 選択中の階層（E4B 標準 / 12B 高精度）の本体 GGUF を解決する。
     // B12 選択でも未ダウンロードなら E4b へフォールバックする（フェイルセーフ）。
     resolve_gemma_main_path_for_tier(&app, resolve_effective_proofread_tier(&app))
 }
 
-/// 校正AIモデルの選択（"e4b" / "12b"）を返す。Vulkan 版は常に "12b"。
+/// 校正AIモデルの選択（"e4b" / "12b"）を返す。
 #[tauri::command]
-fn get_proofread_model_tier(app: AppHandle) -> String {
-    read_proofread_model_tier(&app).as_marker().to_string()
+fn get_proofread_model_tier(app: AppHandle) -> Result<String, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
+    Ok(read_proofread_model_tier(&app).as_marker().to_string())
 }
 
-/// 校正AIモデルの選択を保存する（"e4b" / "12b"）。Vulkan 版では "e4b" を "12b" として保存する。
+/// 校正AIモデルの選択を保存する（"e4b" / "12b"）。
 #[tauri::command]
 fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> {
-    let resolved = normalize_proofread_model_tier_for_build(
-        GemmaTier::from_marker(&tier),
-        is_vulkan_build(&app),
-    );
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。".to_string());
+    }
+    let resolved = GemmaTier::from_marker(&tier);
     let path = proofread_model_tier_marker_path(&app)
         .ok_or_else(|| "設定の保存先を解決できませんでした。".to_string())?;
     if let Some(parent) = path.parent() {
@@ -9817,12 +9662,18 @@ fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> 
 /// 上位モデル（Gemma 4 12B 本体 GGUF）がダウンロード済みかを返す。
 #[tauri::command]
 fn check_gemma_12b_installed(app: AppHandle) -> bool {
+    if is_vulkan_build(&app) {
+        return false;
+    }
     resolve_gemma_main_path_for_tier(&app, GemmaTier::B12).is_some()
 }
 
 /// 上位モデル（Gemma 4 12B QAT + MTP）を後からダウンロードする（large-v3 と同じ後付け方式）。
 #[tauri::command]
 async fn download_gemma_12b(app: AppHandle) -> Result<bool, String> {
+    if is_vulkan_build(&app) {
+        return Err("この版には AI 校正はありません。Gemma 4 12B はダウンロードできません。".to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || download_gemma_12b_blocking(&app).map(|_| true))
         .await
         .map_err(|e| format!("12Bモデルのダウンロードに失敗しました: {e}"))?
@@ -11063,23 +10914,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proofread_tier_normalization_is_vulkan_only() {
-        assert_eq!(
-            normalize_proofread_model_tier_for_build(GemmaTier::E4b, true).as_marker(),
-            "12b"
-        );
-        assert_eq!(
-            normalize_proofread_model_tier_for_build(GemmaTier::B12, true).as_marker(),
-            "12b"
-        );
-        assert_eq!(
-            normalize_proofread_model_tier_for_build(GemmaTier::E4b, false).as_marker(),
-            "e4b"
-        );
-        assert_eq!(
-            normalize_proofread_model_tier_for_build(GemmaTier::B12, false).as_marker(),
-            "12b"
-        );
+    fn gemma_tier_markers_round_trip() {
+        assert_eq!(GemmaTier::from_marker("e4b").as_marker(), "e4b");
+        assert_eq!(GemmaTier::from_marker("12b").as_marker(), "12b");
+        assert_eq!(GemmaTier::from_marker("unknown").as_marker(), "e4b");
     }
 
     #[test]
@@ -11093,6 +10931,14 @@ mod tests {
                 model_dir.join(GEMMA_MTP_GGUF_FILENAME),
                 model_dir.join(GEMMA_MMPROJ_GGUF_FILENAME),
             ]
+        );
+    }
+
+    #[test]
+    fn legacy_vulkan_llama_server_uses_the_bundled_resource_dir() {
+        assert_eq!(
+            legacy_vulkan_llama_server_resource_dir(Path::new("install")),
+            Path::new("install/resources/llama-server-vulkan")
         );
     }
 
@@ -14216,7 +14062,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 
 /// CUDA 版から Vulkan 版へ上書きしたときに残る、使われなくなったデータ。
 /// リリース版の Vulkan 版だけが対象（開発環境の venv・モデルは消さない）。
-/// 旧 E4B の本体・MTP・音声 mmproj は対象にし、12B と ggml のモデルは残す。
+/// 旧 E4B と 12B は削除対象にし、現行の ggml 音声モデルは残す。
 fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
     if cfg!(debug_assertions) || !is_vulkan_build(app) {
         return Vec::new();
@@ -14233,6 +14079,10 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
                 path,
             ));
         }
+        candidates.push((
+            "全体校正用のAIモデル（Gemma 4 12B）".to_string(),
+            models.join("llm").join(GEMMA_12B_LLM_MODEL_DIR),
+        ));
     }
     let hub = get_app_hf_hub_cache(app);
     if let Ok(entries) = fs::read_dir(&hub) {
@@ -14253,13 +14103,19 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
                 resource_dir.join(sub),
             ));
         }
-        // Vulkan 版は resources/llama-server-vulkan を使う。CUDA 版の llama-server は使わない
+        // CUDA 版の校正エンジンは不要データにする。
         for sub in ["resources/llama-server", "llama-server"] {
             candidates.push((
                 "CUDA 版の AI 校正エンジン（llama-server）".to_string(),
                 resource_dir.join(sub),
             ));
         }
+        // バックグラウンド更新（/UPDATE）は旧版アンインストールを省略するため、
+        // 新しいインストーラーから外した旧 Vulkan 資源が残ることがある。
+        candidates.push((
+            "旧 Vulkan 版の AI 校正エンジン（llama-server）".to_string(),
+            legacy_vulkan_llama_server_resource_dir(&resource_dir),
+        ));
     }
     // CUDA 版のパッケージ導入（pip）が使った作業場所。パッケージだけで会話データは含まない
     if let Ok(cache_dir) = app.path().app_cache_dir() {
@@ -14271,6 +14127,10 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
         }
     }
     if let Ok(data_dir) = app.path().app_local_data_dir() {
+        candidates.push((
+            "AI校正モデルの選択設定".to_string(),
+            data_dir.join("proofread-model-tier.txt"),
+        ));
         candidates.push((
             "CUDA 版の Python 追加パッケージ".to_string(),
             data_dir.join("python312-site-packages"),
@@ -14297,6 +14157,10 @@ fn legacy_e4b_model_files(models_root: &Path) -> Vec<PathBuf> {
     .into_iter()
     .map(|filename| model_dir.join(filename))
     .collect()
+}
+
+fn legacy_vulkan_llama_server_resource_dir(resource_dir: &Path) -> PathBuf {
+    resource_dir.join("resources").join("llama-server-vulkan")
 }
 
 /// 設定タブ用: CUDA 版から残った不要データの一覧（Vulkan 版のリリースのみ。無ければ空）。
@@ -15306,11 +15170,7 @@ fn run_overall_proofread_blocking(
                 })
             }
             Err(message) => {
-                let mut message = tag_vram_oom_if_present(message.clone(), &message, "");
-                if is_llama_server && LLAMA_12B_FAST_LAUNCH_ACTIVE.swap(false, Ordering::Relaxed) {
-                    LLAMA_12B_FAST_LAUNCH_DISABLED.store(true, Ordering::Relaxed);
-                    message = format!("{LLAMA_12B_SAFE_RETRY_MARKER} {message}");
-                }
+                let message = tag_vram_oom_if_present(message.clone(), &message, "");
                 Ok(OverallProofreadResponse {
                     success: false,
                     result: None,

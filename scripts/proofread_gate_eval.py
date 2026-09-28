@@ -783,7 +783,8 @@ def main() -> int:
     ap.add_argument("--summary-max-chars", type=int, default=12000, help="これを超える文字起こしは分割して要約する")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--server-url", default=None)
-    ap.add_argument("--llama-server", default=str(REPO / "src-tauri" / "resources" / "llama-server-vulkan" / "llama-server.exe"))
+    ap.add_argument("--llama-server", default=str(REPO / "src-tauri" / "resources" / "llama-server-vulkan" / "llama-server.exe"),
+                    help="llama-server executable; pass this path explicitly because the current Vulkan bundle does not include it")
     ap.add_argument("--model-dir", default=str(default_model_dir()))
     ap.add_argument("--port", type=int, default=18998)
     ap.add_argument("--ctx", type=int, default=32768, help="総コンテキスト長（各スロットは ctx / np）")

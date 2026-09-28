@@ -171,7 +171,7 @@
             <span class="gpu-setup-title">GPU が見つからないため、CPU で処理します</span>
           </div>
           <p class="gpu-setup-desc">
-            このままでも使えますが、文字起こし・話者分離・AI校正に時間がかかります（目安: GPU の数倍〜十数倍）。
+            このままでも使えますが、文字起こし・話者分離{{ vulkanBuild() ? '' : '・AI校正' }}に時間がかかります（目安: GPU の数倍〜十数倍）。
             GPU を搭載している場合は、GPU メーカー（NVIDIA / AMD / Intel）の最新ドライバーを入れてから「GPU を再確認」を押してください。
           </p>
           <div class="gpu-setup-recheck">
@@ -255,7 +255,7 @@
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : setupProgressLabel(p) }}</span>
             </div>
             <!-- AI校正実行エンジン: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !allSetupStatus()?.llmBackend">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild() && !allSetupStatus()?.llmBackend">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
                 [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
@@ -277,7 +277,7 @@
                 [class.setup-comp-downloading]="setupProgressMap()['gemma_gguf']?.status === 'downloading'">{{
                 setupProgressMap()['gemma_gguf']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.gemmaGguf || setupProgressMap()['gemma_gguf']?.status === 'done' || setupProgressMap()['gemma_gguf']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">{{ vulkanBuild() ? '校正・音声入力モデル' : '自動句読点・校正モデル' }}（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
+              <span class="setup-comp-name">自動句読点・校正モデル（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
               <span class="setup-comp-size">約 5 GB</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['gemma_gguf']?.status === 'error'"
@@ -779,7 +779,7 @@
                 <!-- Vulkan 版の ggml エンジンが使う GPU。自動は「単体 GPU の中で VRAM 最大 → 無ければ内蔵 GPU」。 -->
                 <mat-form-field *ngIf="ggmlGpuSelectorVisible()" appearance="outline"
                   class="settings-llm-field settings-field-device">
-                  <mat-label>{{ vulkanBuild() ? '使用する GPU（文字起こし・話者分離・AI校正）' : '音声エンジンの GPU' }}</mat-label>
+                  <mat-label>音声エンジンの GPU</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
                     [value]="ggmlGpuSelectValue()" (valueChange)="onGgmlGpuChange($event)">
                     <mat-option value="">{{ ggmlGpuAutoLabel() }}</mat-option>
@@ -795,7 +795,7 @@
               <div *ngIf="vulkanBuild() && (legacyCudaData().length > 0 || legacyCudaDataMessage())" class="legacy-data-block">
                 <ng-container *ngIf="legacyCudaData().length > 0">
                   <p class="estimate-line">
-                    以前の CUDA 版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。Gemma 4 12Bと、この版の音声認識・話者分離モデルは削除しません。旧Gemma 4 E4B本体・MTP・音声mmprojは削除対象に含まれます。
+                    以前の版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。この版の音声認識・話者分離モデルは削除しません。
                   </p>
                   <ul class="legacy-data-list">
                     <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ item.bytes >= 107374182 ? (item.bytes / 1073741824).toFixed(1) + ' GB' : (item.bytes / 1048576).toFixed(0) + ' MB' }}）</li>
@@ -958,8 +958,8 @@
               </div>
             </ng-container>
 
-            <ng-container *ngIf="runtimeAiProofreadBuild()">
-              <div class="section-separator"><span>{{ vulkanBuild() ? '全体校正用AIモデル' : '校正用AIモデル' }}</span></div>
+            <ng-container *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
+              <div class="section-separator"><span>校正用AIモデル</span></div>
               <div class="actions-row settings-llm-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
                   <mat-label>AI校正バックエンド</mat-label>
@@ -972,7 +972,7 @@
                   <mat-hint>{{ llmBackendModeHint() }}</mat-hint>
                 </mat-form-field>
                 <button *ngIf="proofreadModelTierVisible()" mat-icon-button type="button" class="settings-info-icon"
-                  [matTooltip]="vulkanBuild() ? 'Vulkan版はGemma4 12B（高精度・要DL）を使います。約7GBの追加ダウンロードが必要です。変更は次回のAI校正から反映されます。' : 'AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。'"
+                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。"
                   matTooltipClass="settings-info-tooltip" aria-label="AI校正バックエンドの説明">
                   <mat-icon class="material-symbols-outlined">info</mat-icon>
                 </button>
@@ -985,13 +985,8 @@
                 </div>
                 <p *ngIf="proofreadModelTierVisible() && gemma12bInstalled() === false && !gemma12bDownloading()"
                   class="reader-hint voice-input-pack-note">
-                  {{ gemma12bDownloadMessage() || (vulkanBuild() ? 'Gemma4 12Bは未導入です。下のボタンから約7GBをダウンロードしてください。' : 'Gemma4 12Bは未導入です。内蔵モデルを選択すると、約7GBのダウンロードが始まります。') }}
+                  {{ gemma12bDownloadMessage() || 'Gemma4 12Bは未導入です。内蔵モデルを選択すると、約7GBのダウンロードが始まります。' }}
                 </p>
-                <button *ngIf="vulkanBuild() && proofreadModelTierVisible() && gemma12bInstalled() === false && !gemma12bDownloading()"
-                  mat-stroked-button color="primary" type="button" (click)="downloadGemma12bFromSettings()">
-                  <mat-icon class="material-symbols-outlined">download</mat-icon>
-                  Gemma 4 12Bをダウンロード
-                </button>
                 <mat-form-field *ngIf="llmBackendMode() === 'local_gguf' && computeEnvInfo()?.devices?.length"
                   appearance="outline" class="settings-llm-field settings-field-device">
                   <mat-label>使用デバイス</mat-label>
@@ -1257,12 +1252,10 @@
                 <li>pyannote.audio（MIT）/ SpeechBrain（Apache-2.0）</li>
                 <li>FFmpeg CLI（LGPLv3, BtbN LGPL build）<br>
                   音声デコード / WAV 変換に使用。配布用 Python 環境には PyAV（<code>av</code>）と <code>imageio-ffmpeg</code> を含めません。</li>
-                <li>llama.cpp（ggml-org, MIT）<br>
+                <li *ngIf="!vulkanBuild()">llama.cpp（ggml-org, MIT）<br>
                   AI校正エンジン（ローカル LLM 推論）に使用。</li>
                 <li *ngIf="!vulkanBuild()">Gemma 4 E4B（Google DeepMind, Apache-2.0）<br>
                   内蔵版: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code> UD-Q4_K_XL + MTP GGUF（QAT/MTP, Unsloth, Apache-2.0）</li>
-                <li *ngIf="vulkanBuild()">Gemma 4 12B（Google DeepMind, Apache-2.0）<br>
-                  内蔵版: <code>unsloth/gemma-4-12B-it-qat-GGUF</code> QAT GGUF + MTP GGUF（Unsloth, Apache-2.0）</li>
               </ul>
               <p>各コンポーネントの著作権表示、ライセンス条件、FFmpeg の取得元・ハッシュ・configure 情報は、それぞれの配布物・公式情報および同梱ファイルに従います。</p>
             </div>
@@ -1280,9 +1273,9 @@
                 <li>
                   文字起こしモデル: OpenAI Whisper（turbo, MIT / OpenAI）
                 </li>
-                <li>
-                  校正モデル: {{ vulkanBuild() ? 'Gemma 4 12B' : 'Gemma 4 E4B' }}（Google DeepMind, Apache-2.0）/
-                  内蔵 GGUF: <code>{{ vulkanBuild() ? 'unsloth/gemma-4-12B-it-qat-GGUF' : 'unsloth/gemma-4-E4B-it-qat-GGUF' }}</code>（QAT + MTP, Unsloth, Apache-2.0）
+                <li *ngIf="!vulkanBuild()">
+                  校正モデル: Gemma 4 E4B（Google DeepMind, Apache-2.0）/
+                  内蔵 GGUF: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code>（QAT + MTP, Unsloth, Apache-2.0）
                 </li>
               </ul>
               <p>
@@ -1308,7 +1301,7 @@
         発言の統合
       </button>
       <span class="copy-status" *ngIf="mergeStatus()">{{ mergeStatus() }}</span>
-      <div class="merge-overall-center" *ngIf="runtimeAiProofreadBuild()">
+      <div class="merge-overall-center" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
         <button *ngIf="overallProofreadHasPendingItems(); else overallProofreadRunButtons"
           mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
           (click)="openOrRunOverallProofread(proofreadDialogMode)">
@@ -1316,11 +1309,9 @@
         </button>
         <ng-template #overallProofreadRunButtons>
           <div class="overall-proofread-split-button" role="group" aria-label="全体校正モデルを選択">
-            <!-- Vulkan 版は 12B だけで全体校正する（E4B の選択肢を出さない） -->
-            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
-              [class.overall-proofread-split-main]="!vulkanBuild()"
+            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn overall-proofread-split-main" color="accent"
               [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
-              (click)="vulkanBuild() ? openOrRunOverallProofreadWith12b(proofreadDialogMode) : openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
+              (click)="openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
               <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">auto_awesome</mat-icon>全体校正
             </button>
             <button *ngIf="!vulkanBuild()" mat-stroked-button class="run-exec-btn overall-proofread-split-toggle" color="accent"
@@ -1677,7 +1668,7 @@
   }
 </div>
 
-<div class="overall-proofread-wait-overlay" *ngIf="overallProofreadRunning()" aria-live="polite">
+<div class="overall-proofread-wait-overlay" *ngIf="!vulkanBuild() && overallProofreadRunning()" aria-live="polite">
   <div class="overall-proofread-wait-box">
     <mat-spinner diameter="48" strokeWidth="4"></mat-spinner>
     <span class="overall-proofread-wait-title">全体校正を実行中です</span>
@@ -1690,7 +1681,7 @@
   </div>
 </div>
 
-<div class="overall-proofread-overlay" *ngIf="overallProofreadDialogOpen()" role="dialog" aria-modal="true"
+<div class="overall-proofread-overlay" *ngIf="!vulkanBuild() && overallProofreadDialogOpen()" role="dialog" aria-modal="true"
   aria-label="全体校正ダイアログ">
   <mat-card class="overall-proofread-card">
     <mat-card-header class="overall-proofread-header">
@@ -1786,7 +1777,7 @@
   </mat-card>
 </div>
 
-<div class="floating-overall-proofread" *ngIf="overallProofreadHasPendingItems() && result() && overallProofreadBtnAboveViewport()">
+<div class="floating-overall-proofread" *ngIf="!vulkanBuild() && overallProofreadHasPendingItems() && result() && overallProofreadBtnAboveViewport()">
   <button mat-flat-button color="accent" class="floating-overall-proofread-btn" (click)="openOrRunOverallProofread(false)">
     <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">list</mat-icon>全体校正結果の表示
   </button>

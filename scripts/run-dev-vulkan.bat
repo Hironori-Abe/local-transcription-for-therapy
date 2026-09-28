@@ -6,7 +6,6 @@ if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
 
 REM Vulkan development launcher for NVIDIA, AMD, and Intel.
 REM Speech engines: python_sidecar\speech-engines.
-REM Proofreading engine: src-tauri\resources\llama-server-vulkan.
 REM Setup commands:
 REM   powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
 REM   powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
@@ -14,9 +13,6 @@ cd /d "%~dp0.."
 
 if not exist "python_sidecar\speech-engines\whisper\bin\whisper-cli.exe" goto :err_engines
 if not exist "python_sidecar\speech-engines\nemo\bin\nemo-speech.exe" goto :err_engines
-if not exist "src-tauri\resources\llama-server-vulkan\llama-server.exe" goto :err_bundle
-
-REM The Vulkan build uses Rust for proofreading, encrypted export, and model downloads.
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
 
 where npm >nul 2>&1
@@ -35,11 +31,6 @@ goto :hold_success
 :err_engines
 echo [ERROR] ggml speech engines were not found. Run:
 echo         powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
-goto :hold_error
-
-:err_bundle
-echo [SETUP REQUIRED] Vulkan llama-server is not installed. Run:
-echo         powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
 goto :hold_error
 
 :err_npm

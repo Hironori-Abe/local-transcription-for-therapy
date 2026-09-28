@@ -18,7 +18,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
 - **Japanese transcription** - faster-whisper with the Whisper turbo model by default; the higher-accuracy large-v3 model can be downloaded and selected later
 - **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
-- **Proofreading** - After diarization, CUDA / AMD editions automatically add punctuation with Gemma 4 E4B, while Vulkan / CPU editions use local rules. The app also highlights possible personal identifiers such as names and place names. Overall proofreading uses E4B or the optional 12B model on CUDA / AMD, and Gemma 4 12B only on Vulkan
+- **Proofreading** - After diarization, CUDA / AMD editions automatically add punctuation with Gemma 4 E4B, while Vulkan / CPU editions use local rules. The app also highlights possible personal identifiers such as names and place names. Overall proofreading is available only on CUDA / AMD, using E4B or the optional 12B model
 - **Voice input** - Record up to 15 seconds from the microphone on any transcript row for local transcription. Vulkan uses the already-installed whisper.cpp model and suggests up to 2 candidates without an extra pack; other supported editions suggest up to 3 after installing the "voice input pack" from Settings
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
 - Save as Word (.docx), Excel (.xlsx), SRT subtitles, or JSON. SRT can optionally be stored in an AES-256 encrypted ZIP with a password
@@ -34,7 +34,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 
 ### Local AI Apps (LM Studio / Ollama)
 
-- Integration with local AI apps running on the same PC, such as LM Studio and Ollama, is **disabled in the official installers**. There is no installer prompt or in-app switch for enabling it. CUDA / AMD editions use the built-in Gemma 4 E4B model by default; Vulkan uses Gemma 4 12B.
+- Integration with local AI apps running on the same PC, such as LM Studio and Ollama, is **disabled in the official installers**. There is no installer prompt or in-app switch for enabling it. CUDA / AMD editions use the built-in Gemma 4 E4B model by default. Vulkan contains no LLM and does not provide overall proofreading.
 - If this integration is required, build a dedicated installer from source with the Cargo feature `local-llm-apps`. See the [Windows release build guide](docs/release-build-windows.md#ローカルaiアプリ連携を有効にした専用ビルド).
 - Even when integration is enabled, the connection target is restricted to loopback, but **the behavior of the connected app itself is outside LoTT's control**. Depending on the LM Studio or Ollama settings, conversation data could be sent outside the PC. Keeping this integration disabled is recommended for normal use.
 
@@ -43,7 +43,7 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 | Edition | Description |
 | --- | --- |
 | **LoTT Full CUDA** | Main Windows and Linux distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
-| LoTT Vulkan (v0.9.9+, experimental) | New edition that supports NVIDIA / AMD / Intel GPUs with a single installer. Transcription uses whisper.cpp, speaker diarization uses Nemotron-3-Diarization, punctuation uses local rules, and overall proofreading uses Gemma 4 12B (optional download from Settings). Microphone input also uses whisper.cpp and needs no extra pack. No CUDA Toolkit, cuDNN, or Hugging Face token is required. On PCs without a GPU it runs on the CPU (slower) |
+| LoTT Vulkan (v0.9.9+, experimental) | Edition that supports NVIDIA / AMD / Intel GPUs with a single installer. Transcription uses whisper.cpp, speaker diarization uses Nemotron-3-Diarization, and punctuation uses local rules. It includes no LLM, Gemma model, or overall proofreading. Microphone input also uses whisper.cpp and needs no extra pack. No CUDA Toolkit, cuDNN, or Hugging Face token is required. On PCs without a GPU it runs on the CPU (slower) |
 | LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. After diarization, punctuation is added automatically with Gemma 4 E4B (the LLM prefers ROCm with Vulkan fallback) |
 | LoTT CPU | Trial edition. Runs transcription and speaker diarization on the CPU, then automatically applies simple rule-based punctuation. Overall proofreading is not included. Voice input becomes available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
 | LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription, diarization, automatic punctuation, and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
@@ -53,9 +53,9 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 The Vulkan edition is an experimental edition that is planned to become the main distribution (testing on Intel Arc and other GPUs is in progress).
 
 - Only the latest driver from your GPU vendor is required. There is no CUDA Toolkit / cuDNN installation and no Python package setup
-- The initial setup downloads only the speech recognition model (about 1.6 GB, including whisper.cpp and VAD) and the Nemotron-3-Diarization speaker diarization model (about 0.1 GB, NVIDIA OpenMDW-1.1 license; the full text can be viewed on the setup screen). Vulkan does not use Gemma 4 E4B. Gemma 4 12B (about 7 GB) is downloaded optionally from Settings for overall proofreading. No Hugging Face account or token is needed
-- On PCs with multiple GPUs, the GPU with the most VRAM other than the integrated GPU is used automatically. You can change it in the Settings tab
-- When installed over the Full CUDA edition, Gemma 4 12B is reused. Legacy CUDA files, including the Gemma 4 E4B model, MTP draft, and audio mmproj, can be removed from Settings
+- The initial setup downloads only the speech recognition model (about 1.6 GB, including whisper.cpp and VAD) and the Nemotron-3-Diarization speaker diarization model (about 0.1 GB, NVIDIA OpenMDW-1.1 license; the full text can be viewed on the setup screen). The total is about 1.7 GB; there is no Gemma or llama.cpp download. No Hugging Face account or token is needed
+- On PCs with multiple GPUs, the audio engines automatically use the GPU with the most VRAM other than the integrated GPU. You can change it in the Settings tab
+- When installed over the Full CUDA edition, LLM models are not used by this edition. The old Gemma 4 12B model directory, E4B model, MTP draft, audio mmproj, and tier marker can be removed from Settings. The old bundled llama-server can also be removed there if it remains after a background update
 
 ### AMD GPU Edition
 
@@ -153,7 +153,7 @@ LoTT CPU provides fully local transcription on PCs without a supported GPU. Afte
    - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
    - Proofreading LLM for CUDA / AMD editions: Gemma 4 E4B GGUF (initial setup for Full editions)
    - E4B model and audio mmproj for voice input on CPU / Editor editions (when installing the voice input pack)
-   - Higher-accuracy proofreading LLM: Gemma 4 12B QAT+MTP, approximately 7 GB (optional on CUDA / AMD; the only built-in proofreading model on Vulkan, downloaded from Settings)
+   - Higher-accuracy proofreading LLM: Gemma 4 12B QAT+MTP, approximately 7 GB (optional on CUDA / AMD; Vulkan has no built-in LLM)
    - Voice input pack (for microphone input on editions other than Vulkan)
 
 If a large Python-package download is interrupted, run setup again to resume as far as possible. The CPU edition can import and edit JSON before its Python packages are installed, but transcription requires setup. The Editor edition needs no Python packages or AI models for JSON import, editing, and export; install only the optional voice input pack if you want voice input.
@@ -166,7 +166,7 @@ After setup and model downloads are complete, transcription, diarization, and pr
 2. Listen to the audio while editing the conversation text and speaker labels. Default speaker labels include `SPEAKER_00 -> Th` and `SPEAKER_01 -> Cl`
    - While editing, Vulkan uses the already-installed whisper.cpp model for microphone input; other supported editions use the voice input pack
    - Shortcuts include `Ctrl+Shift+Space` (continuous playback / pause), `Ctrl+Shift+A` / `D` (seek back / forward 5 seconds), `Ctrl+Shift+E` (change speaker), and `Ctrl+Shift+M` (voice input)
-3. Run overall proofreading if needed. CUDA / AMD can use Gemma 4 E4B or the optional 12B model; Vulkan uses Gemma 4 12B downloaded from Settings
+3. Run overall proofreading if needed (CUDA / AMD only, using Gemma 4 E4B or the optional 12B model). Vulkan does not include overall proofreading
 4. Save as Word, Excel, SRT subtitles, or JSON
 
 Use the button at the left of the tab row to cycle among System (default), Light, and Dark themes. The selection is preserved across launches.
@@ -175,9 +175,9 @@ Use the button at the left of the tab row to cycle among System (default), Light
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
 - ASR: faster-whisper (turbo by default / optional higher-accuracy large-v3, downloaded later) / Diarization: pyannote.audio / Audio decoding: LGPL-configured ffmpeg CLI
-- Vulkan edition: transcription with whisper.cpp (large-v3-turbo, Silero VAD) / speaker diarization with NeMo-Speech.cpp + Nemotron-3-Diarization / overall proofreading with Gemma 4 12B and llama.cpp llama-server (all on Vulkan; CPU when no GPU is available)
+- Vulkan edition: transcription with whisper.cpp (large-v3-turbo, Silero VAD) / speaker diarization with NeMo-Speech.cpp + Nemotron-3-Diarization / local rule-based punctuation (audio engines use the CPU when no GPU is available). It includes no LLM or overall proofreading
 - Voice input: Vulkan uses whisper.cpp (two transcription passes: with a filler-example prompt, then without one; the second gets rule-based punctuation and is added only when different. Context from surrounding lines is not sent). Other supported editions use Gemma 4 E4B with an audio mmproj (llama.cpp llama-server, OpenAI-compatible `input_audio`, loopback only)
-- LLM proofreading: CUDA / AMD use Gemma 4 E4B by default or Gemma 4 12B QAT+MTP as the optional higher-accuracy model. Vulkan uses Gemma 4 12B only. Windows and Linux NVIDIA use direct CUDA launch; AMD prefers ROCm with Vulkan fallback. The engine uses bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
+- LLM proofreading: CUDA / AMD use Gemma 4 E4B by default or Gemma 4 12B QAT+MTP as the optional higher-accuracy model. Vulkan has no LLM proofreading. Windows and Linux NVIDIA use direct CUDA launch; AMD prefers ROCm with a Vulkan backend fallback. LLM editions use bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
 
 ## Documentation
 

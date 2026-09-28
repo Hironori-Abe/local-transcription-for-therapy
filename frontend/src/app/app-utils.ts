@@ -42,14 +42,14 @@ export function resolveRuntimeBuildFlagsValue(
     : compileTimeCpuOnlyBuild;
   return {
     cpuOnlyBuild,
-    aiProofreadBuild: !editorOnlyBuild && !cpuOnlyBuild,
+    aiProofreadBuild: !editorOnlyBuild && !cpuOnlyBuild && runtimeBuildVariant !== 'vulkan',
     cpuVoiceInputBuild: editorOnlyBuild || cpuOnlyBuild
   };
 }
 
 /**
- * 配布物の種類。vulkan は NVIDIA / AMD / Intel 共通の Vulkan 版（文字起こし・話者分離は
- * ggml エンジン、校正は同梱の Vulkan 版 llama-server。Python / CUDA の導入手順を持たない）。
+ * 配布物の種類。vulkan は NVIDIA / AMD / Intel 共通の Vulkan 版（文字起こし・話者分離・句読点付与は
+ * ggml エンジンとローカルルールを使い、AI校正モデルを含まない）。
  */
 export type BuildVariant = 'cuda' | 'rocm' | 'cpu' | 'vulkan';
 
@@ -794,17 +794,6 @@ export function isJapaneseLanguageValue(language: string | null | undefined): bo
   return (language ?? 'ja').toLowerCase() === 'ja';
 }
 
-/** Rust の全体校正が「12B の高速起動設定のまま失敗した」ときにエラー文へ付ける目印（lib.rs と同じ文字列）。 */
-export const LLAMA_12B_SAFE_RETRY_MARKER = '[LOTT_12B_SAFE_RETRY]';
-
-/** エラー文から目印を取り除き、従来の設定でやり直すべきかを返す。 */
-export function parseOverallProofreadSafeRetryValue(message: string): { retry: boolean; message: string } {
-  if (!message.includes(LLAMA_12B_SAFE_RETRY_MARKER)) {
-    return { retry: false, message };
-  }
-  return { retry: true, message: message.split(LLAMA_12B_SAFE_RETRY_MARKER).join('').trim() };
-}
-
 export function llmBackendModeHintValue(
   backendMode: string,
   proofreadModelTier: 'e4b' | '12b',
@@ -977,10 +966,11 @@ export function llmBackendModeOptionsValue(
   localLlmAppsEnabled: boolean,
   vulkanBuild = false
 ): ReadonlyArray<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> {
-  const options: Array<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> = vulkanBuild
-    ? [{ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' }]
-    : [{ value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' }];
-  if (aiProofreadBuild && !vulkanBuild) {
+  if (vulkanBuild) return [];
+  const options: Array<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> = [
+    { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' }
+  ];
+  if (aiProofreadBuild) {
     options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
   }
   if (localLlmAppsEnabled) {
@@ -1762,9 +1752,7 @@ export function resolveLlmAppSettingsValue(
 ): ResolvedLlmAppSettingsValue {
   const llm = settings.llm;
   const resolved: ResolvedLlmAppSettingsValue = {
-    proofreadModelTier: options.vulkanBuild
-      ? '12b'
-      : llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
+    proofreadModelTier: llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
       ? '12b'
       : 'e4b'
   };

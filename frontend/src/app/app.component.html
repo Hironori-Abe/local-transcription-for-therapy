@@ -804,8 +804,8 @@
                   <p class="estimate-line">
                     以前の CUDA 版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。ダウンロード済みの AI 校正モデル（Gemma）や、この版の音声認識・話者分離モデルは削除しません。
                   </p>
-                  <ul class="dev-delete-list">
-                    <li *ngFor="let item of legacyCudaData()">{{ item.label }}（{{ (item.bytes / 1073741824).toFixed(1) }} GB）</li>
+                  <ul class="legacy-data-list">
+                    <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ item.bytes >= 107374182 ? (item.bytes / 1073741824).toFixed(1) + ' GB' : (item.bytes / 1048576).toFixed(0) + ' MB' }}）</li>
                   </ul>
                   <div class="actions-row">
                     <button *ngIf="!legacyCudaDataConfirming()" mat-stroked-button color="warn"

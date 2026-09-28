@@ -1081,11 +1081,17 @@ export function resolveEstimateComputeTypeValue(
   return selectedComputeType === 'auto' ? 'float16' : selectedComputeType;
 }
 
+/**
+ * ggml（whisper.cpp）で文字起こしした所要時間の記録に使う区分。faster-whisper の計算方式
+ * （float16 など）とは速さが違うため、同じ区分に混ぜない。
+ */
+export const GGML_ESTIMATE_PROFILE = 'whisper.cpp';
+
 export function pickRuntimeEstimateSamplesValue(
   samples: ReadonlyArray<RuntimeEstimateSample>,
   diarization: boolean,
   device: string,
-  computeType: ConcreteComputeType
+  computeType: ConcreteComputeType | typeof GGML_ESTIMATE_PROFILE
 ): RuntimeEstimateSample[] {
   return samples.filter((sample) =>
     sample.diarization === diarization

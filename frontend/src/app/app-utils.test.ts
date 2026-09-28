@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   appendRuntimeEstimateSampleValue,
+  GGML_ESTIMATE_PROFILE,
   buildDocxExportRowsValue,
   buildExportSpeakerLabelByRowIdValue,
   buildFinalInitialPromptValue,
@@ -674,6 +675,16 @@ test('runtime estimate helpers preserve minute rounding and effective compute ty
   assert.equal(resolveEstimateComputeTypeValue('cpu', 'float32'), 'int8');
   assert.equal(resolveEstimateComputeTypeValue('cuda', 'auto'), 'float16');
   assert.equal(resolveEstimateComputeTypeValue('cuda', 'int8_float16'), 'int8_float16');
+});
+
+test('whisper.cpp estimate samples are kept apart from faster-whisper compute types', () => {
+  const samples = [
+    { audioSeconds: 600, elapsedSeconds: 90, diarization: true, device: 'cuda', computeType: 'float16', createdAt: 1 },
+    { audioSeconds: 600, elapsedSeconds: 31, diarization: true, device: 'cuda', computeType: GGML_ESTIMATE_PROFILE, createdAt: 2 }
+  ];
+
+  assert.deepEqual(pickRuntimeEstimateSamplesValue(samples, true, 'cuda', GGML_ESTIMATE_PROFILE), [samples[1]]);
+  assert.deepEqual(pickRuntimeEstimateSamplesValue(samples, true, 'cuda', 'float16'), [samples[0]]);
 });
 
 test('runtime estimate sample selection requires an exact profile match', () => {

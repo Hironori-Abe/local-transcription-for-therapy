@@ -10237,9 +10237,12 @@ fn proofread_transcription_llm_blocking_with_kind(
         });
     }
     match result {
-        Ok(items) => Ok(ProofreadTranscriptionResponse {
+        Ok(mut items) => Ok(ProofreadTranscriptionResponse {
             success: true,
-            result: Some(serde_json::json!({"items": items})),
+            result: Some({
+                normalize_revised_symbol_width(&mut items);
+                serde_json::json!({"items": items})
+            }),
             error_message: None,
         }),
         Err(message) => {
@@ -10250,6 +10253,46 @@ fn proofread_transcription_llm_blocking_with_kind(
                 error_message: Some(message),
             })
         }
+    }
+}
+
+/// 日本語の直後の半角「?」「!」を全角にする（Whisper は半角で出すことが多い）。
+/// 表記の統一はルールで確実にでき、LLM の句読点校正に任せると処理時間の多くをこれに使うため。
+/// 英字・数字の直後（例: 「OK?」）は英語の表記として残す。
+fn normalize_ja_symbol_width(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    // 直前が英字・数字、または半角のまま残した ? ! なら、続く ? ! も半角のままにする（「OK?!」）
+    let mut keep_ascii = false;
+    for c in text.chars() {
+        match c {
+            '?' | '!' if keep_ascii => out.push(c),
+            '?' => out.push('？'),
+            '!' => out.push('！'),
+            _ => {
+                keep_ascii = c.is_ascii_alphanumeric();
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// LLM 校正の結果にも同じ全角化をかける（全角化は LLM に任せない）。
+/// 元の文と全角化だけが違う結果は変更扱いにしないよう、overall の `changed` も付け直す。
+fn normalize_revised_symbol_width(items: &mut [Value]) {
+    for item in items {
+        let Some(revised) = item.get("revisedText").and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = normalize_ja_symbol_width(revised);
+        if normalized == revised {
+            continue;
+        }
+        if item.get("changed").is_some() {
+            let original = item.get("originalText").and_then(Value::as_str).unwrap_or("");
+            item["changed"] = Value::Bool(normalized != original);
+        }
+        item["revisedText"] = Value::String(normalized);
     }
 }
 
@@ -11053,6 +11096,25 @@ mod tests {
                 PathBuf::from("/tmp/lott-cache/lemonade"),
             ]
         );
+    }
+
+    #[test]
+    fn japanese_question_and_exclamation_marks_become_full_width() {
+        assert_eq!(normalize_ja_symbol_width("何が良かったの?"), "何が良かったの？");
+        assert_eq!(normalize_ja_symbol_width("え?そっか!"), "え？そっか！");
+        assert_eq!(normalize_ja_symbol_width("マジで??"), "マジで？？");
+        // 英字・数字の直後は英語の表記として残す（続く記号も揃える）
+        assert_eq!(normalize_ja_symbol_width("OK?!わかった?"), "OK?!わかった？");
+        assert_eq!(normalize_ja_symbol_width("そうですね。"), "そうですね。");
+
+        let mut items = vec![
+            serde_json::json!({"originalText": "あった？", "revisedText": "あった?", "changed": true}),
+            serde_json::json!({"originalText": "あった", "revisedText": "あった?"}),
+        ];
+        normalize_revised_symbol_width(&mut items);
+        assert_eq!(items[0]["revisedText"], "あった？");
+        assert_eq!(items[0]["changed"], false);
+        assert_eq!(items[1]["revisedText"], "あった？");
     }
 
     #[test]
@@ -13026,6 +13088,20 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
                     );
                 }
             }
+            if let Some(segments) = result
+                .as_mut()
+                .and_then(|value| value.get_mut("segments"))
+                .and_then(Value::as_array_mut)
+            {
+                for segment in segments {
+                    if let Some(text) = segment.get("text").and_then(Value::as_str) {
+                        let normalized = normalize_ja_symbol_width(text);
+                        if normalized != text {
+                            segment["text"] = Value::String(normalized);
+                        }
+                    }
+                }
+            }
             emit_progress(
                 &app,
                 "done",
@@ -14088,6 +14164,22 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
                 resource_dir.join(sub),
             ));
         }
+        // Vulkan 版は resources/llama-server-vulkan を使う。CUDA 版の llama-server は使わない
+        for sub in ["resources/llama-server", "llama-server"] {
+            candidates.push((
+                "CUDA 版の AI 校正エンジン（llama-server）".to_string(),
+                resource_dir.join(sub),
+            ));
+        }
+    }
+    // CUDA 版のパッケージ導入（pip）が使った作業場所。パッケージだけで会話データは含まない
+    if let Ok(cache_dir) = app.path().app_cache_dir() {
+        for sub in ["python-downloads", "python-pip", "python-tmp", "python-setup.log"] {
+            candidates.push((
+                "CUDA 版のパッケージ導入用キャッシュ".to_string(),
+                cache_dir.join(sub),
+            ));
+        }
     }
     if let Ok(data_dir) = app.path().app_local_data_dir() {
         candidates.push((
@@ -15088,19 +15180,18 @@ fn run_overall_proofread_blocking(
 
         return match result {
             Ok(result_val) => {
-                let items = result_val
+                let mut items = result_val
                     .get("items")
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                let changed_count = result_val
-                    .get("changedCount")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let unchanged_count = result_val
-                    .get("unchangedCount")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
+                normalize_revised_symbol_width(&mut items);
+                // 全角化で changed が変わることがあるので、件数は items から数え直す
+                let changed_count = items
+                    .iter()
+                    .filter(|item| item.get("changed").and_then(Value::as_bool) == Some(true))
+                    .count() as i64;
+                let unchanged_count = items.len() as i64 - changed_count;
                 Ok(OverallProofreadResponse {
                     success: true,
                     result: Some(OverallProofreadResult {

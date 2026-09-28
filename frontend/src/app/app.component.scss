@@ -244,6 +244,12 @@
   word-break: break-all;
 }
 
+.legacy-data-list {
+  margin: 2px 0 8px 1.2em;
+  padding: 0;
+  line-height: 1.6;
+}
+
 .dev-delete-none {
   color: light-dark(rgba(0, 0, 0, 0.54), rgba(255, 255, 255, 0.58));
   font-size: 0.78rem;

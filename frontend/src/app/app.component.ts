@@ -177,6 +177,7 @@ import {
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
   resolveEstimateComputeTypeValue,
+  GGML_ESTIMATE_PROFILE,
   resolveGeneralAppSettingsValue,
   resolveLlmAppSettingsValue,
   resolvePersistedLlmBackendModeValue,
@@ -592,6 +593,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly legacyCudaDataTotalLabel = computed(() => {
     const bytes = this.legacyCudaData().reduce((sum, item) => sum + item.bytes, 0);
     return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  });
+  /** 画面表示用: 同じ種類（label）のデータを1行にまとめる。削除は Rust 側がパスごとに行う。 */
+  readonly legacyCudaDataGroups = computed(() => {
+    const groups = new Map<string, number>();
+    for (const item of this.legacyCudaData()) {
+      groups.set(item.label, (groups.get(item.label) ?? 0) + item.bytes);
+    }
+    return Array.from(groups, ([label, bytes]) => ({ label, bytes }));
   });
   /**
    * 配布物のAngular設定とRust側identifierが食い違った場合に備えた実行時能力。
@@ -1893,7 +1902,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return pickRuntimeEstimateSamplesValue(this.estimateSamples, diarization, device, compute);
   }
 
-  private resolveEstimateComputeType(): ConcreteComputeType {
+  /** 所要時間の記録・推定の区分。ggml は計算方式を選べないため、エンジン名で分ける。 */
+  private resolveEstimateComputeType(): ConcreteComputeType | typeof GGML_ESTIMATE_PROFILE {
+    if (this.transcriptionEngine() === 'ggml') {
+      return GGML_ESTIMATE_PROFILE;
+    }
     return resolveEstimateComputeTypeValue(this.transcriptionDevice(), this.computeType());
   }
 
@@ -2976,7 +2989,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               device: this.normalizeTranscriptionDeviceForEstimate(
                 this.lastObservedTranscriptionDevice ?? this.transcriptionDevice()
               ),
-              computeType: this.lastObservedComputeType ?? this.computeType(),
+              computeType: this.transcriptionEngine() === 'ggml'
+                ? GGML_ESTIMATE_PROFILE
+                : this.lastObservedComputeType ?? this.computeType(),
               createdAt: Date.now(),
               fileSizeBytes: this.selectedAudioFileSizeBytes()
             });
@@ -5571,6 +5586,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.diarizationModelChecked.set(true);
       });
     }
+    // セットアップでモデルが揃った後に、起動時の「準備が済んでいません」表示が残らないようにする
+    await this.refreshGgmlSpeechStatus();
   }
 
   private applySetupStatusProjection(projection: ReturnType<typeof projectSetupStatus>): void {

@@ -329,6 +329,25 @@ pub(crate) fn whisper_cli_args(
     args
 }
 
+/// 音声入力（Vulkan 版）の候補を並べる。1件目はフィラー例文付きの結果（文字起こしと同じ書き方で、
+/// 句読点が付く）。例文を付けると冒頭の文を落とすことがあるため、例文なしの結果も2件目に出す。
+/// ただし句読点・空白を除いた中身が1件目と同じなら出さない。
+pub(crate) fn voice_input_candidates(with_prompt: &str, plain: &str) -> Vec<String> {
+    let core = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace() && !"、。，．,.？！?!「」".contains(*c))
+            .collect()
+    };
+    let mut out: Vec<String> = Vec::new();
+    for text in [with_prompt.trim(), plain.trim()] {
+        if text.is_empty() || out.iter().any(|c| core(c) == core(text)) {
+            continue;
+        }
+        out.push(text.to_string());
+    }
+    out
+}
+
 /// whisper-cli の応答ファイル（`whisper-cli @<file>`。1行1引数、BOM 無し UTF-8）の内容を作る。
 ///
 /// Windows の whisper-cli は argv をシステムのコードページ（日本語環境では cp932）で受け取る一方、
@@ -1418,6 +1437,26 @@ mod tests {
             vec![json!({"id": 0, "start": 0.0, "end": 2.0, "text": "はい", "speaker": null})];
         let diar = vec![json!({"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"})];
         assert!(split_segments_by_speaker(&segments, &diar).is_none());
+    }
+
+    #[test]
+    fn voice_input_candidates_skip_punctuation_only_differences() {
+        assert_eq!(
+            voice_input_candidates("冬を越せた。", "冬を越せた"),
+            vec!["冬を越せた。".to_string()]
+        );
+        assert_eq!(
+            voice_input_candidates("発行は、広報課。", "大会は8月です 発行は広報課"),
+            vec![
+                "発行は、広報課。".to_string(),
+                "大会は8月です 発行は広報課".to_string()
+            ]
+        );
+        assert_eq!(
+            voice_input_candidates("", "うん"),
+            vec!["うん".to_string()]
+        );
+        assert!(voice_input_candidates(" ", "").is_empty());
     }
 
     #[test]

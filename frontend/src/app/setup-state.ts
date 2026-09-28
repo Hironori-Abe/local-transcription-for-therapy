@@ -133,8 +133,8 @@ export function needsFullSetup(input: NeedsFullSetupInput): boolean {
   if (!input.status) return true;
   return !input.status.pythonEnv
     || (input.transcriptionTabVisible && (!input.status.whisperTurbo || !input.status.diarization))
-    || (input.aiProofreadBuild && !input.status.gemmaGguf)
-    || (input.aiProofreadBuild && (input.buildVariant === 'cuda' || input.buildVariant === 'vulkan') && !input.status.gemmaMtpGguf)
+    || (input.aiProofreadBuild && input.buildVariant !== 'vulkan' && !input.status.gemmaGguf)
+    || (input.aiProofreadBuild && (input.buildVariant === 'cuda') && !input.status.gemmaMtpGguf)
     || (input.aiProofreadBuild && !input.status.llmBackend);
 }
 

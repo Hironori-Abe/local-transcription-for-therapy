@@ -203,11 +203,11 @@ scripts\run-dev-cpu.bat
 - 校正システムプロンプトは、選択中のモデル / ローカルAPIプロファイルごとに保存します。既定 Gemma 4 向けの指示には影響させません。
 - 氏名・地名・組織名チェックの優先順位ポリシーは [AGENTS.md](../AGENTS.md) の「Named Entity Warning Priority」を参照してください。
 
-## 音声入力・区間聞き直し（編集画面のAI聞き取り）
+## 音声入力（編集画面のマイク録音）
 
-- 編集画面のマイク音声入力と区間聞き直しは、Gemma 4 E4B + 音声 mmproj を llama.cpp llama-server（loopback 限定）で動かし、OpenAI 互換 `input_audio` で音声を渡します。
+- 編集画面のマイク音声入力は、Gemma 4 E4B + 音声 mmproj を llama.cpp llama-server（loopback 限定）で動かし、OpenAI 互換 `input_audio` で音声を渡します。
 - プロンプトテンプレート: `python_sidecar/prompt_templates/voice_input/`
-- ビルド別の起動経路（Editor=CPU 直起動 / Full=GPU 直起動）、サーバーの保持・解放ライフサイクル、Editor 版のメモリ警告は [AGENTS.md](../AGENTS.md) の「音声入力」「区間聞き直し」の節を参照してください。
+- ビルド別の起動経路（Editor=CPU 直起動 / Full=GPU 直起動）、サーバーの保持・解放ライフサイクル、Editor 版のメモリ警告は [AGENTS.md](../AGENTS.md) の「音声入力」節を参照してください。
 
 ## 文字起こし用語辞書（initial_prompt 自動注入）
 

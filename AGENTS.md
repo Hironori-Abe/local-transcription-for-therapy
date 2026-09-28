@@ -29,7 +29,7 @@
 - Sidecar: Python
 - ASR: faster-whisper（標準）/ whisper.cpp（ggml・試験的。設定タブで選択）
 - Diarization: pyannote.audio (`pyannote-speaker-diarization-community-1`)（標準）/ NeMo-Speech.cpp + Nemotron-3-Diarization（ggml・試験的）
-- LLM proofreading: Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けDL。NVIDIA=CUDA直起動 / AMD=ROCm優先・Vulkanフォールバック）。エンジンは同梱/DL の llama.cpp llama-server 直起動 + local OpenAI-compatible API（loopback only）。外部のランタイム管理CLI/デーモンは配布しない
+- LLM proofreading: CUDA / AMD は Gemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けDL）。Vulkan は Gemma 4 12B のみ（設定から後付けDL）。NVIDIA=CUDA直起動 / AMD=ROCm優先・Vulkanフォールバック。エンジンは同梱/DL の llama.cpp llama-server 直起動 + local OpenAI-compatible API（loopback only）。外部のランタイム管理CLI/デーモンは配布しない
 
 ## Runtime Defaults
 
@@ -108,9 +108,10 @@ scripts\run-dev-vulkan.bat
 scripts\setup-build-tools.bat --vulkan
 ```
 
-- Vulkan 版は identifier `net.gakkousya.lott` を CUDA 版から引き継ぎ（上書きインストールで Gemma を再利用）、feature `vulkan` で見分ける（`is_vulkan_build` / フロントは `buildVariant === 'vulkan'`）
+- Vulkan 版は identifier `net.gakkousya.lott` を CUDA 版から引き継ぐ（上書きインストール後も Gemma 4 12B を再利用できる）。E4B は Vulkan 版で使わず、設定タブから削除対象にできる。feature `vulkan` で見分ける（`is_vulkan_build` / フロントは `buildVariant === 'vulkan'`）
 - 同梱物: `resources/speech-engines`（ggml エンジン）、`resources/llama-server-vulkan`（公式 b10075 Vulkan 版）。いずれも VC++ ランタイムを同梱する。**Python は同梱しない**（行ごとの校正 `llm_proofread.rs`・全体校正 `llm_overall_proofread.rs`・暗号化保存 `export_crypto.rs`・モデル取得はすべて Rust。ビルド時の ffmpeg 取得・ライセンス収集には `%LOCALAPPDATA%\lott-ggml-speech-build` のビルド用 Python を使う）
-- 初回セットアップは whisper.cpp モデル・VAD・Nemotron（Rust で取得。固定 revision・SHA-256 検証・中断再開。トークン不要）と Gemma のみ。Python の pip セットアップは無い
+- Vulkan版の初回セットアップは whisper.cpp モデル・VAD・Nemotron のみ（Rustで固定 revision・SHA-256検証・中断再開。トークン不要）。Gemma 4 E4Bは取得せず、Gemma 4 12Bは設定タブから任意でダウンロードする。Pythonのpipセットアップは無い
+- Vulkan版の旧データ削除リストには、リリース版の `%LOCALAPPDATA%\{identifier}\models\llm\gemma-4-e4b-it\` 内にある E4B 本体 GGUF・MTP ドラフト・`mmproj-BF16.gguf` を個別の削除対象として追加する。開発ビルドは従来どおりモデルを削除対象にせず、12B・whisper.cpp・Nemotron は対象にしない
 
 ## Setup and Run (Ubuntu / Linux)
 
@@ -160,10 +161,10 @@ Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStream
 - 同梱するのは **LGPL のみ**（`gstreamer1.0-plugins-base` / `-good` / `-alsa` / `-pulseaudio`）。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` / `faad` は入れない。`GSTREAMER_INCLUDE_BAD_PLUGINS=0` を維持する
 - 検証は二重にかける。`scripts/Dockerfile.appimage-ubuntu24` がビルドホストのプラグイン構成を、`scripts/setup-build-tools-linux.sh` が再パッケージ前に AppDir を検査し、GPL プラグイン混入・プラグイン欠落があればビルドを落とす
 - LGPL だけで再生できる形式: wav / mp3 / flac / ogg(vorbis, opus) / webm。いずれも seek 可能なことを確認済み
-- **AAC（m4a / mp4 / aac）は LGPL 側にデコーダが無い**ため、再生時に同梱 LGPL ffmpeg で 16bit FLAC へ変換したキャッシュを配信する（`prepare_playback_source` / `transcode_for_playback`）。変換キャッシュは `app_cache_dir()/private-temp/lott-playback-*.flac`（0700・`PRIVATE_TEMP_MAX_AGE` で自動削除）。**再生専用**であり、文字起こしと区間聞き直しは常に元ファイルを使う
+- **AAC（m4a / mp4 / aac）は LGPL 側にデコーダが無い**ため、再生時に同梱 LGPL ffmpeg で 16bit FLAC へ変換したキャッシュを配信する（`prepare_playback_source` / `transcode_for_playback`）。変換キャッシュは `app_cache_dir()/private-temp/lott-playback-*.flac`（0700・`PRIVATE_TEMP_MAX_AGE` で自動削除）。**再生専用**であり、文字起こしには元ファイルを使う
 - 変換は Linux のみ。Windows(WebView2) は AAC をデコードできるため従来どおり元ファイルを直接配信する
 - 再生時間（推定時間表示）は WebView ではなく同梱 ffmpeg で取得する（`get_audio_duration_seconds`）。メディアバックエンドの可否に文字起こし機能を依存させない
-- `AudioStreamServer` はパスを 2 つ持つ。`allowed_path` = ユーザーが選んだ元ファイル（区間聞き直しの許可判定）、`playback_path` = 実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）。HTTP サーバーが照合するのは `playback_path`
+- `AudioStreamServer` の `playback_path` は実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）を指す。HTTP サーバーはこのパスを配信する
 - WebView 側で再生時間を読むフォールバック経路（`loadAudioDurationFromSrc`）には必ずタイムアウトを残す。デコーダが無いと `loadedmetadata` も `error` も発火せず、Promise が未解決のまま UI が固まる
 
 ### Linux AppImage の GTK 表示バックエンドと IME
@@ -196,18 +197,20 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 ## Proofreading Policy
 
 - ルールベース校正は Tauri/Rust 側で完結する
+- **whisper.cpp（ggml）で文字起こしした場合、句読点付与は LLM を使わずルールだけで行う**（文字起こし直後・話者分離のやり直し後とも `runProofread(..., 'punct')`）。カウンセリング会話のフィラー・相づちは常に保持する。whisper.cpp には句読点入りの例文（`ggml_speech::FILLER_PROMPT`）を毎回渡しており、Whisper がその書き方をまねて句読点を付けるため（実測で99%以上の行が句読点で終わる。faster-whisper はほぼ付けない）。ルールがするのは、日本語の直後の半角「?」「!」の全角化（`normalize_ja_symbol_width`。文字起こし結果と LLM の校正結果の両方にかける）と、句読点で終わらない行の末尾の補完だけ。「まあ」「ので」などの後に読点を足す規則（`force_comma_after`）は、句読点を含む行には適用しない
+- LLM による句読点付与（E4B）は faster-whisper を使う CUDA 版・AMD 版の経路だけに残る
 - ルールベース校正定義: `src-tauri/resources/proofread/punctuation_rules/`
 - LLM校正は Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。直接 Python backend の `llama_cpp` 全体校正だけは Python sidecar）からローカルバックエンド（同梱/DL の llama.cpp llama-server / local OpenAI-compatible API）を利用し、PC外の推論APIは利用しない
 - `OpenAI-compatible API` という名称はプロトコル互換を意味するだけで、接続先は `http://localhost:*` / `http://127.*:*` / `http://[::1]:*` のような loopback に限定する
 - クラウド OpenAI API、loopback以外のホスト、インターネット上のHTTPS推論エンドポイントへ会話データを送信する設計は採用しない
-- 既定の Gemma 4 E4B（同梱/DL llama.cpp llama-server 直起動）経路は、互換APIプロファイルの追加後も従来どおりのデフォルト経路として扱う
+- CUDA / AMD 版の既定である Gemma 4 E4B（同梱/DL llama.cpp llama-server 直起動）経路は、互換APIプロファイルの追加後も従来どおりに扱う。Vulkan版は Gemma 4 12B を使う
 - 校正システムプロンプトは設定単位で保存する。既定 Gemma 4 向けのプロンプトに、ローカル互換API用の変更を波及させない
 
 ### 校正エンジンのライフサイクル（VRAM解放）
 
-**Vulkan 版（feature `vulkan`）の校正・音声入力**: 同梱の `resources/llama-server-vulkan`（公式 b10075 Vulkan 版）を、下記の CUDA 直起動と同じ引数（E4B は `-ngl 99` + MTP・FlashAttention on、12B と音声入力は `--fit on`）で起動する。GPU は `GGML_VK_VISIBLE_DEVICES` で、音声エンジンと同じ設定（`gpu_select::resolve_preferred`）の GPU を選ぶ。GPU が無いときは Vulkan デバイスを見せず CPU で動かす。起動関数は `try_start_llama_server_cuda` / `start_cuda_llama_blocking` を `LlamaGpu::Vulkan` で共用している。校正の送受信は Python サイドカーではなく Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。llama-server とローカル OpenAI 互換 API の経路。loopback 限定は `HttpTarget` で維持）で、全ビルド共通。Python の `proofread_llm_cli.py` / `overall_proofread_cli.py` は同等性テスト（`#[ignore]`、環境変数 `PYTHON`）の基準として残している。以下の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、CUDA 版・AMD 版の現行実装の説明。
+**Vulkan 版（feature `vulkan`）の全体校正**: 同梱の `resources/llama-server-vulkan`（公式 b10075 Vulkan 版）を使い、Gemma 4 12B を `--fit on` で起動する。12B が無い場合は E4B に切り替えず、設定タブからの取得を案内する。GPU は `GGML_VK_VISIBLE_DEVICES` で音声エンジンと同じ設定（`gpu_select::resolve_preferred`）の GPU を選び、GPU が無いときは CPU で動かす。校正の送受信は Python サイドカーではなく Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。loopback 限定は `HttpTarget` で維持）で、全ビルド共通。Python の `proofread_llm_cli.py` / `overall_proofread_cli.py` は同等性テスト（`#[ignore]`、環境変数 `PYTHON`）の基準として残している。Vulkan 版のマイク音声入力は llama-server / Gemma ではなく、セットアップ済み whisper.cpp を使う（後述）。以下の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、CUDA 版・AMD 版の現行実装の説明。
 
-基本方針: **校正用に起動した llama-server はジョブ完了時に解放し、音声入力用は次の音声入力・区間再文字起こしに備えて保持する**。保持中の音声入力用サーバーは、校正・文字起こし・話者分離の開始時とアプリ終了時（強制終了含む）に解放する。実装は **Rust 側に集約**しており、フロントから二重に停止しない。配信は NVIDIA=CUDA / AMD=ROCm・Vulkan のいずれも「llama-server 直起動」で統一する。現行の校正経路に外部のランタイム管理デーモンやCLIはなく、状態管理構造体は `LlmServer` とする。キャッシュの正式名称は `llm-engine` とし、既存ユーザーのために旧 `lemonade` キャッシュを移行期間中だけフォールバックとして読み取る。
+基本方針: **校正用に起動した llama-server はジョブ完了時に解放し、CUDA / AMD / CPU / Editor 版の Gemma 音声入力用サーバーは次のマイク音声入力に備えて保持する**。Vulkan版のマイク入力は whisper.cpp を使うため、llama-server を音声入力用に起動・保持しない。保持中の音声入力用サーバーは、校正・文字起こし・話者分離の開始時とアプリ終了時（強制終了含む）に解放する。実装は **Rust 側に集約**しており、フロントから二重に停止しない。Gemma を使う Full 版音声入力は NVIDIA=CUDA / AMD=ROCm 優先・Vulkan フォールバックで「llama-server 直起動」、CPU / Editor 版は CPU llama-server 直起動とする。現行の校正経路に外部のランタイム管理デーモンやCLIはなく、状態管理構造体は `LlmServer` とする。キャッシュの正式名称は `llm-engine` とし、既存ユーザーのために旧 `lemonade` キャッシュを移行期間中だけフォールバックとして読み取る。
 
 - **per-job 解放（Rust）**: `proofread_transcription_llm` / `run_overall_proofread` はサイドカー終了後（成功・中止・失敗すべて）に、内蔵 llama-server 経路なら次を行う。
   - 同梱/DL llama-server（`LlmServer.mode == 1`）: `try_stop_cuda_llama_server` が自前起動した llama-server（NVIDIA=CUDA / AMD=ROCm・Vulkan のいずれも）を kill して VRAM を解放。次回校正で `start_llm_server` が再起動・再ロードする。
@@ -219,23 +222,25 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ### 内蔵校正AIモデルの階層選択（標準 / 高精度）
 
-設定タブ「校正用AIモデル」セクションの「AI校正バックエンド」セレクタで、内蔵校正モデルの階層を選べる。E4B（標準）と 12B（高精度）は同じ内蔵モデル経路（`backendMode = local_gguf`）の別項目としてこのセレクタに並ぶ（ローカルAIアプリの LM Studio / Ollama も同じセレクタ）。専用の「校正AIモデル」セレクタは廃止し、バックエンド選択へ統合した。
+設定タブ「校正用AIモデル」セクションの「AI校正バックエンド」セレクタで内蔵校正モデルを選ぶ。CUDA / AMD 版では E4B（標準）と 12B（高精度）が同じ内蔵モデル経路（`backendMode = local_gguf`）の別項目として並ぶ。Vulkan版では E4B を使わず、内蔵モデルは 12B だけを表示する。`local-llm-apps` feature が有効なビルドでは LM Studio / Ollama も同じセレクタに並ぶ。専用の「校正AIモデル」セレクタは廃止し、バックエンド選択へ統合した。
 
 | 階層 | モデル | 既定 | 対象 | 取得方法 |
 | --- | --- | --- | --- | --- |
-| 標準 | Gemma 4 E4B QAT（+MTP） | ✅ | CUDA / AMD 共通 | Rust で固定 revision から取得（AMD は MTP を取得しない） |
-| 高精度 | Gemma 4 12B QAT + MTP | | **NVIDIA / AMD 共通**（GPU 直起動経路） | Rust で固定 revision から後からダウンロード（約7GB） |
+| 標準 | Gemma 4 E4B QAT（+MTP） | ✅（Vulkan以外） | CUDA / AMD | Rust で固定 revision から取得（AMD は MTP を取得しない） |
+| 高精度 | Gemma 4 12B QAT + MTP | ✅（Vulkan） | CUDA / AMD / Vulkan | Rust で固定 revision から後からダウンロード（約7GB。Vulkan版は設定から取得） |
 
-- **既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
-- 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を Tauri command `download_gemma_12b` から Rust で取得する。ファイルの URL は commit 固定、`.part` から再開し、配置直前にサイズと SHA-256 を検証する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。NVIDIA・AMD いずれも本体 + MTP ドラフトの両方を取得する。
-- **12B はどちらの GPU でも「llama-server 直起動」で動かす**（E4B も同様）。
+- **Vulkan 版（feature `vulkan`）は 12B が既定かつ唯一の内蔵モデル**（2026-09 決定）。全体校正のすべての入口と Rust の `start_llm_server` で 12B を強制し、12B が未取得なら E4B へ切り替えず、設定画面からダウンロードするよう案内する。`get_proofread_model_tier` は保存マーカーに関係なく `12b` を返し、`set_proofread_model_tier` も `e4b` を `12b` として保存する。
+- **CUDA / AMD 版の既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
+- 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を Tauri command `download_gemma_12b` から Rust で取得する。ファイルの URL は commit 固定、`.part` から再開し、配置直前にサイズと SHA-256 を検証する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。CUDA / AMD / Vulkan いずれも本体 + MTP ドラフトを取得する。
+- **12B は CUDA / AMD / Vulkan 版で「llama-server 直起動」で動かす**（Vulkan 版の既定・唯一の内蔵校正モデル。E4B は Vulkan 以外）。
   - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda`、`-ngl 99` + MTP）。WindowsとLinuxで同じCUDA直起動経路を使う（Linux版はb10075ソースから配布ビルド時に生成）。
   - **AMD**: **ROCm 優先 → 失敗時 Vulkan フォールバック**（`amd_12b_launch_plan` → `start_amd_12b_blocking`）。どちらも `-ngl` 無し `--fit on`/auto-fit + MTP、ctx は `AMD_12B_CTX_SIZE`(=8192)。
     - **ROCm（高速・優先）**: Rust 側の `install_llm_backend` で取得した ROCm ビルド llama-server（`bin/llamacpp/rocm-stable/`、`find_llm_rocm_llama_server` / `try_start_llama_server_rocm`）。`gemma4-assistant`（MTPドラフト arch）対応の **b9585+** が条件で旧 b9247 は弾く。**rocBLAS は LD_LIBRARY_PATH に同梱 therock を載せず、システム ROCm（/opt/rocm。対象 GPU arch の Tensile を含む）から解決**する（DL ビルドに同梱されることのある therock は iGPU 専用 arch のことがあり dGPU で推論時に落ちるため）。warmup は無効化せず起動時 forward で arch 不整合を表面化させ Vulkan へ退避する。実測 RX 7600M XT(gfx1102,8GB)・ctx 8192・**約35〜37 tok/s**（Vulkan比 約25%高速、draft採択 0.7前後）。
     - **Vulkan（フォールバック）**: Rust 側の `install_llm_backend` で取得した Vulkan ビルド（`bin/llamacpp/vulkan/`、`find_llm_vulkan_llama_server` / `try_start_llama_server_vulkan`、b9585+）。ROCm 不可（旧ビルド / 対象 arch の system rocBLAS 無し / 起動失敗）のとき使う。約28〜29 tok/s。
+  - **Vulkan 版（LoTT Vulkan）**: 同梱 `resources/llama-server-vulkan`（公式 b10075）で `--fit on` + MTP を使う。12B の取得は設定タブから行う。
   - どちらも `mode=1`（per-job 停止・kill-on-close の対象）。E4B も AMD では ROCm 直起動（`amd_e4b_rocm_launch` → 失敗時 `amd_e4b_vulkan_launch`）、NVIDIA では同梱 CUDA llama-server。
-- 選択の単一の真実は `app_local_data_dir()/proofread-model-tier.txt`（内容 `e4b` / `12b`、既定 `e4b`）。ビルド識別子による E4b 丸めは廃止し、実際に 12B を使えるかは実行時に `resolve_effective_proofread_tier`（本体 GGUF の有無）と `amd_12b_launch_plan`（ROCm/Vulkan バイナリ・arch の有無）で判定する。NSIS の `%LOCALAPPDATA%\{id}` 一括削除対象。
-- **フェイルセーフ**: 12B 選択でも本体 GGUF 未取得なら `resolve_effective_proofread_tier` が E4b へフォールバック。AMD は `amd_12b_launch_plan` が **ROCm（`amd_rocm_12b_launch`）→ Vulkan（`amd_vulkan_12b_launch`）** の順に試し、どちらも不可なら E4B 経路（AMD は ROCm→Vulkan 直起動）へフォールバックする。ROCm は build≥9585 ∧ system ROCm に対象 GPU arch の rocBLAS Tensile がある場合のみ採用（`system_rocm_tensile_has_arch`）。起動後も warmup/即死/rocBLAS エラーを検出したら `start_amd_12b_blocking` が Vulkan へ退避する。
+- 選択の単一の真実は通常 `app_local_data_dir()/proofread-model-tier.txt`（内容 `e4b` / `12b`、既定 `e4b`）。Vulkan版だけは実行時に常に `12b` とし、マーカーの値を使わない。CUDA / AMD では実際に 12B を使えるか `resolve_effective_proofread_tier`（本体 GGUF の有無）と `amd_12b_launch_plan`（ROCm/Vulkan バイナリ・arch の有無）で判定する。NSIS の `%LOCALAPPDATA%\{id}` 一括削除対象。
+- **フェイルセーフ**: CUDA / AMD では12B選択でも本体GGUF未取得なら `resolve_effective_proofread_tier` がE4Bへフォールバックする。Vulkan版は12B未取得をエラーとして案内し、E4Bを起動しない。AMD は `amd_12b_launch_plan` が **ROCm（`amd_rocm_12b_launch`）→ Vulkan（`amd_vulkan_12b_launch`）** の順に試し、どちらも不可なら E4B 経路（AMD は ROCm→Vulkan 直起動）へフォールバックする。ROCm は build≥9585 ∧ system ROCm に対象 GPU arch の rocBLAS Tensile がある場合のみ採用（`system_rocm_tensile_has_arch`）。起動後も warmup/即死/rocBLAS エラーを検出したら `start_amd_12b_blocking` が Vulkan へ退避する。
 - **既知の制約 / フォローアップ**: v1 の ROCm 高速経路は「system ROCm（対象 GPU arch の rocBLAS Tensile を含む）」が前提（DL ビルド同梱の therock は iGPU arch のことがあり dGPU で使えない）。system ROCm が無い AMD 機は Vulkan に安全フォールバック。therock ベースの自己完結 ROCm 化（system ROCm 不要）は別タスク。
 - 関連: `get_default_llm_model_path` / `resolve_gemma_mtp_path_for_tier`（実効階層を解決）、`check_gemma_12b_installed`、`download_gemma_12b`。AMD 直起動: `amd_12b_launch_plan` / `start_amd_12b_blocking`（ROCm優先・Vulkanフォールバック制御）、`amd_rocm_12b_launch` / `find_llm_rocm_llama_server` / `rocm_build_supports_gemma4_assistant` / `amd_gpu_priority_list` / `system_rocm_tensile_has_arch` / `try_start_llama_server_rocm`（ROCm）、`amd_vulkan_12b_launch` / `find_llm_vulkan_llama_server` / `try_start_llama_server_vulkan`（Vulkan）。AMD E4B 直起動: `amd_e4b_rocm_launch` / `amd_e4b_vulkan_launch`。バックエンドバイナリ取得: Rust 側の `install_llm_backend`（Tauri command）。
 
@@ -263,8 +268,8 @@ AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の C
 
 ### MTP（投機的デコード）の適用範囲
 
-- MTP ドラフト（E4B: `mtp-gemma-4-E4B-it.gguf`、約60MB）は setup スクリプトが Gemma 本体と一緒に**無条件でダウンロード**する（CUDA/AMD 問わず）。「ダウンロードした記憶がないファイル」はこれで、正常。高精度階層の 12B ドラフト（`mtp-gemma-4-12B-it.gguf`、約242MB）は 12B 選択時に本体とまとめて後からダウンロードする（[内蔵校正AIモデルの階層選択](#内蔵校正aiモデルの階層選択標準--高精度)参照）
-- MTP を使うのは **GPU 直起動経路**。E4B・12B の両階層で `--spec-type draft-mtp` / `--spec-draft-model` / `--spec-draft-n-max 3` を渡す。**NVIDIA同梱b10075（Windows公式 / Linux固定commit source build）はMTP併用時もFlashAttentionを`on`**にする。b9571で発生したCUDA FlashAttentionカーネル（`ggml-cuda/fattn.cu:110`）のクラッシュはupstream #25148で修正され、RTX 4060 Laptop 8GBでE4B・12Bとも実機完走を確認済み。AMDのダウンロード型ROCm/Vulkan版はb9631のままなので、従来どおりMTP配線時`off`・MTP非併用時`on`を維持する。
+- MTP ドラフト（E4B: `mtp-gemma-4-E4B-it.gguf`、約60MB）は CUDA / AMD 版の setup で Gemma 本体と一緒に**無条件でダウンロード**する。Vulkan 版は E4B を取得しない。高精度階層の 12B ドラフト（`mtp-gemma-4-12B-it.gguf`、約242MB）は 12B とまとめて後からダウンロードする（[内蔵校正AIモデルの階層選択](#内蔵校正aiモデルの階層選択標準--高精度)参照）
+- MTP を使うのは **GPU 直起動経路**。CUDA / AMD 版の E4B と、CUDA / AMD / Vulkan 版の 12B で `--spec-type draft-mtp` / `--spec-draft-model` / `--spec-draft-n-max 3` を渡す。**NVIDIA同梱b10075（Windows公式 / Linux固定commit source build）はMTP併用時もFlashAttentionを`on`**にする。b9571で発生したCUDA FlashAttentionカーネル（`ggml-cuda/fattn.cu:110`）のクラッシュはupstream #25148で修正され、RTX 4060 Laptop 8GBでE4B・12Bとも実機完走を確認済み。AMDのダウンロード型ROCm/Vulkan版はb9631のままなので、従来どおりMTP配線時`off`・MTP非併用時`on`を維持する。
   - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda` / 制御は `start_cuda_llama_blocking`）。階層で起動方式を分ける（`autofit` 引数 = `resolve_effective_proofread_tier == B12`）。
     - **E4B**: `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。ctx/np は `choose_llm_parallelism` の自動値。b10075 + FlashAttention onのRTX 4060 Laptop長文実測では、b9571 + off比で総時間約32%短縮。
     - **12B**: **auto-fit 起動**（`--fit on`、`-ngl` も `--spec-draft-ngl` も指定しない）。本体・MTP ドラフトの GPU/CPU 配置を llama.cpp の auto-fit に委ね、VRAM に収まる分だけ GPU、残りは CPU へ自動配置する。AMD 経路と同方式。ctx/np は **AMD 12B と同じ単一スロット・`AMD_12B_CTX_SIZE`(=8192)** に固定する。b10075 + FlashAttention onのRTX 4060 Laptop 8GB・4101入力token/64生成token実測は、b9571 + off比で総時間9.57→6.00秒（約37%短縮）、生成36.7→41.2 tok/s、VRAM 6711→6491MiB。実アプリ形式の校正を3回連続実行して同一出力・正常完走も確認済み。
@@ -272,30 +277,24 @@ AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の C
   - **AMD**: **ROCm 優先（`try_start_llama_server_rocm`）→ 失敗時 Vulkan（`try_start_llama_server_vulkan`）**。どちらも `-ngl` も `--spec-draft-ngl` も指定せず **auto-fit**（8GB クラスで本体+ドラフトを収めるため）。**古いビルド（例 b9247）はドラフト arch `gemma4-assistant` を `unknown model architecture` で拒否する**ため、新ビルド（b9585+、`gemma4-assistant` 対応。10.8.0 の `llamacpp:rocm` は b9630 を配る）を使う。ROCm の rocBLAS は therock 非経由で system ROCm から解決（therock は iGPU arch 専用のことがある）。実測 RX 7600M XT(gfx1102,8GB)・ctx 8192: **ROCm+MTP 約35〜37 tok/s**、Vulkan+MTP 約28〜29 tok/s、VRAM 約8.0/8.5GB。
 ### 音声入力（編集画面のマイク入力候補生成）
 
-編集画面の各行の編集欄右側（matSuffix）にあるマイクボタンで最大15秒録音し、Gemma 4 E4B + 音声 mmproj で「編集欄へ挿入できる候補（最大3件）」を生成する機能。**全ビルド（Editor / CPU / Full CUDA / Full AMD）で利用可能**（2026-07 に Editor 専用から Full 版へ展開）。
+編集画面の各行の編集欄右側（matSuffix）にあるマイクボタンで最大15秒録音し、編集欄へ挿入する候補を作る。
 
-- **方式は保持・再利用**: 最初のリクエストで `--mmproj` 付き llama-server を起動し、OpenAI 互換 `/v1/chat/completions` に `input_audio`（base64 WAV, 16kHz mono）を送る。応答後もサーバーを保持し、次のマイク音声入力・区間再文字起こしで再利用する。校正と同じ `LlmServer` 状態（child/port/mode/parallel/purpose）を共有し、`purpose` で用途を識別、`LLM_PROOFREAD_ACTIVE` で校正と相互排他する。校正・通常の文字起こし・話者分離の開始時とアプリ終了時に解放する。
-- **モデルは常に E4B + mmproj 固定**（校正AIモデル階層で 12B を選択中でも音声入力は E4B。`resolve_effective_proofread_tier` は参照しない）。MTP は使わない。ctx 8192 / np 1。FlashAttention はFull GPU版では `on`、Editor版・CPU版ではCPUバックエンドの `auto` を使う。
+- **Vulkan 版**: セットアップ済みの文字起こし用 whisper.cpp（`VOICE_INPUT_WHISPER_MODEL = turbo`）で録音を処理する。追加パックは不要で、文字起こしモデルが未準備ならセットアップ完了を案内する。`generate_whisper_voice_input_candidates_blocking` はフィラー例文付きの書き起こしを候補1にする。例文なしの2回目の書き起こしにはルールで句読点を付け、句読点・空白を除いた本文が候補1と異なる場合だけ候補2にする（`ggml_speech::voice_input_candidates`）。前後行などの文脈はプロンプトに渡さない。話していない語が混ざるため。
+- **CUDA / AMD / CPU / Editor 版**: Gemma 4 E4B + 音声 mmproj で最大3件の候補を生成する（2026-07 に Editor 専用から Full 版へ展開）。以下の既存の llama-server / 音声入力パックの説明はこれらのビルドに適用する。
+
+- **Vulkan 以外の方式は保持・再利用**: 最初のリクエストで `--mmproj` 付き llama-server を起動し、OpenAI 互換 `/v1/chat/completions` に `input_audio`（base64 WAV, 16kHz mono）を送る。応答後もサーバーを保持し、次のマイク音声入力で再利用する。校正と同じ `LlmServer` 状態（child/port/mode/parallel/purpose）を共有し、`purpose` で用途を識別、`LLM_PROOFREAD_ACTIVE` で校正と相互排他する。校正・通常の文字起こし・話者分離の開始時とアプリ終了時に解放する。
+- **Vulkan 以外のモデルは常に E4B + mmproj 固定**（校正AIモデル階層で 12B を選択中でも音声入力は E4B。`resolve_effective_proofread_tier` は参照しない）。MTP は使わない。ctx 8192 / np 1。FlashAttention はFull GPU版では `on`、Editor版・CPU版ではCPUバックエンドの `auto` を使う。
 - **起動経路の分岐**（`generate_editor_voice_input_candidates_blocking` が `editor_voice_input_allowed`＝Editor版またはCPU版かで分岐）:
   - Editor版・CPU版: b10075のCPU llama.cppを直起動（`try_start_llama_server_cpu_audio`、`--device none -ngl 0 --no-mmproj-offload`）。導入済みバイナリがb10075以外なら音声入力パックを未完了と判定し、更新を促す。
-  - Full 版: **GPU 直起動のみ・CPU フォールバック無し**（`start_full_voice_input_server_blocking`）。NVIDIA=同梱 CUDA llama-server を **auto-fit**（`--fit on`、12B 校正と同方式。小 VRAM 機は本体の一部が CPU へ逃げる）／AMD=**ROCm 優先 → Vulkan フォールバック**（`voice_amd_rocm_launch` / `voice_amd_vulkan_launch`。ROCm は音声プロジェクタ `gemma4a` 対応の **b9585+ ゲート**あり）。mmproj は GPU オフロード（`--no-mmproj-offload` を付けない）。
-- **必要アセット**: E4B 本体 GGUF は校正用と同一ファイルを共有（追加DL不要）。新規に必要なのは `mmproj-BF16.gguf`（約992MB、`unsloth/gemma-4-E4B-it-qat-GGUF`、`clip.audio.projector_type=gemma4a`）のみで、設定タブ「音声入力パック」から**後付けDL**（E4B と同じモデルディレクトリへ配置）。Full 版のパック導入判定は本体+mmproj のみ（`cpu_backend_required=false`）。Editor版・CPU版はCPUバックエンドに加え、区間聞き直し用 LGPL ffmpeg（約95MB）も同パックで導入する（[区間聞き直し](#区間聞き直し編集画面編集欄左側のai聞き直しボタン)参照）。
+  - Full 版（CUDA / AMD）: **GPU 直起動のみ・CPU フォールバック無し**（`start_full_voice_input_server_blocking`）。NVIDIA=同梱 CUDA llama-server を **auto-fit**（`--fit on`、12B 校正と同方式。小 VRAM 機は本体の一部が CPU へ逃げる）／AMD=**ROCm 優先 → Vulkan フォールバック**（`voice_amd_rocm_launch` / `voice_amd_vulkan_launch`。ROCm は音声プロジェクタ `gemma4a` 対応の **b9585+ ゲート**あり）。mmproj は GPU オフロード（`--no-mmproj-offload` を付けない）。
+- **必要アセット（Vulkan 以外）**: E4B 本体 GGUF は校正用と同一ファイルを共有（追加DL不要）。新規に必要なのは `mmproj-BF16.gguf`（約992MB、`unsloth/gemma-4-E4B-it-qat-GGUF`、`clip.audio.projector_type=gemma4a`）のみで、設定タブ「音声入力パック」から**後付けDL**（E4B と同じモデルディレクトリへ配置）。Full 版のパック導入判定は本体+mmproj のみ（`cpu_backend_required=false`）。Editor版・CPU版ではCPUバックエンドに加え、音声入力パックから LGPL ffmpeg（約95MB）も引き続き導入する。これは区間聞き直し削除後も残す一時的な構成で、削除判断は別途行う。
 - **llama.cpp の音声対応根拠**: Gemma 4 audio conformer 対応は PR #21421（2026-04-12 マージ）+ 修正 #24091/#24118（06-04）で、NVIDIA同梱 CUDA **b10075** に含まれる。E4B + mmprojのロードをRTX 4060 Laptopで確認済み。AMD 実測（RX 7600M XT gfx1102・ctx 8192）: ROCm b9630 起動7.5s・リクエスト0.6〜1.4s／Vulkan b9632 起動6.7s・1.9〜2.0s、いずれもクラッシュなし。
-- プロンプト: `python_sidecar/prompt_templates/voice_input/gemma4_e4b_candidates_system.txt`（全ビルドの resources に同梱済み）。
-- **Editor版・CPU版のメモリ警告**: Windows の物理搭載メモリを `GetPhysicallyInstalledSystemMemory` で取得する。16GiB未満では初期状態で編集画面の音声入力・区間聞き直しボタンを隠し、設定タブには非推奨警告を表示する。パックのダウンロードまたは導入済みパックの有効化時に warn 色の確認を出し、明示的な同意をローカル保存した後はボタンを表示する。16GiB以上24GiB未満では使用時のメモリ不足警告と warn 色のダウンロードボタンを表示し、24GiB以上では警告しない。Full版にはこの制限を適用しない。
+- プロンプト（Vulkan 以外）: `python_sidecar/prompt_templates/voice_input/gemma4_e4b_candidates_system.txt`（該当ビルドの resources に同梱済み）。
+- **Editor版・CPU版のメモリ警告**: Windows の物理搭載メモリを `GetPhysicallyInstalledSystemMemory` で取得する。16GiB未満では初期状態で編集画面の音声入力ボタンを隠し、設定タブには非推奨警告を表示する。パックのダウンロードまたは導入済みパックの有効化時に warn 色の確認を出し、明示的な同意をローカル保存した後はボタンを表示する。16GiB以上24GiB未満では使用時のメモリ不足警告と warn 色のダウンロードボタンを表示し、24GiB以上では警告しない。Full版にはこの制限を適用しない。
 
-### 区間聞き直し（編集画面・編集欄左側のAI聞き直しボタン）
+### 区間聞き直し（削除済み）
 
-編集画面の各行の編集欄左側（matPrefix）のボタン（`graphic_eq`。v0.9.4 のレイアウト整理で行下部から移動）で、その行の時間範囲（`segment.start`〜`segment.end`）を LGPL ffmpeg で 16kHz mono WAV に切り出し、音声入力と同じ E4B + mmproj 経路で「**行の内容を置き換える候補**（最大3件）」を生成する機能（2026-07 追加）。
-
-- **全ビルド（Editor / CPU / Full CUDA / Full AMD）対応**。ffmpeg の解決順は `resolve_ffmpeg_bin_for_segment_cut`＝「`FFMPEG_BIN` 環境変数 → 同梱（Full版 `resources/ffmpeg`）→ DL済み（Editor版・CPU版 `app_local_data_dir()/ffmpeg/`）→ PATH 上の ffmpeg」。可用性は `check_segment_retranscribe_available`（ffmpeg 解決可否）で起動時・パック導入/削除後に判定。
-- **Editor版・CPU版の ffmpeg は音声入力パックで後付けDL**（`install_editor_voice_ffmpeg_blocking`、進捗コンポーネント `voice_ffmpeg`、約95MB）。取得元は Full 版の `setup_ffmpeg_lgpl.py` と同じ BtbN latest LGPL ビルド（GitHub Releases のみ）。展開時に `ffmpeg -buildconf` を実行して **GPL 禁止トークン（`--enable-gpl` 等、`FFMPEG_FORBIDDEN_CONFIG_TOKENS`）の不在を検証**し、違反時は配置を取り消す。`LICENSE.txt`（LGPLv3）と `FFMPEG_BUILD_INFO.txt` を並置。パック installed 判定にEditor版・CPU版のみffmpegを含める（`ffmpeg_required`）。PATH フォールバックにより Ubuntu のEditor版・CPU版ユーザーは `apt install ffmpeg` でも利用可能。
-- **マイク音声入力とサーバ起動・排他・保持を共有**: 共通部は `run_editor_voice_audio_llm_blocking`（初回起動→`input_audio`→サーバー保持、次回再利用）。`LLM_PROOFREAD_ACTIVE` で校正・音声入力と相互排他。フロントも `voiceInputProcessingSegmentId` 等の状態を共用。
-- **候補の役割**: 音声が有効に聞き取れる場合は原則2件、可能なら3件。1件目=音声に最も忠実、2件目=自然な漢字・かな・句読点表記、3件目=音として成立する別解。3件目を無理に捏造せず、音声自体を判別できない場合のみ1件を許容する。
-- **候補は挿入ではなく置換**: `voiceInputCandidates` に `mode: 'insert' | 'replace'` を追加し、`replace` では `setEditableText` で行全体を置換。候補パネル先頭に「内容全体が置き換わります」の注意書きを常時表示。
-- **区間の制約**: 0.2 秒未満はエラー、30 秒超（`SEGMENT_RETRANSCRIBE_MAX_SECONDS`）は snackbar「開始30秒のみ読み取ります」を出して先頭 30 秒のみ処理。Whisper由来の境界で語頭・語尾が欠けないよう、実際の切り出しには前後0.25秒（`SEGMENT_RETRANSCRIBE_PADDING_SECONDS`）の余白を加える（開始0秒未満にはしない）。プロンプトで余白中の明らかな隣接発話を含めないよう指示する。切り出し対象パスは `set_audio_allowed_path` で許可済みのものだけ受け付ける。
-- **プロンプト**: `python_sidecar/prompt_templates/voice_input/gemma4_e4b_retranscribe_system.txt`（新規・`prompt_templates` ディレクトリ同梱で全ビルドに入る）。「入力行」は以前の文字起こし結果で誤りを含む可能性が高い、音声優先、と明示。前後行の文脈もマイク音声入力と同じ形式で送る。
-- 関連: Rust `generate_segment_retranscribe_candidates`（Tauri command）/ `generate_segment_retranscribe_candidates_blocking` / `extract_segment_wav_base64`（ffmpeg 切り出し）/ `resolve_ffmpeg_bin_for_segment_cut`。フロント `retranscribeSegment` / `segmentRetranscribeTooltip`。
+2026-09に削除。E4B による音声再文字起こしの精度が不十分だったため。必要になれば、将来 whisper.cpp を使う方式へ置き換える。
 
 ### Named Entity Warning Priority
 
@@ -339,8 +338,8 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 - 文字起こし実行部分: `python_sidecar/transcribe_cli.py` と、それを呼ぶ Tauri 側の既存フロー
 - PyAV 非依存の ffmpeg backend / import stub / `FFMPEG_BIN` 注入経路。Apache-2.0 配布の前提なので、PyAV や imageio-ffmpeg を戻さない
 - 話者分離実行部分: `python_sidecar/diarize_cli.py`、community-1 ローカル配置ポリシー、話者表示初期値
-- 既定の Gemma 4 E4B 校正経路（同梱/DL llama-server 直起動）。特にデフォルトプロンプトと実行条件は、互換API追加・12B階層追加の影響を受けないように保つ（既定は常に E4B）
-- 高精度階層（Gemma 4 12B）はオプトインの追加機能。既定は常に E4B とし、E4B のデフォルトプロンプトと実行条件（ctx・MTP・FlashAttention 等）を 12B 追加の影響で変えないこと。GPU 方式（CUDA / ROCm / Vulkan）の変更は Vulkan 統一の方針（Distribution Strategy）に従って行ってよい
+- CUDA / AMD 版の既定 Gemma 4 E4B 校正経路（同梱/DL llama-server 直起動）。特にデフォルトプロンプトと実行条件は、互換API追加・12B階層追加の影響を受けないように保つ
+- CUDA / AMD 版では高精度階層（Gemma 4 12B）はオプトインの追加機能。E4B のデフォルトプロンプトと実行条件（ctx・MTP・FlashAttention 等）を 12B 追加の影響で変えないこと。Vulkan 版は 12B が既定。GPU 方式（CUDA / ROCm / Vulkan）の変更は Vulkan 統一の方針（Distribution Strategy）に従って行ってよい
 - 既存のローカルGGUFモデル探索・選択の挙動。ユーザー登録式への完全移行は、別タスクとして検討する
 - 保存形式（JSON / DOCX / XLSX）と出力表カラム
 - loopback 限定バリデーション。プライバシー境界なので、緩和する場合は必ず明示合意を取る

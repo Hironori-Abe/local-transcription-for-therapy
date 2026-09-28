@@ -46,7 +46,7 @@ struct LlmServer {
     /// CUDA llama-server 起動時に決めた並列スロット数 (-np)。
     /// 校正サイドカーの --parallel をこれと一致させ、継続バッチングの同時送信数を揃える。
     parallel: Arc<AtomicU8>,
-    /// 現在ロード中の用途: 0=なし、1=校正、2=音声入力/区間再文字起こし。
+    /// 現在ロード中の用途: 0=なし、1=校正、2=音声入力。
     /// 同じ音声モデルを次回リクエストで再利用し、校正用サーバーとの取り違えを防ぐ。
     purpose: Arc<AtomicU8>,
 }
@@ -1828,13 +1828,6 @@ const LLAMA_CPU_BACKEND_APPROX_BYTES: u64 = 20_000_000;
 static LLM_BACKEND_INSTALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 const EDITOR_VOICE_INPUT_MAX_BASE64_CHARS: usize = 2_000_000;
 const EDITOR_VOICE_INPUT_MAX_CANDIDATES: usize = 3;
-/// 区間聞き直しの切り出し上限秒数。超過分は先頭からこの秒数だけ処理する
-/// （フロントが snackbar で「開始30秒のみ読み取ります」と通知する）。
-const SEGMENT_RETRANSCRIBE_MAX_SECONDS: f64 = 30.0;
-/// これ未満の区間は「有効な時間範囲がない」としてエラーにする。
-const SEGMENT_RETRANSCRIBE_MIN_SECONDS: f64 = 0.2;
-/// Whisper由来の区間境界で語頭・語尾が欠けないよう、切り出しの前後に加える余白。
-const SEGMENT_RETRANSCRIBE_PADDING_SECONDS: f64 = 0.25;
 /// BtbN LGPL ffmpeg アーカイブのおよそのサイズ（進捗表示のフォールバック用）。
 const EDITOR_VOICE_FFMPEG_APPROX_BYTES: u64 = 95 * 1024 * 1024;
 const EDITOR_VOICE_INPUT_CTX_SIZE: &str = "8192";
@@ -1845,12 +1838,22 @@ const EDITOR_VOICE_INPUT_CONTEXT_MAX_CHARS: usize = 400;
 const GEMMA_12B_LLM_MODEL_DIR: &str = "gemma-4-12b-it";
 const GEMMA_12B_MAIN_GGUF_FILENAME: &str = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf";
 const GEMMA_12B_MTP_GGUF_FILENAME: &str = "mtp-gemma-4-12B-it.gguf";
+/// Vulkan 版で 12B が未取得のまま全体校正を始めたときの案内（フロントも同じ趣旨の案内を先に出す）。
+const GEMMA_12B_REQUIRED_MESSAGE: &str = "全体校正には高精度モデル（Gemma 4 12B、約7GB）の事前ダウンロードが必要です。設定画面の「AI校正バックエンド」で「内蔵モデル（Gemma4 12B・高精度・要DL）」を選び、ダウンロード・設定してください。";
 
 /// 校正AIモデルの選択肢。既定は E4b（標準）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GemmaTier {
     E4b,
     B12,
+}
+
+fn normalize_proofread_model_tier_for_build(tier: GemmaTier, vulkan_build: bool) -> GemmaTier {
+    if vulkan_build {
+        GemmaTier::B12
+    } else {
+        tier
+    }
 }
 
 impl GemmaTier {
@@ -2001,15 +2004,13 @@ fn proofread_model_tier_marker_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|d| d.join("proofread-model-tier.txt"))
 }
 
-/// ユーザーが選択した校正AIモデル階層を読む。既定は E4b。
-/// NVIDIA は同梱 llama-server（CUDA）直起動、AMD は Vulkan llama-server 直起動で 12B+MTP を
-/// 動かすため、ビルド識別子による E4b 丸めは行わない（実際に 12B を使えるかは
-/// resolve_effective_proofread_tier / amd_vulkan_12b_launch が実行時に判定する）。
+/// ユーザーが選択した校正AIモデル階層を読む。既定は E4b、Vulkan 版は 12B 固定。
 fn read_proofread_model_tier(app: &AppHandle) -> GemmaTier {
-    proofread_model_tier_marker_path(app)
+    let tier = proofread_model_tier_marker_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| GemmaTier::from_marker(&s))
-        .unwrap_or(GemmaTier::E4b)
+        .unwrap_or(GemmaTier::E4b);
+    normalize_proofread_model_tier_for_build(tier, is_vulkan_build(app))
 }
 
 /// 指定 tier の本体 GGUF を解決する（debug: プロジェクト相対 / release: app data）。
@@ -2070,15 +2071,18 @@ fn resolve_gemma_e4b_mmproj_path(app: &AppHandle) -> Option<String> {
     None
 }
 
-/// 実際にロードするモデル階層を決める。選択が B12 でも本体 GGUF が無ければ
-/// E4b へフォールバックする（フェイルセーフ。12B 未ダウンロードでもサーバは起動する）。
+/// 実際にロードするモデル階層を決める。CUDA / AMD 版では選択が B12 でも本体 GGUF が無ければ
+/// E4b へフォールバックする（12B 未ダウンロードでもサーバは起動する）。Vulkan 版は B12 固定で、
+/// 未取得時のエラーは start_llm_server で返す。
 fn resolve_effective_proofread_tier(app: &AppHandle) -> GemmaTier {
     resolve_effective_proofread_tier_for(app, read_proofread_model_tier(app))
 }
 
 /// 保存設定を変更せず、単一ジョブ向けに指定された階層の実効値を解決する。
 fn resolve_effective_proofread_tier_for(app: &AppHandle, want: GemmaTier) -> GemmaTier {
-    if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
+    if is_vulkan_build(app) {
+        GemmaTier::B12
+    } else if want == GemmaTier::B12 && resolve_gemma_main_path_for_tier(app, GemmaTier::B12).is_some() {
         GemmaTier::B12
     } else {
         GemmaTier::E4b
@@ -2795,9 +2799,16 @@ async fn start_llm_server(
     } else {
         find_bundled_cuda_llama_server_bin(&app)
     };
-    let effective_tier = proofread_tier
-        .as_deref()
-        .map(GemmaTier::from_marker)
+    let requested_tier = if vulkan_build {
+        Some(GemmaTier::B12)
+    } else {
+        proofread_tier.as_deref().map(GemmaTier::from_marker)
+    };
+    // Vulkan 版の全体校正は 12B だけを使う。12B が無いときに E4B へ黙って切り替えない。
+    if vulkan_build && resolve_gemma_main_path_for_tier(&app, GemmaTier::B12).is_none() {
+        return Err(GEMMA_12B_REQUIRED_MESSAGE.to_string());
+    }
+    let effective_tier = requested_tier
         .map(|tier| resolve_effective_proofread_tier_for(&app, tier))
         .unwrap_or_else(|| resolve_effective_proofread_tier(&app));
     let model_path = resolve_gemma_main_path_for_tier(&app, effective_tier);
@@ -3542,8 +3553,8 @@ fn build_editor_voice_context_section(context: Option<&EditorVoiceInputContext>)
 }
 
 /// 音声（base64 WAV）+ プロンプトを保持型 llama-server に投げ、候補配列を返す共通部。
-/// 初回だけサーバーを起動し、以後は同じ E4B+mmproj を音声入力・区間再文字起こしで再利用する。
-/// マイク音声入力と区間聞き直しの両方から呼ばれる。呼び出し側で LLM_PROOFREAD_ACTIVE の
+/// 初回だけサーバーを起動し、以後は同じ E4B+mmproj を音声入力で再利用する。
+/// 呼び出し側で LLM_PROOFREAD_ACTIVE の
 /// TaskRunGuard を取得してから呼ぶこと。
 fn run_editor_voice_audio_llm_blocking(
     app: &AppHandle,
@@ -3873,6 +3884,9 @@ fn generate_editor_voice_input_candidates_blocking(
     if request.wav_base64.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
         return Err("音声入力が長すぎます。最大15秒まで録音してください。".to_string());
     }
+    if is_vulkan_build(&app) {
+        return generate_whisper_voice_input_candidates_blocking(&app, &request);
+    }
     let max_candidates = request
         .max_candidates
         .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
@@ -3897,8 +3911,125 @@ fn generate_editor_voice_input_candidates_blocking(
     )
 }
 
-/// 区間聞き直し用 ffmpeg のDL配置先（Editor版の後付けDL先）。
-/// `%LOCALAPPDATA%\{identifier}\ffmpeg\` 相当で、NSIS アンインストーラーの一括削除対象。
+/// Vulkan 版の音声入力に使う Whisper モデル（文字起こしの既定と同じ。初回セットアップで取得済み）。
+const VOICE_INPUT_WHISPER_MODEL: &str = "turbo";
+
+/// Vulkan 版の音声入力。E4B を使わず、文字起こしと同じ whisper.cpp で録音を書き起こす。
+/// フィラー例文付き（1件目）と例文なし（2件目。ルールで句読点を補う）の2回実行し、
+/// 中身が同じなら1件にまとめる（`ggml_speech::voice_input_candidates`）。
+/// 前後行の文脈は使わない（Whisper のプロンプトに入れると、話していない語が紛れ込むため）。
+fn generate_whisper_voice_input_candidates_blocking(
+    app: &AppHandle,
+    request: &EditorVoiceInputRequest,
+) -> Result<EditorVoiceInputResponse, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let paths = resolve_ggml_speech_paths(app)?;
+    let missing = paths.missing_for_transcription(VOICE_INPUT_WHISPER_MODEL);
+    if !missing.is_empty() {
+        return Err(format!(
+            "音声入力に使う文字起こしモデル（whisper.cpp）の準備が済んでいません。設定画面のセットアップを完了してから、もう一度お試しください。\n不足: {}",
+            missing.join(" / ")
+        ));
+    }
+    let model_path = paths
+        .whisper_model(VOICE_INPUT_WHISPER_MODEL)
+        .expect("checked above");
+    let wav_bytes = STANDARD
+        .decode(request.wav_base64.trim())
+        .map_err(|_| "録音データを読み取れませんでした。もう一度録音してください。".to_string())?;
+    let temp_dir = private_llm_temp_dir(app)?;
+    let mut guard = TempFileGuard::new();
+    // whisper-cli には一時ディレクトリからの ASCII のファイル名だけを渡す（execute_ggml_transcription 参照）。
+    let wav_name = format!("{}.wav", private_temp_name("voice-input"));
+    let wav = temp_dir.join(&wav_name);
+    write_private_temp_file(&wav, &wav_bytes)?;
+    guard.push(wav);
+    let threads = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+
+    let mut run_pass = |with_prompt: bool| -> Result<String, String> {
+        let out_name = private_temp_name("voice-input-asr");
+        let out_json = temp_dir.join(format!("{out_name}.json"));
+        guard.push(out_json.clone());
+        let args = ggml_speech::whisper_cli_args(
+            &model_path,
+            &paths.vad_model,
+            Path::new(&wav_name),
+            Path::new(&out_name),
+            "ja",
+            true,
+            with_prompt,
+            threads,
+        );
+        let mut cmd = Command::new(&paths.whisper_cli);
+        cmd.current_dir(&temp_dir);
+        if cfg!(target_os = "windows") {
+            let contents = ggml_speech::whisper_response_file(&args)?;
+            let rsp_name = format!("{}.args", private_temp_name("voice-input-args"));
+            let rsp = temp_dir.join(&rsp_name);
+            write_private_temp_file(&rsp, contents.as_bytes())?;
+            guard.push(rsp);
+            cmd.arg(format!("@{rsp_name}"));
+        } else {
+            cmd.args(args);
+        }
+        // GPU は設定タブで選んだもの（gpu_select の設定値）を使う。
+        apply_ggml_vulkan_device(&mut cmd, paths.whisper_backend(), None);
+        apply_host_command_env(&mut cmd);
+        apply_windows_no_window(&mut cmd);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("音声入力の文字起こし（whisper.cpp）を起動できませんでした: {e}"))?;
+        assign_to_kill_on_close_job(&child);
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("音声入力の文字起こし（whisper.cpp）の終了待機に失敗しました: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "音声入力の文字起こし（whisper.cpp）に失敗しました（exit={:?}）。\n{}",
+                output.status.code(),
+                ggml_speech::tail_chars(stderr.trim(), 800)
+            ));
+        }
+        let raw = fs::read(&out_json)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .map_err(|e| format!("whisper.cpp の出力を読み込めませんでした: {e}"))?;
+        let parsed: Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("whisper.cpp の出力 JSON を解析できませんでした: {e}"))?;
+        let (_, text) = ggml_speech::convert_whisper_output(&parsed, "ja", false)?;
+        Ok(text)
+    };
+    let with_prompt = run_pass(true)?;
+    let plain = run_pass(false)?;
+    drop(run_pass);
+
+    let rules = load_punct_rules_from_app(app);
+    let mut stats = PunctuationRuntimeStats::default();
+    let with_prompt = normalize_ja_symbol_width(&with_prompt);
+    let plain = if plain.trim().is_empty() {
+        String::new()
+    } else {
+        normalize_ja_symbol_width(&punctuate_text_rust(&plain, &rules, &mut stats))
+    };
+    let candidates = ggml_speech::voice_input_candidates(&with_prompt, &plain);
+    if candidates.is_empty() {
+        return Err(
+            "音声を聞き取れませんでした。マイクの位置や音量を確かめて、もう一度録音してください。"
+                .to_string(),
+        );
+    }
+    Ok(EditorVoiceInputResponse { candidates })
+}
+
+/// Editor版・CPU版の音声入力パックに含める ffmpeg の配置先。
+/// 区間聞き直し削除後も残しており、別途パックから外すか判断する。
 fn editor_ffmpeg_install_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path()
         .app_local_data_dir()
@@ -3945,214 +4076,6 @@ fn resolve_ffmpeg_bin_for_segment_cut(app: &AppHandle) -> Option<String> {
         return Some(bin);
     }
     find_path_ffmpeg_bin()
-}
-
-/// 依存クレートを増やさないための最小 base64 エンコーダ（標準アルファベット・パディングあり）。
-fn base64_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 63) as usize] as char);
-        out.push(TABLE[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[((n >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[(n & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
-/// 同梱 LGPL ffmpeg で音声ファイルの指定区間を 16kHz mono PCM16 WAV に切り出し、base64 で返す。
-fn extract_segment_wav_base64(
-    app: &AppHandle,
-    audio_path: &str,
-    start_seconds: f64,
-    duration_seconds: f64,
-) -> Result<String, String> {
-    let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
-        .ok_or_else(|| "音声切り出しに必要な ffmpeg が見つかりませんでした。設定タブの「音声入力パック」の状態を確認してください。".to_string())?;
-    if !Path::new(audio_path).exists() {
-        return Err(
-            "音声ファイルが見つかりません。音声ファイルを読み込み直してから再試行してください。"
-                .to_string(),
-        );
-    }
-    let temp_path = private_llm_temp_dir(app)?.join(format!(
-        "lott-retranscribe-{}-{}.wav",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    ));
-    let mut temp_guard = TempFileGuard::new();
-    write_private_temp_file(&temp_path, b"")?;
-    temp_guard.push(temp_path.clone());
-    let mut cmd = Command::new(&ffmpeg);
-    // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
-    // （PATH 解決した場合はホスト ffmpeg なので必須）。
-    apply_host_command_env(&mut cmd);
-    cmd.arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{start_seconds:.3}"))
-        .arg("-t")
-        .arg(format!("{duration_seconds:.3}"))
-        .arg("-i")
-        .arg(audio_path)
-        .arg("-ac")
-        .arg("1")
-        .arg("-ar")
-        .arg("16000")
-        .arg("-c:a")
-        .arg("pcm_s16le")
-        .arg("-f")
-        .arg("wav")
-        .arg(&temp_path);
-    apply_windows_no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
-    let result = (|| {
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("音声の切り出しに失敗しました: {}", stderr.trim()));
-        }
-        let bytes = fs::read(&temp_path)
-            .map_err(|e| format!("切り出した音声の読み込みに失敗しました: {e}"))?;
-        // 44 バイトは WAV ヘッダのみ（データ無し）
-        if bytes.len() <= 44 {
-            return Err("切り出した音声が空でした。この行の時間範囲が音声の長さの範囲内か確認してください。".to_string());
-        }
-        let encoded = base64_encode(&bytes);
-        if encoded.len() > EDITOR_VOICE_INPUT_MAX_BASE64_CHARS {
-            return Err("切り出した音声が大きすぎます。".to_string());
-        }
-        Ok(encoded)
-    })();
-    result
-}
-
-fn segment_retranscribe_padded_range(start_seconds: f64, core_duration_seconds: f64) -> (f64, f64) {
-    let padded_start = (start_seconds - SEGMENT_RETRANSCRIBE_PADDING_SECONDS).max(0.0);
-    let actual_leading_padding = start_seconds - padded_start;
-    let padded_duration =
-        core_duration_seconds + actual_leading_padding + SEGMENT_RETRANSCRIBE_PADDING_SECONDS;
-    (padded_start, padded_duration)
-}
-
-fn generate_segment_retranscribe_candidates_blocking(
-    app: AppHandle,
-    request: SegmentRetranscribeRequest,
-    allowed_path_arc: Arc<Mutex<Option<String>>>,
-    child_arc: Arc<Mutex<Option<Child>>>,
-    port_arc: Arc<AtomicU32>,
-    mode_arc: Arc<AtomicU8>,
-    parallel_arc: Arc<AtomicU8>,
-    purpose_arc: Arc<AtomicU8>,
-) -> Result<EditorVoiceInputResponse, String> {
-    // 全ビルド対応。Editor版は音声入力パックで後付けDLした ffmpeg（または PATH 上の ffmpeg）、
-    // Full版は同梱 ffmpeg を使う（resolve_ffmpeg_bin_for_segment_cut が解決）。
-    let _run_guard = match TaskRunGuard::try_acquire(&LLM_PROOFREAD_ACTIVE) {
-        Some(g) => g,
-        None => {
-            return Err(
-                "AI校正または音声入力が実行中のため、聞き直しを開始できません。完了するかキャンセルしてから再試行してください。"
-                    .to_string(),
-            )
-        }
-    };
-    // 再生用に許可済みのパス（set_audio_allowed_path）以外は受け付けない。
-    let allowed = allowed_path_arc.lock().ok().and_then(|g| g.clone());
-    if allowed.as_deref() != Some(request.audio_path.as_str()) {
-        return Err("指定された音声ファイルを利用できません。音声ファイルを読み込み直してから再試行してください。".to_string());
-    }
-    if !request.start_seconds.is_finite()
-        || !request.end_seconds.is_finite()
-        || request.start_seconds < 0.0
-    {
-        return Err("時間範囲が不正です。".to_string());
-    }
-    let duration_raw = request.end_seconds - request.start_seconds;
-    if duration_raw < SEGMENT_RETRANSCRIBE_MIN_SECONDS {
-        return Err(
-            "この行には有効な時間範囲がありません。開始・終了時刻を確認してください。".to_string(),
-        );
-    }
-    // 30秒超はフロントが snackbar で通知したうえで先頭30秒のみ処理する。
-    let duration = duration_raw.min(SEGMENT_RETRANSCRIBE_MAX_SECONDS);
-    let (padded_start, padded_duration) =
-        segment_retranscribe_padded_range(request.start_seconds, duration);
-    let wav_base64 =
-        extract_segment_wav_base64(&app, &request.audio_path, padded_start, padded_duration)?;
-    let max_candidates = request
-        .max_candidates
-        .unwrap_or(EDITOR_VOICE_INPUT_MAX_CANDIDATES)
-        .clamp(1, EDITOR_VOICE_INPUT_MAX_CANDIDATES);
-    let system_prompt_path = resolve_segment_retranscribe_system_prompt_path(&app)?;
-    let system_prompt = read_text_file_content(&system_prompt_path)?;
-    let context_section = build_editor_voice_context_section(request.context.as_ref());
-    let user_prompt = format!(
-        "音声はセッション録音から前後に短い余白を付けて切り出した区間です。余白に含まれる明らかに別の隣接発話は加えず、対象行を日本語として聞き取ってください。候補は、1件目=音声に忠実、2件目=自然な表記、3件目=音として成立する別解の順で、最大{max_candidates}件返してください。文脈の「入力行」は以前の文字起こし結果で誤りを含む可能性が高いため、食い違う場合は音声を優先してください。前後行は同じように聞こえる候補の表記選択にだけ使ってください。JSON文字列配列だけで返してください。{context_section}"
-    );
-    run_editor_voice_audio_llm_blocking(
-        &app,
-        &child_arc,
-        &port_arc,
-        &mode_arc,
-        &parallel_arc,
-        &purpose_arc,
-        &wav_base64,
-        &system_prompt,
-        &user_prompt,
-        max_candidates,
-    )
-}
-
-#[tauri::command]
-async fn generate_segment_retranscribe_candidates(
-    app: AppHandle,
-    state: tauri::State<'_, LlmServer>,
-    audio: tauri::State<'_, AudioStreamServer>,
-    request: SegmentRetranscribeRequest,
-) -> Result<EditorVoiceInputResponse, String> {
-    let child_arc = Arc::clone(&state.child);
-    let port_arc = Arc::clone(&state.port);
-    let mode_arc = Arc::clone(&state.mode);
-    let parallel_arc = Arc::clone(&state.parallel);
-    let purpose_arc = Arc::clone(&state.purpose);
-    let allowed_path_arc = Arc::clone(&audio.allowed_path);
-    tauri::async_runtime::spawn_blocking(move || {
-        generate_segment_retranscribe_candidates_blocking(
-            app,
-            request,
-            allowed_path_arc,
-            child_arc,
-            port_arc,
-            mode_arc,
-            parallel_arc,
-            purpose_arc,
-        )
-    })
-    .await
-    .map_err(|e| format!("聞き直し候補生成タスクエラー: {e}"))?
-}
-
-#[tauri::command]
-fn check_segment_retranscribe_available(app: AppHandle) -> bool {
-    resolve_ffmpeg_bin_for_segment_cut(&app).is_some()
 }
 
 #[tauri::command]
@@ -4539,7 +4462,8 @@ struct RunTranscriptionRequest {
     transcription_engine: Option<String>,
     /// "standard"（既定: pyannote）/ "ggml"（Nemotron-3-Diarization）
     diarization_engine: Option<String>,
-    /// ggml（whisper.cpp）でフィラー・相づちを残すか（省略時 true）。標準エンジンでは使わない。
+    /// 旧フロントエンドとの互換用。値は無視し、フィラー・相づちは常に保持する。
+    #[allow(dead_code)]
     keep_fillers: Option<bool>,
     /// ggml エンジン（Vulkan 版）に使わせる GPU の UUID。省略・見つからない場合は自動選択。
     ggml_gpu_uuid: Option<String>,
@@ -5194,8 +5118,8 @@ struct EditorVoiceInputPackStatus {
     gemma_gguf_expected_path: String,
     mmproj_gguf: bool,
     mmproj_gguf_expected_path: String,
-    // Editor版・CPU版では true。区間聞き直し用 ffmpeg（LGPL・後付けDL）の導入が
-    // installed 判定に必要かどうか（Full版は同梱 ffmpeg があるため不要）。
+    // Editor版・CPU版で音声入力パックに含める ffmpeg（LGPL・後付けDL）の状態。
+    // 区間聞き直し削除後もこのパック項目は残しており、Full版は同梱 ffmpeg を使う。
     ffmpeg_required: bool,
     ffmpeg: bool,
     ffmpeg_expected_path: String,
@@ -5245,18 +5169,6 @@ struct EditorVoiceInputContextLine {
 #[serde(rename_all = "camelCase")]
 struct EditorVoiceInputResponse {
     candidates: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SegmentRetranscribeRequest {
-    audio_path: String,
-    start_seconds: f64,
-    end_seconds: f64,
-    #[serde(default)]
-    max_candidates: Option<usize>,
-    #[serde(default)]
-    context: Option<EditorVoiceInputContext>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -6267,7 +6179,6 @@ fn cleanup_stale_private_temp_files(app: &AppHandle) {
             "lott_llm_system_prompt_",
             "lott_overall_segments_",
             "lott_overall_system_prompt_",
-            "lott-retranscribe-",
             "lott-playback-",
             "lott_diar_",
         ]),
@@ -6308,8 +6219,6 @@ fn encrypted_export_arcname(output_path: &str, extension: &str) -> Result<String
 struct AudioStreamServer {
     port: u16,
     token: String,
-    /// ユーザーが選んだ元ファイル。区間聞き直しなど、元音声そのものを扱う機能の許可判定に使う。
-    allowed_path: Arc<Mutex<Option<String>>>,
     /// 実際に HTTP 配信するファイル。元ファイルと同じか、再生用に変換したキャッシュ。
     playback_path: Arc<Mutex<Option<String>>>,
 }
@@ -6579,21 +6488,6 @@ fn get_audio_stream_info(state: tauri::State<'_, AudioStreamServer>) -> AudioStr
     }
 }
 
-#[tauri::command]
-fn set_audio_allowed_path(path: String, state: tauri::State<'_, AudioStreamServer>) {
-    let value = if path.is_empty() { None } else { Some(path) };
-    {
-        let mut guard = state.allowed_path.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = value.clone();
-    }
-    // 変換なしで配信する従来の挙動を保つ。変換が要る場合は prepare_playback_source が上書きする。
-    let mut guard = state
-        .playback_path
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *guard = value;
-}
-
 // ─── Audio probing / playback transcoding ────────────────────────────────────
 // WebKitGTK（Linux）のメディア再生は GStreamer に依存し、配布 AppImage には
 // LGPL のプラグインしか同梱しない（AGENTS.md のライセンス方針）。そのため AAC 等
@@ -6722,8 +6616,8 @@ fn transcode_for_playback(
     let _ = fs::remove_file(&partial);
     let mut guard = TempFileGuard::new();
     guard.push(partial.clone());
-    // 変換先を 0600 で先に作ってから ffmpeg に上書きさせる（extract_segment_wav_base64 と
-    // 同じ手順）。ffmpeg 任せだと umask 次第で 0644 になり、臨床音声のデコード済みコピーが
+    // 変換先を 0600 で先に作ってから ffmpeg に上書きさせる。ffmpeg 任せだと umask 次第で
+    // 0644 になり、臨床音声のデコード済みコピーが
     // 他ユーザーから読める権限で残りうる。
     // ここは best-effort。前回のクラッシュで残った .part を消せない等で作成に失敗しても、
     // ffmpeg の `-y` で上書きできるので変換自体は止めない（最終ファイルの権限はリネーム前に
@@ -6747,7 +6641,7 @@ fn transcode_for_playback(
         .arg("-c:a")
         .arg("flac")
         // AAC などは fltp でデコードされ、既定では 24bit FLAC になってキャッシュが無駄に太る。
-        // このキャッシュは再生専用（文字起こし・区間聞き直しは常に元ファイルを使う）なので 16bit で足りる。
+        // このキャッシュは再生専用（文字起こしは常に元ファイルを使う）なので 16bit で足りる。
         .arg("-sample_fmt")
         .arg("s16")
         .arg("-compression_level")
@@ -6835,10 +6729,9 @@ async fn prepare_playback_source(
     path: String,
     state: tauri::State<'_, AudioStreamServer>,
 ) -> Result<String, String> {
-    let allowed_path_arc = Arc::clone(&state.allowed_path);
     let playback_path_arc = Arc::clone(&state.playback_path);
     tauri::async_runtime::spawn_blocking(move || {
-        prepare_playback_source_blocking(app, path, allowed_path_arc, playback_path_arc)
+        prepare_playback_source_blocking(app, path, playback_path_arc)
     })
     .await
     .map_err(|e| format!("再生準備タスクエラー: {e}"))?
@@ -6847,17 +6740,11 @@ async fn prepare_playback_source(
 fn prepare_playback_source_blocking(
     app: AppHandle,
     path: String,
-    allowed_path_arc: Arc<Mutex<Option<String>>>,
     playback_path_arc: Arc<Mutex<Option<String>>>,
 ) -> Result<String, String> {
     if path.is_empty() {
         return Err("音声ファイルが指定されていません。".to_string());
     }
-    {
-        let mut guard = allowed_path_arc.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some(path.clone());
-    }
-
     let mut served = path.clone();
     // Windows(WebView2) と macOS は AAC を含めて WebView 側でデコードできるため変換しない。
     // 変換が要るのは GStreamer に LGPL プラグインしか無い Linux だけ。
@@ -8119,11 +8006,31 @@ fn editor_voice_input_allowed(app: &AppHandle) -> bool {
 }
 
 fn check_editor_voice_input_pack_status_impl(app: &AppHandle) -> EditorVoiceInputPackStatus {
+    if is_vulkan_build(app) {
+        // Vulkan 版の音声入力は whisper.cpp（文字起こしと同じモデル）を使うため、
+        // 追加のパックは無い。文字起こしの準備が済んでいれば使える。
+        let installed = resolve_ggml_speech_paths(app)
+            .map(|p| p.missing_for_transcription(VOICE_INPUT_WHISPER_MODEL).is_empty())
+            .unwrap_or(false);
+        return EditorVoiceInputPackStatus {
+            installed,
+            cpu_backend_required: false,
+            cpu_backend: true,
+            cpu_backend_expected_path: String::new(),
+            gemma_gguf: true,
+            gemma_gguf_expected_path: String::new(),
+            mmproj_gguf: true,
+            mmproj_gguf_expected_path: String::new(),
+            ffmpeg_required: false,
+            ffmpeg: true,
+            ffmpeg_expected_path: String::new(),
+        };
+    }
     let (cpu_backend, cpu_backend_expected_path) = get_editor_voice_cpu_backend_info(app);
     let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
     let (mmproj_gguf, mmproj_gguf_expected_path) = get_gemma_mmproj_gguf_info(app);
-    // Editor版・CPU版: CPU バックエンドと区間聞き直し用の
-    // ffmpeg（後付けDL）も installed 判定に含める。
+    // Editor版・CPU版: CPU バックエンドと音声入力パックに残している ffmpeg（後付けDL）も
+    // installed 判定に含める。ffmpeg 項目の削除は別途判断する。
     // Full版（CUDA/AMD）: 音声入力は GPU 直起動のみ・ffmpeg は同梱のため、
     // 本体 GGUF + mmproj の有無だけで判定する。
     let cpu_backend_required = editor_voice_input_allowed(app);
@@ -9184,7 +9091,7 @@ fn install_editor_voice_ffmpeg_blocking(app: &AppHandle) -> Result<(), String> {
 }
 
 fn install_editor_voice_input_pack_blocking(app: AppHandle) -> Result<bool, String> {
-    // Editor版・CPU版は CPU バックエンド（llama.cpp CPU ビルド）と区間聞き直し用 ffmpeg が必要。
+    // Editor版・CPU版は CPU バックエンド（llama.cpp CPU ビルド）とパック内の ffmpeg を導入する。
     // Full版（CUDA/AMD）は音声入力も GPU 直起動・ffmpeg は同梱のため、
     // これらの導入ステップ自体をスキップする（進捗イベントも出さない）。
     if editor_voice_input_allowed(&app) {
@@ -9405,6 +9312,8 @@ fn check_all_setup_status_vulkan(app: &AppHandle) -> Result<AllSetupStatus, Stri
         && ggml_speech::ggml_models_installed(&models_root, "whisper_turbo");
     let diarization = !should_emulate_missing_community_1()
         && ggml_speech::ggml_models_installed(&models_root, "diarization");
+    // E4B の実在状態は互換 UI / 旧データ確認用に返すが、Vulkan の初期セットアップ要件ではない。
+    // フロントの needsFullSetup とセットアップ行は E4B / MTP 状態を参照しない。
     let (gemma_gguf, gemma_gguf_expected_path) = get_gemma_gguf_info(app);
     let (gemma_mtp_gguf, gemma_mtp_gguf_expected_path) = get_gemma_mtp_gguf_info(app);
     Ok(AllSetupStatus {
@@ -9843,16 +9752,19 @@ fn get_default_llm_model_path(app: AppHandle) -> Option<String> {
     resolve_gemma_main_path_for_tier(&app, resolve_effective_proofread_tier(&app))
 }
 
-/// 校正AIモデルの選択（"e4b" / "12b"）を返す。AMD 版は常に "e4b"。
+/// 校正AIモデルの選択（"e4b" / "12b"）を返す。Vulkan 版は常に "12b"。
 #[tauri::command]
 fn get_proofread_model_tier(app: AppHandle) -> String {
     read_proofread_model_tier(&app).as_marker().to_string()
 }
 
-/// 校正AIモデルの選択を保存する（"e4b" / "12b"）。NVIDIA(CUDA)・AMD(Vulkan) いずれも 12B 可。
+/// 校正AIモデルの選択を保存する（"e4b" / "12b"）。Vulkan 版では "e4b" を "12b" として保存する。
 #[tauri::command]
 fn set_proofread_model_tier(app: AppHandle, tier: String) -> Result<(), String> {
-    let resolved = GemmaTier::from_marker(&tier);
+    let resolved = normalize_proofread_model_tier_for_build(
+        GemmaTier::from_marker(&tier),
+        is_vulkan_build(&app),
+    );
     let path = proofread_model_tier_marker_path(&app)
         .ok_or_else(|| "設定の保存先を解決できませんでした。".to_string())?;
     if let Some(parent) = path.parent() {
@@ -10341,11 +10253,15 @@ fn punctuate_text_rust(
         return src;
     }
     let mut out = replace_inner_half_space_with_comma(&src);
+    // 「まあ」「ので」などの後に読点を入れる規則は、句読点の無い文字起こし（faster-whisper）向け。
+    // whisper.cpp のように句読点を付けて出した行は、その読点を信頼して触らない
+    // （語の一部にも当たるため「あのですね」を「あので、すね」にしてしまう）。
+    let already_punctuated = src.contains(['、', '。', '？', '！', '?', '!']);
     for phrase in &rules.force_comma_after {
-        if phrase.is_empty() {
+        if phrase.is_empty() || already_punctuated {
             continue;
         }
-        out = out.replace(phrase, &format!("{phrase}、"));
+        out = insert_comma_after_phrase(&out, phrase);
     }
     for phrase in &rules.remove_comma_after {
         if phrase.is_empty() {
@@ -10359,6 +10275,24 @@ fn punctuate_text_rust(
     if out != src {
         stats.changed += 1;
     }
+    out
+}
+
+/// phrase の直後に読点を入れる。すでに句読点・閉じ括弧が続く所と文末には入れない
+/// （whisper.cpp は句読点を付けて出すので、「まあ、」を「まあ、、」、「ので。」を「ので、。」にしない）。
+fn insert_comma_after_phrase(text: &str, phrase: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut rest = text;
+    while let Some(pos) = rest.find(phrase) {
+        let end = pos + phrase.len();
+        out.push_str(&rest[..end]);
+        rest = &rest[end..];
+        let next = rest.chars().next();
+        if next.is_some_and(|c| !matches!(c, '、' | '。' | '！' | '？' | '!' | '?' | '…' | '」' | '』' | '）' | ')' | '，' | ',')) {
+            out.push('、');
+        }
+    }
+    out.push_str(rest);
     out
 }
 
@@ -10487,17 +10421,21 @@ fn punctuate_segments_by_speaker_group_rust(
 }
 
 fn load_punct_rules_from_app(app: &AppHandle) -> PunctRules {
-    let mut rules = PunctRules::default();
     let Some(path) = resolve_proofread_rule_file_candidates(app, "punctuation_addition.json")
         .into_iter()
         .find(|p| p.exists())
     else {
-        return rules;
+        return PunctRules::default();
     };
     let Ok(text) = fs::read_to_string(path) else {
-        return rules;
+        return PunctRules::default();
     };
-    let Ok(raw) = serde_json::from_str::<PunctRulesFile>(&text) else {
+    punct_rules_from_json(&text)
+}
+
+fn punct_rules_from_json(text: &str) -> PunctRules {
+    let mut rules = PunctRules::default();
+    let Ok(raw) = serde_json::from_str::<PunctRulesFile>(text) else {
         return rules;
     };
     if !raw.force_comma_after.is_empty() {
@@ -11087,6 +11025,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn proofread_tier_normalization_is_vulkan_only() {
+        assert_eq!(
+            normalize_proofread_model_tier_for_build(GemmaTier::E4b, true).as_marker(),
+            "12b"
+        );
+        assert_eq!(
+            normalize_proofread_model_tier_for_build(GemmaTier::B12, true).as_marker(),
+            "12b"
+        );
+        assert_eq!(
+            normalize_proofread_model_tier_for_build(GemmaTier::E4b, false).as_marker(),
+            "e4b"
+        );
+        assert_eq!(
+            normalize_proofread_model_tier_for_build(GemmaTier::B12, false).as_marker(),
+            "12b"
+        );
+    }
+
+    #[test]
+    fn vulkan_legacy_e4b_targets_are_limited_to_the_three_e4b_assets() {
+        let models_root = Path::new("app-data/models");
+        let model_dir = models_root.join("llm").join("gemma-4-e4b-it");
+        assert_eq!(
+            legacy_e4b_model_files(models_root),
+            vec![
+                model_dir.join(GEMMA_MAIN_GGUF_FILENAME),
+                model_dir.join(GEMMA_MTP_GGUF_FILENAME),
+                model_dir.join(GEMMA_MMPROJ_GGUF_FILENAME),
+            ]
+        );
+    }
+
+    #[test]
     fn llm_engine_cache_dirs_prefer_new_path_and_keep_legacy_fallback() {
         let dirs = llm_engine_cache_dirs_from_base(Path::new("/tmp/lott-cache"));
         assert_eq!(
@@ -11096,6 +11068,92 @@ mod tests {
                 PathBuf::from("/tmp/lott-cache/lemonade"),
             ]
         );
+    }
+
+    fn rule_punct_segments(rows: &[(&str, &str, f64, f64)]) -> Vec<ProofreadSegmentInput> {
+        rows.iter()
+            .enumerate()
+            .map(|(i, (speaker, text, start, end))| ProofreadSegmentInput {
+                id: i as i64,
+                text: text.to_string(),
+                speaker: Some(speaker.to_string()),
+                speaker_label: None,
+                start: Some(*start),
+                end: Some(*end),
+            })
+            .collect()
+    }
+
+    fn bundled_punct_rules() -> PunctRules {
+        punct_rules_from_json(include_str!(
+            "../resources/proofread/punctuation_rules/punctuation_addition.json"
+        ))
+    }
+
+    #[test]
+    fn rule_punctuation_keeps_whisper_cpp_punctuation_and_fills_only_missing_endings() {
+        let rules = bundled_punct_rules();
+        let segments = rule_punct_segments(&[
+            ("SPEAKER_00", "はい、今回どうされましたか。", 0.0, 2.0),
+            ("SPEAKER_01", "なんか、会社行っても、", 2.5, 4.0),
+            ("SPEAKER_01", "なんかパソコンつけて、ぼーっとしてる時間が長くなってきたなーとか。", 4.2, 8.0),
+            ("SPEAKER_00", "いつ頃からそんな感じなんですか", 8.5, 10.0),
+        ]);
+        let mut stats = PunctuationRuntimeStats::default();
+        let out = punctuate_segments_by_speaker_group_rust(&segments, &rules, &mut stats);
+        // 句読点で終わっている行（whisper.cpp の出力のほぼすべて）は変えない
+        for segment in &segments[..3] {
+            assert_eq!(out[&segment.id], segment.text);
+        }
+        // 句読点が無い行だけ末尾を補う
+        assert!(out[&3].starts_with("いつ頃からそんな感じなんですか"));
+        assert!(ends_with_japanese_punctuation(&out[&3]));
+
+        // 「まあ」「ので」などの後の読点は、すでに句読点がある所には重ねない
+        assert_eq!(punctuate_text_rust("まあ、先月ぐらいからは。", &rules, &mut stats), "まあ、先月ぐらいからは。");
+        assert_eq!(punctuate_text_rust("子供教えてたので。", &rules, &mut stats), "子供教えてたので。");
+        assert_eq!(punctuate_text_rust("次というか、もう。", &rules, &mut stats), "次というか、もう。");
+        assert_eq!(punctuate_text_rust("なので、そう。", &rules, &mut stats), "なので、そう。");
+        assert_eq!(punctuate_text_rust("まあいいか。", &rules, &mut stats), "まあいいか。");
+        assert_eq!(punctuate_text_rust("あのですね、理由が。", &rules, &mut stats), "あのですね、理由が。");
+        // 句読点の無い行（faster-whisper）には従来どおり読点を入れる
+        assert_eq!(punctuate_text_rust("まあいいか", &rules, &mut stats), "まあ、いいか");
+    }
+
+    /// 手動確認: `demo_data/proofread-eval/inputs/*.json`（whisper.cpp の出力）にルールをかけ、変わる行を数える。
+    #[test]
+    #[ignore = "demo_data（git 管理外）の文字起こしが必要"]
+    fn rule_punctuation_report_on_demo_transcripts() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../demo_data/proofread-eval/inputs");
+        let rules = bundled_punct_rules();
+        for entry in fs::read_dir(&dir).expect("demo_data/proofread-eval/inputs") {
+            let path = entry.expect("entry").path();
+            let data: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("json");
+            let segments: Vec<ProofreadSegmentInput> = data["segments"]
+                .as_array()
+                .expect("segments")
+                .iter()
+                .enumerate()
+                .map(|(i, s)| ProofreadSegmentInput {
+                    id: i as i64,
+                    text: normalize_ja_symbol_width(s["text"].as_str().unwrap_or("").trim()),
+                    speaker: s["speaker"].as_str().map(str::to_string),
+                    speaker_label: None,
+                    start: s["start"].as_f64(),
+                    end: s["end"].as_f64(),
+                })
+                .collect();
+            let mut stats = PunctuationRuntimeStats::default();
+            let out = punctuate_segments_by_speaker_group_rust(&segments, &rules, &mut stats);
+            let changed: Vec<_> = segments
+                .iter()
+                .filter(|s| out.get(&s.id).is_some_and(|t| *t != s.text))
+                .collect();
+            println!("{}: {} 行中 {} 行を変更", path.display(), segments.len(), changed.len());
+            for s in changed {
+                println!("  {} → {}", s.text, out[&s.id]);
+            }
+        }
     }
 
     #[test]
@@ -11969,20 +12027,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn segment_retranscribe_padding_keeps_requested_core_range() {
-        let (start, duration) = segment_retranscribe_padded_range(10.0, 2.0);
-        assert!((start - 9.75).abs() < f64::EPSILON);
-        assert!((duration - 2.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn segment_retranscribe_padding_does_not_go_before_zero() {
-        let (start, duration) = segment_retranscribe_padded_range(0.1, 2.0);
-        assert!(start.abs() < f64::EPSILON);
-        assert!((duration - 2.35).abs() < f64::EPSILON);
-    }
-
     fn assert_regex_compiles(name: &str, pattern: Option<&str>) {
         if let Some(pattern) = pattern {
             Regex::new(pattern.trim())
@@ -12519,7 +12563,8 @@ fn run_transcription_blocking(
     set_cancel_requested(RunningTaskKind::Transcription, false);
     let transcription_engine = requested_speech_engine(&app, request.transcription_engine.as_deref());
     let diarization_engine = requested_speech_engine(&app, request.diarization_engine.as_deref());
-    let keep_fillers = request.keep_fillers.unwrap_or(true);
+    // 旧フロントエンドから false が届いても、カウンセリング会話のフィラーは常に保持する。
+    let keep_fillers = true;
     eprintln!(
         "[LoTT][transcription][run_id={run_id}][stage=engine] transcription={transcription_engine:?} diarization={diarization_engine:?} keep_fillers={keep_fillers}"
     );
@@ -14133,7 +14178,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 
 /// CUDA 版から Vulkan 版へ上書きしたときに残る、使われなくなったデータ。
 /// リリース版の Vulkan 版だけが対象（開発環境の venv・モデルは消さない）。
-/// Gemma（models/llm）と ggml のモデルは Vulkan 版でも使うので対象にしない。
+/// 旧 E4B の本体・MTP・音声 mmproj は対象にし、12B と ggml のモデルは残す。
 fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
     if cfg!(debug_assertions) || !is_vulkan_build(app) {
         return Vec::new();
@@ -14144,6 +14189,12 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
             "話者分離モデル（pyannote community-1）".to_string(),
             models.join("pyannote-speaker-diarization-community-1"),
         ));
+        for path in legacy_e4b_model_files(&models) {
+            candidates.push((
+                "旧・標準の校正／音声入力モデル（Gemma 4 E4B）".to_string(),
+                path,
+            ));
+        }
     }
     let hub = get_app_hf_hub_cache(app);
     if let Ok(entries) = fs::read_dir(&hub) {
@@ -14196,6 +14247,18 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
             path: path.to_string_lossy().into_owned(),
         })
         .collect()
+}
+
+fn legacy_e4b_model_files(models_root: &Path) -> Vec<PathBuf> {
+    let model_dir = models_root.join("llm").join(GEMMA_LLM_MODEL_DIR);
+    [
+        GEMMA_MAIN_GGUF_FILENAME,
+        GEMMA_MTP_GGUF_FILENAME,
+        GEMMA_MMPROJ_GGUF_FILENAME,
+    ]
+    .into_iter()
+    .map(|filename| model_dir.join(filename))
+    .collect()
 }
 
 /// 設定タブ用: CUDA 版から残った不要データの一覧（Vulkan 版のリリースのみ。無ければ空）。
@@ -16308,7 +16371,7 @@ fn run_full_setup_blocking(app: AppHandle, hf_token: Option<String>) -> Result<b
     if is_vulkan_build(&app) {
         // Vulkan 版はトークン不要。受け取っていても使わずに消す。
         hf_token.clear();
-        return Ok(run_ggml_model_setup_blocking(&app) && run_gemma_setup_blocking(&app));
+        return Ok(run_ggml_model_setup_blocking(&app));
     }
 
     // 0. Python venv（Windows のみ）
@@ -16428,7 +16491,7 @@ fn run_ggml_model_setup_blocking(app: &AppHandle) -> bool {
     all_ok
 }
 
-/// Gemma 4 E4B GGUF と MTP ドラフトを取得する（CUDA 版・Vulkan 版で共通）。
+/// Gemma 4 E4B GGUF と MTP ドラフトを取得する（Vulkan 版を除く Full 版）。
 fn run_gemma_setup_blocking(app: &AppHandle) -> bool {
     let mut all_ok = true;
     let (gemma_ok, _) = get_gemma_gguf_info(app);
@@ -16660,10 +16723,6 @@ fn resolve_editor_voice_input_system_prompt_path(app: &AppHandle) -> Result<Path
     resolve_voice_input_prompt_template_path(app, "gemma4_e4b_candidates_system.txt")
 }
 
-fn resolve_segment_retranscribe_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    resolve_voice_input_prompt_template_path(app, "gemma4_e4b_retranscribe_system.txt")
-}
-
 fn resolve_default_proofread_system_prompt_path(app: &AppHandle) -> Result<PathBuf, String> {
     resolve_prompt_template_path(
         app,
@@ -16793,7 +16852,6 @@ fn resolve_diarization_python_bin(app: &AppHandle, _fallback_python_bin: &str) -
 }
 
 pub fn run() {
-    let audio_allowed_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let audio_playback_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let audio_stream_token =
         Arc::new(generate_audio_stream_token().expect("audio stream token generation failed"));
@@ -16815,7 +16873,6 @@ pub fn run() {
         .manage(AudioStreamServer {
             port: audio_stream_port,
             token: (*audio_stream_token).clone(),
-            allowed_path: audio_allowed_path,
             playback_path: audio_playback_path,
         })
         .manage(OpenAiUnloadState::default())
@@ -16928,12 +16985,9 @@ pub fn run() {
             install_editor_voice_input_pack,
             dev_delete_editor_voice_input_pack,
             generate_editor_voice_input_candidates,
-            generate_segment_retranscribe_candidates,
             get_voice_input_server_status,
             get_installed_memory_bytes,
-            check_segment_retranscribe_available,
             get_audio_stream_info,
-            set_audio_allowed_path,
             get_audio_duration_seconds,
             prepare_playback_source,
             get_dev_demo_data_dir,

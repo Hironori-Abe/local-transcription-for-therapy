@@ -48,8 +48,6 @@ export interface AppSettingsV1 {
     language?: string;
     hipDeviceIndex?: number;
     engine?: string;
-    /** ggml（whisper.cpp）でフィラー・相づちを残すか。未設定は true。 */
-    keepFillers?: boolean;
     /** ggml エンジン（Vulkan 版）に使わせる GPU の UUID。空・未設定は自動選択。 */
     ggmlGpuUuid?: string;
   };
@@ -114,7 +112,6 @@ export interface GeneralAppSettingsValue {
   addUtteranceNumber?: boolean;
   transcriptionEngine?: SpeechEngineOption;
   diarizationEngine?: SpeechEngineOption;
-  keepFillers?: boolean;
   ggmlGpuUuid?: string;
 }
 
@@ -138,6 +135,7 @@ export interface ResolvedLlmAppSettingsValue {
 export interface ResolveLlmAppSettingsOptions {
   localLlmAppsEnabled: boolean;
   aiProofreadBuild: boolean;
+  vulkanBuild?: boolean;
 }
 
 export interface CurrentLlmSelectionSettingsValue {

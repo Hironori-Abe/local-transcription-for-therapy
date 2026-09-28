@@ -270,14 +270,14 @@
                 *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma GGUF -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild()">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaGguf"
                 [class.setup-comp-downloading]="setupProgressMap()['gemma_gguf']?.status === 'downloading'">{{
                 setupProgressMap()['gemma_gguf']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.gemmaGguf || setupProgressMap()['gemma_gguf']?.status === 'done' || setupProgressMap()['gemma_gguf']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">自動句読点・校正モデル（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
+              <span class="setup-comp-name">{{ vulkanBuild() ? '校正・音声入力モデル' : '自動句読点・校正モデル' }}（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
               <span class="setup-comp-size">約 5 GB</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['gemma_gguf']?.status === 'error'"
@@ -285,7 +285,7 @@
                 *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
             </div>
             <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && (buildVariant() === 'cuda' || vulkanBuild())">
+            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && buildVariant() === 'cuda'">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
                 [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
@@ -491,7 +491,7 @@
                 : '文字起こし開始'
                 }}
               </button>
-              <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・AI句読点付与を処理中です。しばらくお待ちください...</p>
+              <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・{{ transcriptionEngine() === 'ggml' ? '句読点付与' : 'AI句読点付与' }}を処理中です。しばらくお待ちください...</p>
               <ng-container *ngIf="result() && lastRunElapsedSeconds() > 0">
                 <p class="copy-status">所要時間: {{ formatElapsedMinuteSecond(lastRunElapsedSeconds())}}</p>
               </ng-container>
@@ -786,13 +786,6 @@
                     <mat-option *ngFor="let d of vulkanGpus()!.devices" [value]="d.uuid">{{ vulkanGpuLabel(d) }}</mat-option>
                   </mat-select>
                 </mat-form-field>
-                <mat-checkbox *ngIf="transcriptionEngine() === 'ggml'"
-                  [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                  [checked]="keepFillers()" (change)="onKeepFillersChange($event.checked)"
-                  matTooltip="「えーと」「あのー」「うん」などのフィラー・相づちを書き起こします。外すと Whisper の既定どおり省かれやすくなります。"
-                  matTooltipPosition="above">
-                  フィラー・相づちを残す
-                </mat-checkbox>
                 <div *ngIf="ggmlSpeechWarning()" class="gpu-asr-warning ggml-speech-warning">
                   <mat-icon class="material-symbols-outlined">warning</mat-icon>
                   {{ ggmlSpeechWarning() }}
@@ -802,7 +795,7 @@
               <div *ngIf="vulkanBuild() && (legacyCudaData().length > 0 || legacyCudaDataMessage())" class="legacy-data-block">
                 <ng-container *ngIf="legacyCudaData().length > 0">
                   <p class="estimate-line">
-                    以前の CUDA 版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。ダウンロード済みの AI 校正モデル（Gemma）や、この版の音声認識・話者分離モデルは削除しません。
+                    以前の CUDA 版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。Gemma 4 12Bと、この版の音声認識・話者分離モデルは削除しません。旧Gemma 4 E4B本体・MTP・音声mmprojは削除対象に含まれます。
                   </p>
                   <ul class="legacy-data-list">
                     <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ item.bytes >= 107374182 ? (item.bytes / 1073741824).toFixed(1) + ' GB' : (item.bytes / 1048576).toFixed(0) + ' MB' }}）</li>
@@ -825,9 +818,9 @@
               </div>
             </ng-container>
 
-            <!-- 音声入力パック: 全ビルドで表示。Editor版・CPU版はCPUバックエンド込み、Full版はGPU直起動のため
+            <!-- 音声入力パック: Vulkan版以外で表示。Editor版・CPU版はCPUバックエンド込み、Full版はGPU直起動のため
                  mmproj（+未導入ならE4B本体）のみ導入する。 -->
-            <ng-container>
+            <ng-container *ngIf="!vulkanBuild()">
               <div class="section-separator"><span>音声入力パック</span></div>
               <div class="voice-input-pack-panel">
                 <div *ngIf="editorOnlyBuild" class="actions-row settings-llm-row">
@@ -979,7 +972,7 @@
                   <mat-hint>{{ llmBackendModeHint() }}</mat-hint>
                 </mat-form-field>
                 <button *ngIf="proofreadModelTierVisible()" mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。"
+                  [matTooltip]="vulkanBuild() ? 'Vulkan版はGemma4 12B（高精度・要DL）を使います。約7GBの追加ダウンロードが必要です。変更は次回のAI校正から反映されます。' : 'AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。'"
                   matTooltipClass="settings-info-tooltip" aria-label="AI校正バックエンドの説明">
                   <mat-icon class="material-symbols-outlined">info</mat-icon>
                 </button>
@@ -988,7 +981,17 @@
                     [mode]="gemma12bDownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
                     [value]="gemma12bDownloadPercent()"></mat-progress-bar>
                   <span class="whisper-dl-bytes">{{ gemma12bDownloadBytesLabel() || 'ダウンロード中...' }}</span>
+                  <span class="copy-status">{{ gemma12bDownloadMessage() }}</span>
                 </div>
+                <p *ngIf="proofreadModelTierVisible() && gemma12bInstalled() === false && !gemma12bDownloading()"
+                  class="reader-hint voice-input-pack-note">
+                  {{ gemma12bDownloadMessage() || (vulkanBuild() ? 'Gemma4 12Bは未導入です。下のボタンから約7GBをダウンロードしてください。' : 'Gemma4 12Bは未導入です。内蔵モデルを選択すると、約7GBのダウンロードが始まります。') }}
+                </p>
+                <button *ngIf="vulkanBuild() && proofreadModelTierVisible() && gemma12bInstalled() === false && !gemma12bDownloading()"
+                  mat-stroked-button color="primary" type="button" (click)="downloadGemma12bFromSettings()">
+                  <mat-icon class="material-symbols-outlined">download</mat-icon>
+                  Gemma 4 12Bをダウンロード
+                </button>
                 <mat-form-field *ngIf="llmBackendMode() === 'local_gguf' && computeEnvInfo()?.devices?.length"
                   appearance="outline" class="settings-llm-field settings-field-device">
                   <mat-label>使用デバイス</mat-label>
@@ -1255,8 +1258,10 @@
                   音声デコード / WAV 変換に使用。配布用 Python 環境には PyAV（<code>av</code>）と <code>imageio-ffmpeg</code> を含めません。</li>
                 <li>llama.cpp（ggml-org, MIT）<br>
                   AI校正エンジン（ローカル LLM 推論）に使用。</li>
-                <li>Gemma 4 E4B（Google DeepMind, Apache-2.0）<br>
+                <li *ngIf="!vulkanBuild()">Gemma 4 E4B（Google DeepMind, Apache-2.0）<br>
                   内蔵版: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code> UD-Q4_K_XL + MTP GGUF（QAT/MTP, Unsloth, Apache-2.0）</li>
+                <li *ngIf="vulkanBuild()">Gemma 4 12B（Google DeepMind, Apache-2.0）<br>
+                  内蔵版: <code>unsloth/gemma-4-12B-it-qat-GGUF</code> QAT GGUF + MTP GGUF（Unsloth, Apache-2.0）</li>
               </ul>
               <p>各コンポーネントの著作権表示、ライセンス条件、FFmpeg の取得元・ハッシュ・configure 情報は、それぞれの配布物・公式情報および同梱ファイルに従います。</p>
             </div>
@@ -1275,8 +1280,8 @@
                   文字起こしモデル: OpenAI Whisper（turbo, MIT / OpenAI）
                 </li>
                 <li>
-                  校正モデル: Gemma 4 E4B（Google DeepMind, Apache-2.0）/
-                  内蔵 GGUF: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code>（QAT + MTP, Unsloth, Apache-2.0）
+                  校正モデル: {{ vulkanBuild() ? 'Gemma 4 12B' : 'Gemma 4 E4B' }}（Google DeepMind, Apache-2.0）/
+                  内蔵 GGUF: <code>{{ vulkanBuild() ? 'unsloth/gemma-4-12B-it-qat-GGUF' : 'unsloth/gemma-4-E4B-it-qat-GGUF' }}</code>（QAT + MTP, Unsloth, Apache-2.0）
                 </li>
               </ul>
               <p>
@@ -1310,12 +1315,14 @@
         </button>
         <ng-template #overallProofreadRunButtons>
           <div class="overall-proofread-split-button" role="group" aria-label="全体校正モデルを選択">
-            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn overall-proofread-split-main" color="accent"
+            <!-- Vulkan 版は 12B だけで全体校正する（E4B の選択肢を出さない） -->
+            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
+              [class.overall-proofread-split-main]="!vulkanBuild()"
               [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
-              (click)="openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
+              (click)="vulkanBuild() ? openOrRunOverallProofreadWith12b(proofreadDialogMode) : openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
               <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">auto_awesome</mat-icon>全体校正
             </button>
-            <button mat-stroked-button class="run-exec-btn overall-proofread-split-toggle" color="accent"
+            <button *ngIf="!vulkanBuild()" mat-stroked-button class="run-exec-btn overall-proofread-split-toggle" color="accent"
               [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
               [matMenuTriggerFor]="overallProofreadModelMenu" aria-label="別の全体校正モデルを選択"
               matTooltip="別の全体校正モデルを選択">
@@ -1523,17 +1530,6 @@
                     } @else if (llmStatus === 'done') {
                     <span matPrefix class="llm-status-icon llm-status-done" title="AI校正完了">check_circle</span>
                     }
-                    <button *ngIf="segmentRetranscribeButtonVisible()" matPrefix mat-icon-button type="button"
-                      class="segment-retranscribe-btn" tabindex="-1"
-                      [class.segment-retranscribe-btn-unavailable]="segmentRetranscribeUnavailableReason() !== null"
-                      [attr.aria-disabled]="segmentRetranscribeUnavailableReason() !== null ? true : null"
-                      [disableRipple]="segmentRetranscribeUnavailableReason() !== null"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id)) || voiceInputRecordingSegmentId() !== null"
-                      [matTooltip]="segmentRetranscribeTooltip(segment.id)"
-                      [attr.aria-label]="segmentRetranscribeTooltip(segment.id)"
-                      (click)="retranscribeSegment(segment)">
-                      <mat-icon class="material-symbols-outlined">{{ isVoiceInputProcessing(segment.id) ? 'hourglass_top' : 'graphic_eq' }}</mat-icon>
-                    </button>
                     <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
                       cdkAutosizeMaxRows="12" class="segment-content-input"
                       [attr.data-segment-id]="segment.id"
@@ -1568,11 +1564,8 @@
                   </div>
                   <div class="voice-input-candidate-panel"
                     *ngIf="voiceInputCandidates()?.segmentId === segment.id && voiceInputCandidates() as voicePanel">
-                    <div class="voice-input-candidate-hint" *ngIf="voicePanel.mode === 'insert'">
+                    <div class="voice-input-candidate-hint">
                       選択すると、カーソル位置に挿入されます。
-                    </div>
-                    <div class="voice-input-candidate-hint voice-input-replace-hint" *ngIf="voicePanel.mode === 'replace'">
-                      候補を選ぶと、この行の内容全体が置き換わります（挿入ではありません）。
                     </div>
                     <button type="button" class="voice-input-candidate-btn"
                       *ngFor="let candidate of voicePanel.candidates"

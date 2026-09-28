@@ -1817,7 +1817,7 @@ $segment-cols: 96px 84px 88px 1fr;
   bottom: -12px;
 }
 
-// 行下部の2ボタン（コピー・分割）を均等配置する。聞き直しボタンは segment-text-field の matPrefix へ移動済み。
+// 行下部の2ボタン（コピー・分割）を均等配置する。
 .segment-insert-btn-copy {
   bottom: -12px;
   left: 33.33%;
@@ -1832,9 +1832,8 @@ $segment-cols: 96px 84px 88px 1fr;
   transform: rotate(180deg);
 }
 
-// 音声入力ボタン（matSuffix）・聞き直しボタン（matPrefix）共通の icon-button 見た目。
-.segment-voice-input-btn,
-.segment-retranscribe-btn {
+// 音声入力ボタン（matSuffix）の icon-button 見た目。
+.segment-voice-input-btn {
   width: 32px;
   height: 32px;
   padding: 0;
@@ -1884,12 +1883,7 @@ $segment-cols: 96px 84px 88px 1fr;
   }
 }
 
-.segment-retranscribe-btn {
-  margin: 0 8px 0 0;
-}
-
-.segment-voice-input-btn.segment-voice-input-btn-unavailable,
-.segment-retranscribe-btn.segment-retranscribe-btn-unavailable {
+.segment-voice-input-btn.segment-voice-input-btn-unavailable {
   color: light-dark(rgba(0, 0, 0, 0.26), rgba(255, 255, 255, 0.3));
   cursor: default;
 
@@ -1939,10 +1933,6 @@ $segment-cols: 96px 84px 88px 1fr;
   line-height: 1.45;
 }
 
-.voice-input-replace-hint {
-  font-weight: 600;
-}
-
 .voice-input-candidate-btn {
   appearance: none;
   display: inline-flex;
@@ -1950,9 +1940,7 @@ $segment-cols: 96px 84px 88px 1fr;
   justify-content: center;
   flex: 0 0 auto;
   width: auto;
-  // 長文の置き換え候補（区間聞き直し）が縦長に折り返されないよう、
-  // 閉じるボタン（32px+gap）分だけ残して行幅いっぱいまで横に延ばす。
-  // 短い候補は従来どおり内容幅のまま。
+  // 閉じるボタン（32px+gap）と横並びにし、長文候補もパネル幅を超えないようにする。
   max-width: calc(100% - 44px);
   min-width: 0;
   min-height: 32px;

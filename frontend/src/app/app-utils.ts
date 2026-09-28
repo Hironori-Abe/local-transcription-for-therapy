@@ -197,15 +197,6 @@ export interface ProcessingStatusTextValueInput {
   ruleProofreadStatus: string;
 }
 
-export interface SegmentRetranscribeAvailabilityValueInput {
-  packChecked: boolean;
-  voiceInputAvailable: boolean;
-  retranscribeSupported: boolean;
-  cpuVoiceInputBuild: boolean;
-  playbackDisabled: boolean;
-  selectedAudioPath: string;
-}
-
 export interface LlmDeviceMemoryValueInput {
   index: number;
   totalVramMb: number;
@@ -669,7 +660,12 @@ export function editorVoiceInputDownloadButtonColorValue(
   return cpuVoiceInputBuild && (tier === 'low' || tier === 'caution') ? 'warn' : 'primary';
 }
 
-export function editorVoiceInputUnavailableTooltipValue(packChecked: boolean): string {
+export function editorVoiceInputUnavailableTooltipValue(packChecked: boolean, vulkanBuild = false): string {
+  if (vulkanBuild) {
+    return packChecked
+      ? '音声入力には文字起こし用のモデル（whisper.cpp）が必要です。設定画面のセットアップを完了してください'
+      : '文字起こし用モデル（whisper.cpp）の状態を確認中です...';
+  }
   return packChecked
     ? '音声入力を使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。'
     : '音声入力パックの状態を確認中です...';
@@ -684,36 +680,6 @@ export function voiceInputButtonTooltipValue(
     return unavailableTooltip;
   }
   return recording ? '録音を停止' : '音声入力';
-}
-
-export function segmentRetranscribeUnavailableReasonValue(
-  input: SegmentRetranscribeAvailabilityValueInput
-): string | null {
-  if (!input.packChecked) {
-    return '音声入力パックの状態を確認中です...';
-  }
-  if (!input.voiceInputAvailable) {
-    return '区間の聞き直しを使うには、設定タブの「音声入力パック」からモデルをダウンロードしてください。';
-  }
-  if (!input.retranscribeSupported) {
-    return input.cpuVoiceInputBuild
-      ? '区間の聞き直しに必要な ffmpeg が未導入です。設定タブの「音声入力パック」からダウンロードしてください。'
-      : 'この構成では区間の聞き直しを利用できません。';
-  }
-  if (input.playbackDisabled || !input.selectedAudioPath) {
-    return '音声ファイルを読み込むと、この区間をAIによる再文字起こしができるようになります。';
-  }
-  return null;
-}
-
-export function segmentRetranscribeTooltipValue(
-  unavailableReason: string | null,
-  processing: boolean
-): string {
-  if (unavailableReason) {
-    return unavailableReason;
-  }
-  return processing ? '候補を生成中...' : 'この区間を別のAIで再文字起こしする';
 }
 
 export function isPlaybackDisabledValue(jsonResult: boolean, importAudioReady: boolean): boolean {
@@ -997,12 +963,13 @@ export function llmBackendSelectionValue(
 
 export function llmBackendModeOptionsValue(
   aiProofreadBuild: boolean,
-  localLlmAppsEnabled: boolean
+  localLlmAppsEnabled: boolean,
+  vulkanBuild = false
 ): ReadonlyArray<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> {
-  const options: Array<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> = [
-    { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' }
-  ];
-  if (aiProofreadBuild) {
+  const options: Array<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> = vulkanBuild
+    ? [{ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' }]
+    : [{ value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' }];
+  if (aiProofreadBuild && !vulkanBuild) {
     options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
   }
   if (localLlmAppsEnabled) {
@@ -1683,6 +1650,18 @@ export function normalizeSpeechEngineValue(valueRaw: unknown): SpeechEngineOptio
   return valueRaw === 'ggml' ? 'ggml' : 'standard';
 }
 
+/** 旧版で保存された keepFillers は読み捨て、以後の設定保存にも含めない。 */
+export function stripLegacyKeepFillersSettingValue(settings: AppSettingsV1): AppSettingsV1 {
+  const transcription = settings.transcription as
+    (NonNullable<AppSettingsV1['transcription']> & { keepFillers?: unknown }) | undefined;
+  if (!transcription || !Object.prototype.hasOwnProperty.call(transcription, 'keepFillers')) {
+    return settings;
+  }
+  const cleanedTranscription = { ...transcription };
+  delete cleanedTranscription.keepFillers;
+  return { ...settings, transcription: cleanedTranscription };
+}
+
 export function resolveGeneralAppSettingsValue(
   settings: AppSettingsV1,
   options: GeneralAppSettingsOptions
@@ -1709,9 +1688,6 @@ export function resolveGeneralAppSettingsValue(
   }
   if (transcription && typeof transcription.engine === 'string') {
     resolved.transcriptionEngine = normalizeSpeechEngineValue(transcription.engine);
-  }
-  if (transcription && typeof transcription.keepFillers === 'boolean') {
-    resolved.keepFillers = transcription.keepFillers;
   }
   if (transcription && typeof transcription.ggmlGpuUuid === 'string') {
     resolved.ggmlGpuUuid = transcription.ggmlGpuUuid.trim();
@@ -1775,7 +1751,9 @@ export function resolveLlmAppSettingsValue(
 ): ResolvedLlmAppSettingsValue {
   const llm = settings.llm;
   const resolved: ResolvedLlmAppSettingsValue = {
-    proofreadModelTier: llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
+    proofreadModelTier: options.vulkanBuild
+      ? '12b'
+      : llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
       ? '12b'
       : 'e4b'
   };

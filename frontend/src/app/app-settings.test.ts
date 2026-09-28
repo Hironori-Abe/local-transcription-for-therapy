@@ -13,6 +13,7 @@ import {
   resolveGeneralAppSettingsValue,
   resolveLlmAppSettingsValue,
   resolvePersistedLlmBackendModeValue,
+  stripLegacyKeepFillersSettingValue,
   updateLlmSelectionSettingsValue,
   updateStoredLlmInferenceParamsValue,
   updateStoredLlmPromptTypeValue,
@@ -149,6 +150,14 @@ test('persisted LLM settings discard stale models and unsupported values', () =>
     aiProofreadBuild: true
   }), {
     proofreadModelTier: 'e4b'
+  });
+  assert.deepEqual(resolveLlmAppSettingsValue({ llm: { proofreadModelTier: 'e4b' } }, {
+    localLlmAppsEnabled: false,
+    aiProofreadBuild: true,
+    vulkanBuild: true
+  }), {
+    backendMode: undefined,
+    proofreadModelTier: '12b'
   });
 });
 
@@ -312,13 +321,25 @@ test('speech engine settings default to standard and accept only ggml as the alt
   assert.equal(normalizeSpeechEngineValue('GGML'), 'standard');
   assert.equal(normalizeSpeechEngineValue(undefined), 'standard');
 
-  const settings: AppSettingsV1 = {
-    transcription: { engine: 'ggml', keepFillers: false, ggmlGpuUuid: ' 0123abcd ' },
+  const settings = JSON.parse(
+    '{"transcription":{"engine":"ggml","keepFillers":false,"ggmlGpuUuid":" 0123abcd "},"diarization":{"engine":"something-else"}}'
+  ) as AppSettingsV1;
+  assert.deepEqual(stripLegacyKeepFillersSettingValue(settings), {
+    transcription: { engine: 'ggml', ggmlGpuUuid: ' 0123abcd ' },
     diarization: { engine: 'something-else' }
-  };
+  });
   assert.deepEqual(resolveGeneralAppSettingsValue(settings, options), {
     transcriptionEngine: 'ggml',
-    keepFillers: false,
+    ggmlGpuUuid: '0123abcd',
+    diarizationEngine: 'standard'
+  });
+
+  const currentSettings: AppSettingsV1 = {
+    transcription: { engine: 'ggml', ggmlGpuUuid: ' 0123abcd ' },
+    diarization: { engine: 'something-else' }
+  };
+  assert.deepEqual(resolveGeneralAppSettingsValue(currentSettings, options), {
+    transcriptionEngine: 'ggml',
     ggmlGpuUuid: '0123abcd',
     diarizationEngine: 'standard'
   });

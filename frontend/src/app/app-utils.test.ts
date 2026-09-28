@@ -95,8 +95,6 @@ import {
   secretInputTypeValue,
   secretVisibilityIconValue,
   secretVisibilityLabelValue,
-  segmentRetranscribeTooltipValue,
-  segmentRetranscribeUnavailableReasonValue,
   selectedGpuAsrWarningValue,
   shouldShowVoiceInputShortCandidateHintValue,
   showProofreadSystemPromptEditorValue,
@@ -260,6 +258,12 @@ test('LLM prompt editor and backend option helpers preserve available selections
   ]);
   assert.deepEqual(llmBackendModeOptionsValue(true, true).map((option) => option.value), [
     'local_gguf', 'local_gguf_12b', 'lmstudio', 'ollama'
+  ]);
+  assert.deepEqual(llmBackendModeOptionsValue(true, false, true), [
+    { value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' }
+  ]);
+  assert.deepEqual(llmBackendModeOptionsValue(true, true, true).map((option) => option.value), [
+    'local_gguf_12b', 'lmstudio', 'ollama'
   ]);
   assert.equal(llmBackendSelectionValue('local_gguf', '12b'), 'local_gguf_12b');
   assert.equal(llmBackendSelectionValue('local_gguf', 'e4b'), 'local_gguf');
@@ -534,36 +538,17 @@ test('Editor and CPU voice-input memory helpers preserve thresholds and warnings
   assert.equal(editorVoiceInputDownloadButtonColorValue(false, 'low'), 'primary');
 });
 
-test('voice-input and segment-retranscription tooltips preserve condition priority', () => {
+test('voice-input tooltip preserves condition priority', () => {
   assert.equal(editorVoiceInputUnavailableTooltipValue(false), '音声入力パックの状態を確認中です...');
   assert.match(editorVoiceInputUnavailableTooltipValue(true), /モデルをダウンロード/);
+  assert.equal(
+    editorVoiceInputUnavailableTooltipValue(true, true),
+    '音声入力には文字起こし用のモデル（whisper.cpp）が必要です。設定画面のセットアップを完了してください'
+  );
+  assert.match(editorVoiceInputUnavailableTooltipValue(false, true), /whisper\.cpp.*確認中/);
   assert.equal(voiceInputButtonTooltipValue(false, '利用不可', true), '利用不可');
   assert.equal(voiceInputButtonTooltipValue(true, '利用不可', true), '録音を停止');
   assert.equal(voiceInputButtonTooltipValue(true, '利用不可', false), '音声入力');
-
-  const available = {
-    packChecked: true,
-    voiceInputAvailable: true,
-    retranscribeSupported: true,
-    cpuVoiceInputBuild: false,
-    playbackDisabled: false,
-    selectedAudioPath: '/audio.wav'
-  };
-  assert.match(segmentRetranscribeUnavailableReasonValue({ ...available, packChecked: false }) ?? '', /確認中/);
-  assert.match(segmentRetranscribeUnavailableReasonValue({ ...available, voiceInputAvailable: false }) ?? '', /モデルをダウンロード/);
-  assert.match(segmentRetranscribeUnavailableReasonValue({
-    ...available, retranscribeSupported: false, cpuVoiceInputBuild: true
-  }) ?? '', /ffmpeg が未導入/);
-  assert.match(segmentRetranscribeUnavailableReasonValue({
-    ...available, retranscribeSupported: false
-  }) ?? '', /利用できません/);
-  assert.match(segmentRetranscribeUnavailableReasonValue({
-    ...available, selectedAudioPath: ''
-  }) ?? '', /音声ファイルを読み込む/);
-  assert.equal(segmentRetranscribeUnavailableReasonValue(available), null);
-  assert.equal(segmentRetranscribeTooltipValue('利用不可', true), '利用不可');
-  assert.equal(segmentRetranscribeTooltipValue(null, true), '候補を生成中...');
-  assert.equal(segmentRetranscribeTooltipValue(null, false), 'この区間を別のAIで再文字起こしする');
 });
 
 test('result and transcription tab helpers preserve setup labels', () => {

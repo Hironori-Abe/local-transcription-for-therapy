@@ -230,6 +230,8 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 | 高精度 | Gemma 4 12B QAT + MTP | ✅（Vulkan） | CUDA / AMD / Vulkan | Rust で固定 revision から後からダウンロード（約7GB。Vulkan版は設定から取得） |
 
 - **Vulkan 版（feature `vulkan`）は 12B が既定かつ唯一の内蔵モデル**（2026-09 決定）。全体校正のすべての入口と Rust の `start_llm_server` で 12B を強制し、12B が未取得なら E4B へ切り替えず、設定画面からダウンロードするよう案内する。`get_proofread_model_tier` は保存マーカーに関係なく `12b` を返し、`set_proofread_model_tier` も `e4b` を `12b` として保存する。
+- **Vulkan 版の 12B は高速起動設定を既定にする**（`LLAMA_12B_FAST_FIT_ARGS` = `--fit-target 256 -ctk q8_0 -ctv q8_0`）。auto-fit の GPU 余白を既定の 1024MiB から 256MiB に減らし、KV キャッシュを 8bit にして、本体の層を多く GPU に載せる。RTX 4060 Laptop 8GB の実測で全体校正が約4割短縮（生成 36→60 tok/s。8bit 単独では効果なし、余白 512MiB では約2割短縮）。余白が小さいため、起動に失敗したら従来の設定で起動し直し、全体校正が失敗したら `LLAMA_12B_SAFE_RETRY_MARKER` を付けて返し、フロントが従来の設定で1回だけやり直す。いずれもアプリを閉じるまで従来の設定を使う（`LLAMA_12B_FAST_LAUNCH_DISABLED`）。CUDA 版・AMD 版の起動条件と、音声入力の起動には適用しない
+- **全体校正は、校正の前に会話のテーマを要約して添える**（Rust の `llm_overall_proofread.rs`、`Options.theme_summary`。Python の `llama_cpp` 経路は従来どおり）。全文を約4000字ずつ要約し、複数ならまとめ直して、システムプロンプトの末尾に「会話のテーマ（参考…）」として付ける。要約に失敗しても校正は続ける。要約には人名・呼び名・地名を書かせない（書かせると、校正で名前を要約中の表記へ書き換えた。10分の音声で確認）。10分の音声で約17秒延びる
 - **CUDA / AMD 版の既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
 - 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を Tauri command `download_gemma_12b` から Rust で取得する。ファイルの URL は commit 固定、`.part` から再開し、配置直前にサイズと SHA-256 を検証する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。CUDA / AMD / Vulkan いずれも本体 + MTP ドラフトを取得する。
 - **12B は CUDA / AMD / Vulkan 版で「llama-server 直起動」で動かす**（Vulkan 版の既定・唯一の内蔵校正モデル。E4B は Vulkan 以外）。

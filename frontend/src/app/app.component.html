@@ -959,7 +959,7 @@
             </ng-container>
 
             <ng-container *ngIf="runtimeAiProofreadBuild()">
-              <div class="section-separator"><span>校正用AIモデル</span></div>
+              <div class="section-separator"><span>{{ vulkanBuild() ? '全体校正用AIモデル' : '校正用AIモデル' }}</span></div>
               <div class="actions-row settings-llm-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
                   <mat-label>AI校正バックエンド</mat-label>
@@ -1028,8 +1028,9 @@
                   </mat-form-field>
                 </ng-container>
               </div>
-              <!-- LLM推論パラメータ行 -->
-              <div class="actions-row settings-llm-row settings-llm-inference-params-row">
+              <!-- LLM推論パラメータ行（行ごとの AI 句読点付与向け。Vulkan 版は句読点をルールで付け、
+                   全体校正の 12B は文脈長・並列数を固定しているため表示しない） -->
+              <div *ngIf="!vulkanBuild()" class="actions-row settings-llm-row settings-llm-inference-params-row">
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>コンテキスト長</mat-label>
                   <mat-select [disabled]="llmProofreadRunning()" [value]="llmNCtx()"
@@ -1132,11 +1133,11 @@
 
 出力例：
 入力:
-[1] Th: えーと今日はどんなことで来られましたか
-[2] Cl: はい、最近眠れなくてちょっと辛いです
+[1] Th: えーと、今日はどんなことで来られましたか？
+[2] Cl: はい、最近動機がして、仕事も給食してるんです。
 
 出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": "読点と「？」を追加"&#125;,&#123;"id": 2, "revised": "はい、最近眠れなくて、ちょっと辛いです。", "note": "読点と句点を追加"&#125;]
+[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
 &lt;turn|&gt;
 &lt;|turn&gt;user
 [テキストのリスト]
@@ -1174,11 +1175,11 @@
 
 出力例：
 入力:
-[1] Th: えーと今日はどんなことで来られましたか
-[2] Cl: はい、最近眠れなくてちょっと辛いです
+[1] Th: えーと、今日はどんなことで来られましたか？
+[2] Cl: はい、最近動機がして、仕事も給食してるんです。
 
 出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": "読点と「？」を追加"&#125;,&#123;"id": 2, "revised": "はい、最近眠れなくて、ちょっと辛いです。", "note": "読点と句点を追加"&#125;]
+[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
 &lt;turn|&gt;
 &lt;|turn&gt;user
 [テキストのリスト]
@@ -1214,11 +1215,11 @@
 
 ### 出力例
 入力:
-[1] Th: えーと今日はどんなことで来られましたか
-[2] Cl: はい、最近眠れなくてちょっと辛いです
+[1] Th: えーと、今日はどんなことで来られましたか？
+[2] Cl: はい、最近動機がして、仕事も給食してるんです。
 
 出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": "読点と「？」を追加"&#125;,&#123;"id": 2, "revised": "はい、最近眠れなくて、ちょっと辛いです。", "note": "読点と句点を追加"&#125;]
+[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
 
 [テキストのリスト]</pre>
                 </div>

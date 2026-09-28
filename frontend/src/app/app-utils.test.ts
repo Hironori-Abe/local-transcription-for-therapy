@@ -54,6 +54,7 @@ import {
   isVramOomErrorValue,
   levenshteinDistanceValue,
   llmBackendModeHintValue,
+  parseOverallProofreadSafeRetryValue,
   llmBackendModeOptionsValue,
   llmBackendSelectionValue,
   llmNCtxHintValue,
@@ -1165,4 +1166,15 @@ test('runtime build flags treat the vulkan variant as a GPU build with AI proofr
   });
   assert.equal(isBuildVariantValue('vulkan'), true);
   assert.equal(isBuildVariantValue('metal'), false);
+});
+
+test('parseOverallProofreadSafeRetryValue strips the 12B safe-retry marker', () => {
+  assert.deepEqual(parseOverallProofreadSafeRetryValue('[LOTT_12B_SAFE_RETRY] 接続が切れました'), {
+    retry: true,
+    message: '接続が切れました',
+  });
+  assert.deepEqual(parseOverallProofreadSafeRetryValue('全体校正に失敗しました。'), {
+    retry: false,
+    message: '全体校正に失敗しました。',
+  });
 });

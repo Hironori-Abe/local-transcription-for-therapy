@@ -148,6 +148,7 @@ import {
   isVramOomErrorValue,
   levenshteinDistanceValue,
   llmBackendModeHintValue,
+  parseOverallProofreadSafeRetryValue,
   llmBackendModeOptionsValue,
   llmBackendSelectionValue,
   llmNCtxHintValue,
@@ -3893,7 +3894,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.openOrRunOverallProofreadForTier(withConfirm, '12b');
   }
 
-  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b'): Promise<void> {
+  /**
+   * @param safeRetry 12B の高速起動設定で失敗したあと、従来の設定でやり直している回（やり直しは1回だけ）。
+   */
+  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b', safeRetry = false): Promise<void> {
     if (this.vulkanBuild()) {
       proofreadTier = '12b';
     }
@@ -3957,6 +3961,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
     // VRAM不足で並列処理数を下げる確認ダイアログを出した場合は、結果ダイアログを開かない
     let oomHandled = false;
+    // 12B の高速起動設定のまま失敗した場合は、従来の設定で1回だけやり直す（Rust がエンジンを止め、
+    // 次の起動から従来の設定を使う）。
+    let retryWithSafeLaunch = false;
     try {
       const response = await invoke<{ success: boolean; result?: OverallProofreadResultData; errorMessage?: string }>(
         'run_overall_proofread',
@@ -3976,8 +3983,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       );
 
       if (!response.success || !response.result) {
-        const msg = response.errorMessage ?? '全体校正に失敗しました。';
-        if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
+        const parsed = parseOverallProofreadSafeRetryValue(response.errorMessage ?? '全体校正に失敗しました。');
+        const msg = parsed.message;
+        if (parsed.retry && !safeRetry && !this.overallProofreadCanceling()) {
+          retryWithSafeLaunch = true;
+        } else if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
           oomHandled = true;
           this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
         } else {
@@ -4005,9 +4015,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       const wasCanceled = this.overallProofreadCanceling();
       this.overallProofreadRunning.set(false);
       this.overallProofreadCanceling.set(false);
-      if (!wasCanceled && !oomHandled && !this.amdGpuFailureDialog()) {
+      if (!wasCanceled && !oomHandled && !retryWithSafeLaunch && !this.amdGpuFailureDialog()) {
         this.overallProofreadDialogOpen.set(true);
       }
+    }
+    if (retryWithSafeLaunch) {
+      this.overallProofreadStatus.set('AI校正エンジンの設定を切り替えて、全体校正をやり直しています...');
+      await this.runOverallProofread(proofreadTier, true);
     }
   }
 
@@ -6072,6 +6086,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               this.overallProofreadStatus.set(
                 formatOverallProofreadProgressValue(this.overallProofreadProgressCurrent, total),
               );
+            } else if (!this.overallProofreadProgressStarted
+              && typeof payload.message === 'string' && payload.message.length > 0) {
+              // 校正前の会話テーマ要約（「会話のテーマを要約しています（1/2）...」など）
+              this.overallProofreadStatus.set(payload.message);
             }
             return;
           }

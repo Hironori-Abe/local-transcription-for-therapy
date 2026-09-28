@@ -16,6 +16,31 @@ use super::llm_proofread::{self, CancelCheck, Emitter, Failure, HttpTarget, Segm
 const BATCH_TARGET_CHARS: usize = 1000;
 const BATCH_MAX_SEGMENTS: usize = 20;
 
+/// 会話のテーマ要約。校正の前に全文（長ければ区切って）を要約し、システムプロンプトに添える。
+/// 同じ読みの誤変換（例: 動機→動悸）を、会話全体の話題から判断できるようにするため
+/// （scripts/proofread_gate_eval.py の評価で、テーマを添えると誤修正が減ることを確認）。
+/// 区切りの文字数は 12B の文脈長 8192（出力 600 トークンを含む）に収まるよう控えめにする。
+const THEME_CHUNK_CHARS: usize = 4000;
+const THEME_MAX_TOKENS: usize = 600;
+/// 要約が長すぎると各バッチのプロンプトを圧迫するため、この文字数で切る。
+const THEME_MAX_CHARS: usize = 600;
+const THEME_SUMMARY_SYSTEM: &str = concat!(
+    "あなたはカウンセリング・対話記録の内容を把握する係です。",
+    "文字起こし（誤変換を含むことがある）を読み、校正の手がかりになるよう、",
+    "会話のテーマ・話題の流れ・よく出てくる専門用語を、日本語で300字以内にまとめてください。",
+    "人名・呼び名・地名は書かないでください（校正で名前を書き換える原因になるため）。",
+    "推測で内容を足さないでください。"
+);
+const THEME_MERGE_SYSTEM: &str = concat!(
+    "あなたはカウンセリング・対話記録の内容を把握する係です。",
+    "同じ会話を区切って要約したものを渡すので、会話全体のテーマ・話題の流れ・よく出てくる専門用語を",
+    "日本語で300字以内にまとめ直してください。人名・呼び名・地名は書かないでください。"
+);
+const THEME_SECTION_HEADER: &str = concat!(
+    "\n\n会話のテーマ（参考。同じ読みの誤変換かどうかの判断にだけ使う。",
+    "テーマに合わせて内容・言葉・人名・呼び名・固有名詞を書き換えない）：\n"
+);
+
 const GEMMA4_OVERALL_FIXED_SUFFIX: &str = concat!(
     "\n\n出力ルール：\n",
     "- すべてのセグメントをJSON配列として返す\n",
@@ -24,11 +49,11 @@ const GEMMA4_OVERALL_FIXED_SUFFIX: &str = concat!(
     "- スキーマ: [{\"id\": <番号>, \"revised\": \"校正後テキスト\", \"note\": \"変更内容（変更なしは空文字）\"}]\n\n",
     "出力例：\n",
     "入力:\n",
-    "[1] Th: えーと今日はどんなことで来られましたか\n",
-    "[2] Cl: はい、最近眠れなくてちょっと辛いです\n\n",
+    "[1] Th: えーと、今日はどんなことで来られましたか？\n",
+    "[2] Cl: はい、最近動機がして、仕事も給食してるんです。\n\n",
     "出力:\n",
-    "[{\"id\": 1, \"revised\": \"えーと、今日はどんなことで来られましたか？\", \"note\": \"読点と「？」を追加\"},",
-    "{\"id\": 2, \"revised\": \"はい、最近眠れなくて、ちょっと辛いです。\", \"note\": \"読点と句点を追加\"}]"
+    "[{\"id\": 1, \"revised\": \"えーと、今日はどんなことで来られましたか？\", \"note\": \"\"},",
+    "{\"id\": 2, \"revised\": \"はい、最近動悸がして、仕事も休職してるんです。\", \"note\": \"「動機」→「動悸」、「給食」→「休職」\"}]"
 );
 
 const ORIGINAL_OVERALL_FIXED_SUFFIX: &str = concat!(
@@ -39,17 +64,17 @@ const ORIGINAL_OVERALL_FIXED_SUFFIX: &str = concat!(
     "- スキーマ: [{\"id\": <番号>, \"revised\": \"校正後テキスト\", \"note\": \"変更内容（変更なしは空文字）\"}]\n\n",
     "### 出力例\n",
     "入力:\n",
-    "[1] Th: えーと今日はどんなことで来られましたか\n",
-    "[2] Cl: はい、最近眠れなくてちょっと辛いです\n\n",
+    "[1] Th: えーと、今日はどんなことで来られましたか？\n",
+    "[2] Cl: はい、最近動機がして、仕事も給食してるんです。\n\n",
     "出力:\n",
-    "[{\"id\": 1, \"revised\": \"えーと、今日はどんなことで来られましたか？\", \"note\": \"読点と「？」を追加\"},",
-    "{\"id\": 2, \"revised\": \"はい、最近眠れなくて、ちょっと辛いです。\", \"note\": \"読点と句点を追加\"}]"
+    "[{\"id\": 1, \"revised\": \"えーと、今日はどんなことで来られましたか？\", \"note\": \"\"},",
+    "{\"id\": 2, \"revised\": \"はい、最近動悸がして、仕事も休職してるんです。\", \"note\": \"「動機」→「動悸」、「給食」→「休職」\"}]"
 );
 
 const DEFAULT_SYSTEM_INSTRUCTION: &str = concat!(
     "あなたは日本語のカウンセリング・対話記録の全体校正を行うアシスタントです。\n",
-    "以下の連続した発言を校正し、より自然で正確なテキストに整えてください。\n",
-    "積極的な校正を行い、次の観点から改善を提案してください：句読点の追加・修正、誤字脱字の修正、不自然な語尾・語順の改善、冗長表現の整理、文脈の流れを損なう表現の改善、一人の発話として不自然な文章の指摘（話者分離の誤りによって複数人の発言が混入しているような違和感がある場合）。\n",
+    "以下の連続した発言を校正してください。\n",
+    "次の観点から校正を提案してください：誤字脱字の修正、同じ読みの別の漢字への誤変換の修正（カウンセリングの文脈に合う漢字がある場合）、一人の発話として不自然な文章の指摘（話者分離の誤りによって複数人の発言が混入しているような違和感がある場合）。語尾・言い回し・語順・句読点は変えないこと。\n",
     "話者の意図・感情・内容は変えないこと。会話フィラーはそのまま残すこと。セグメントの分割・統合はしないこと。\n",
     "番号付きのすべてのテキストを校正し、以下のJSON配列形式のみで返答してください。説明・前置き・マークダウン形式は不要です。\n",
     "[{\"id\": <番号>, \"revised\": \"校正後テキスト\", \"note\": \"変更内容（変更なしは空文字）\"}]"
@@ -68,6 +93,8 @@ pub(crate) struct Options {
     pub(crate) fallback_to_first_model: bool,
     pub(crate) extra_payload: Option<Value>,
     pub(crate) prompt_templates_dir: Option<PathBuf>,
+    /// 校正の前に会話のテーマを要約し、システムプロンプトに添える。
+    pub(crate) theme_summary: bool,
 }
 
 struct BatchContext<'a> {
@@ -217,7 +244,7 @@ fn proofread_inner(
     } else {
         options.parallel.max(1).min(total_batches)
     };
-    let system_instruction = load_system_instruction(
+    let mut system_instruction = load_system_instruction(
         options.system_prompt.as_deref(),
         &options.prompt_type,
         options.prompt_templates_dir.as_deref(),
@@ -225,6 +252,33 @@ fn proofread_inner(
 
     if total_batches == 0 {
         return Ok(build_result_payload(&segments, &HashMap::new()));
+    }
+
+    if options.theme_summary {
+        // 要約は参考情報なので、失敗しても校正は続ける（中止だけは止める）。
+        match summarize_theme(
+            &segments,
+            &target,
+            &chat_url,
+            &chat_path,
+            &model,
+            options.extra_payload.as_ref(),
+            emitter,
+            cancelled,
+        ) {
+            Ok(Some(theme)) => {
+                system_instruction.push_str(THEME_SECTION_HEADER);
+                system_instruction.push_str(&theme);
+            }
+            Ok(None) => {}
+            Err(Failure::Cancelled) => return Err(Failure::Cancelled),
+            Err(error) => emit_overall_progress(
+                emitter,
+                format!("会話のテーマを要約できませんでした（要約なしで続けます）: {error}"),
+                None,
+                Some(total_segments),
+            ),
+        }
     }
 
     let shared_results = Arc::new(Mutex::new(HashMap::<i64, Value>::new()));
@@ -324,6 +378,117 @@ fn proofread_inner(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     Ok(build_result_payload(&segments, &results))
+}
+
+/// 全文を THEME_CHUNK_CHARS ごとに区切って要約し、区切りが複数ならまとめ直す。
+#[allow(clippy::too_many_arguments)]
+fn summarize_theme(
+    segments: &[Segment],
+    target: &HttpTarget,
+    chat_url: &str,
+    chat_path: &str,
+    model: &str,
+    extra_payload: Option<&Value>,
+    emitter: &Emitter,
+    cancelled: &CancelCheck,
+) -> Result<Option<String>, Failure> {
+    let lines: Vec<String> = segments
+        .iter()
+        .filter(|segment| !segment.text.trim().is_empty())
+        .map(overall_segment_text)
+        .collect();
+    let chunks = chunk_lines_by_chars(&lines, THEME_CHUNK_CHARS);
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    let ask = |system: &str, text: &str| -> Result<String, Failure> {
+        llm_proofread::check_cancelled(cancelled)?;
+        let mut payload = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": text}
+            ],
+            "temperature": 0.2,
+            "max_tokens": THEME_MAX_TOKENS,
+        });
+        if let (Some(extra), Some(payload_obj)) = (extra_payload, payload.as_object_mut()) {
+            if let Some(extra_obj) = extra.as_object() {
+                for (key, value) in extra_obj {
+                    payload_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        let text = llm_proofread::stream_llm_chat_overall(
+            target,
+            chat_url,
+            chat_path,
+            &payload,
+            Duration::from_secs(60),
+            cancelled.clone(),
+        )?;
+        Ok(text.trim().to_string())
+    };
+    let total = chunks.len();
+    let mut parts = Vec::with_capacity(total);
+    for (index, chunk) in chunks.iter().enumerate() {
+        let label = if total > 1 {
+            format!("会話のテーマを要約しています（{}/{total}）...", index + 1)
+        } else {
+            "会話のテーマを要約しています...".to_string()
+        };
+        emit_overall_progress(emitter, label, None, None);
+        parts.push(ask(THEME_SUMMARY_SYSTEM, chunk)?);
+    }
+    let theme = if parts.len() == 1 {
+        parts.pop().unwrap_or_default()
+    } else {
+        emit_overall_progress(emitter, "要約をまとめています...".to_string(), None, None);
+        let joined = parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| format!("【区切り {}】\n{part}", index + 1))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        ask(THEME_MERGE_SYSTEM, &joined)?
+    };
+    Ok(clean_theme(&theme))
+}
+
+/// 行を順に詰め、max_chars を超える手前で区切る（1行が長すぎる場合はその行だけで1区切り）。
+fn chunk_lines_by_chars(lines: &[String], max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for line in lines {
+        let line_chars = line.chars().count() + 1;
+        if !current.is_empty() && current_chars + line_chars > max_chars {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current.push_str(line);
+        current.push('\n');
+        current_chars += line_chars;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// 要約から見出しや空行を整え、長すぎれば切る。中身が無ければ None。
+fn clean_theme(theme: &str) -> Option<String> {
+    let text = llm_proofread::normalize_completion_text(theme);
+    let text = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(THEME_MAX_CHARS).collect())
 }
 
 fn store_batch_result(
@@ -867,6 +1032,104 @@ mod tests {
     }
 
     #[test]
+    fn theme_chunks_keep_whole_lines_within_limit() {
+        let lines = vec!["あ".repeat(6), "い".repeat(6), "う".repeat(20)];
+        let chunks = chunk_lines_by_chars(&lines, 15);
+        assert_eq!(
+            chunks,
+            vec![
+                format!("{}\n{}\n", "あ".repeat(6), "い".repeat(6)),
+                format!("{}\n", "う".repeat(20)),
+            ]
+        );
+        assert!(chunk_lines_by_chars(&[], 15).is_empty());
+    }
+
+    #[test]
+    fn clean_theme_drops_blank_lines_and_caps_length() {
+        assert_eq!(
+            clean_theme("  休職中の相談。\n\n  動悸の話題。 \n"),
+            Some("休職中の相談。\n動悸の話題。".to_string())
+        );
+        assert_eq!(clean_theme(" \n "), None);
+        assert_eq!(
+            clean_theme(&"あ".repeat(THEME_MAX_CHARS + 50))
+                .map(|t| t.chars().count()),
+            Some(THEME_MAX_CHARS)
+        );
+    }
+
+    /// 実際の llama-server（12B など）に要約付きの全体校正を当てて、要約と所要時間を表示する。
+    /// 例: LOTT_OVERALL_E2E_URL=http://127.0.0.1:18093/v1 cargo test --lib theme_summary_end_to_end -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn theme_summary_end_to_end() {
+        let url = std::env::var("LOTT_OVERALL_E2E_URL").expect("LOTT_OVERALL_E2E_URL");
+        let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("demo_data")
+            .join("proofread-eval")
+            .join("inputs")
+            .join(std::env::var("LOTT_OVERALL_E2E_INPUT").unwrap_or_else(|_| "10minutes.json".into()));
+        let data: Value =
+            serde_json::from_str(&fs::read_to_string(input).expect("read input")).expect("json");
+        let segments: Vec<Value> = data["segments"]
+            .as_array()
+            .expect("segments")
+            .iter()
+            .enumerate()
+            .map(|(i, s)| json!({"id": i, "text": s["text"], "speaker": s["speaker"]}))
+            .collect();
+        let prompts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&prompts);
+        let emitter = Emitter::new(move |payload| {
+            if let Some(message) = payload.get("message").and_then(Value::as_str) {
+                if message.contains("テーマ") || message.contains("要約") {
+                    sink.lock().unwrap().push(message.to_string());
+                }
+            }
+        });
+        let started = std::time::Instant::now();
+        let result = proofread(
+            &segments,
+            Options {
+                base_url: url,
+                model: "model".to_string(),
+                provider_label: "AI校正エンジン".to_string(),
+                system_prompt: None,
+                prompt_type: "gemma4".to_string(),
+                parallel: 1,
+                require_model_list: false,
+                fallback_to_first_model: true,
+                extra_payload: Some(json!({"chat_template_kwargs": {"enable_thinking": false}})),
+                prompt_templates_dir: Some(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("..")
+                        .join("python_sidecar")
+                        .join("prompt_templates")
+                        .join("proofread"),
+                ),
+                theme_summary: std::env::var_os("LOTT_OVERALL_E2E_NO_THEME").is_none(),
+            },
+            &emitter,
+            Arc::new(|| false),
+        )
+        .expect("proofread");
+        println!("elapsed: {:.1}s", started.elapsed().as_secs_f64());
+        println!("progress: {:?}", prompts.lock().unwrap());
+        println!(
+            "changed: {} / {}",
+            result["changedCount"],
+            segments.len()
+        );
+        for item in result["items"].as_array().unwrap() {
+            if item["changed"] == json!(true) {
+                println!("- {} → {}  ({})", item["originalText"], item["revisedText"], item["note"]);
+            }
+        }
+    }
+
+    #[test]
     fn cancellation_is_checked_before_request() {
         let emitter = Emitter::new(|_| {});
         let cancelled: CancelCheck = Arc::new(|| true);
@@ -883,6 +1146,7 @@ mod tests {
                 fallback_to_first_model: false,
                 extra_payload: None,
                 prompt_templates_dir: None,
+                theme_summary: false,
             },
             &emitter,
             cancelled,
@@ -1212,6 +1476,7 @@ mod tests {
                 extra_payload: (backend == "llama_server")
                     .then(|| json!({"chat_template_kwargs": {"enable_thinking": false}})),
                 prompt_templates_dir: Some(template_dir),
+                theme_summary: false,
             },
             &emitter,
             Arc::new(|| false),
@@ -1336,6 +1601,7 @@ mod tests {
                 fallback_to_first_model: false,
                 extra_payload: None,
                 prompt_templates_dir: None,
+                theme_summary: false,
             },
             &emitter,
             Arc::new(|| false),

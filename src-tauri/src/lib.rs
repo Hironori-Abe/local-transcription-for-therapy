@@ -1290,6 +1290,7 @@ fn try_start_llama_server_cuda(
     ctx_size: u32,
     gpu: LlamaGpu,
     autofit: bool,
+    fast_fit: bool,
 ) -> Result<(Child, Arc<AtomicBool>), String> {
     #[cfg(unix)]
     {
@@ -1342,6 +1343,9 @@ fn try_start_llama_server_cuda(
         // auto-fit: VRAM に収まる分だけ GPU、残りは CPU へ自動配置（-ngl は指定しない）。
         // 12B の gemma4-assistant ドラフトを GPU に載せても auto-fit 経由なら落ちない。
         cmd.arg("--fit").arg("on");
+        if fast_fit {
+            cmd.args(LLAMA_12B_FAST_FIT_ARGS);
+        }
     } else {
         cmd.arg("-ngl").arg("99"); // 本体の全レイヤーを GPU へオフロード（E4B 既定）
     }
@@ -1810,6 +1814,19 @@ const LLM_DEFAULT_MODEL: &str = "gemma-4-E4B-it-qat";
 // auto-fit で収まる安全値（実測で 8192 は VRAM 約8.0GB/8.5GB に収まり MTP も有効）。
 // 校正は話者ごと最大40セグメントのバッチで、短い発話なら 8192 トークンに十分収まる。
 const AMD_12B_CTX_SIZE: u32 = 8192;
+/// Vulkan 版の 12B を速く動かす起動設定（auto-fit の GPU 余白を既定の 1024MiB から 256MiB に減らし、
+/// KV キャッシュを 8bit にする）。空いた VRAM に本体の層を多く載せられ、CPU 側の計算待ちが減る。
+/// RTX 4060 Laptop 8GB の実測で、全体校正の所要時間が約4割短くなった（生成 36→60 tok/s）。
+/// 余白が小さいため、校正中に他のアプリが VRAM を増やすと足りなくなることがある。
+/// 起動や処理に失敗したら、アプリを閉じるまで従来の設定に戻す（`LLAMA_12B_FAST_LAUNCH_DISABLED`）。
+const LLAMA_12B_FAST_FIT_ARGS: [&str; 6] = ["--fit-target", "256", "-ctk", "q8_0", "-ctv", "q8_0"];
+/// 12B の高速起動設定で失敗したら true にし、以後は従来の設定で起動する。
+static LLAMA_12B_FAST_LAUNCH_DISABLED: AtomicBool = AtomicBool::new(false);
+/// 起動中の校正用サーバーが高速起動設定で動いているか（処理の失敗時に従来の設定へ戻すため）。
+static LLAMA_12B_FAST_LAUNCH_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 全体校正が高速起動設定のまま失敗したときにエラー文へ付ける目印。フロントはこれを見て、
+/// 従来の設定でエンジンを起動し直し、1回だけやり直す。
+const LLAMA_12B_SAFE_RETRY_MARKER: &str = "[LOTT_12B_SAFE_RETRY]";
 // 既定（標準）モデル: Gemma 4 E4B QAT。従来どおりのデフォルト経路。
 const GEMMA_LLM_MODEL_DIR: &str = "gemma-4-e4b-it";
 const GEMMA_MAIN_GGUF_FILENAME: &str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
@@ -2667,6 +2684,7 @@ fn start_cuda_llama_blocking(
     ctx_size: u32,
     gpu: LlamaGpu,
     autofit: bool,
+    fast_fit: bool,
     child_arc: &Arc<Mutex<Option<Child>>>,
     mode_arc: &Arc<AtomicU8>,
 ) -> Result<(), String> {
@@ -2680,6 +2698,7 @@ fn start_cuda_llama_blocking(
         ctx_size,
         gpu,
         autofit,
+        fast_fit,
     ) {
         Ok(result) => result,
         Err(error) => {
@@ -2868,22 +2887,39 @@ async fn start_llm_server(
         } else {
             (n_parallel, ctx_size)
         };
+        // Vulkan 版の 12B は高速起動設定（LLAMA_12B_FAST_FIT_ARGS）を既定にし、失敗したら従来の設定で起動し直す。
+        let fast_fit =
+            vulkan_build && is_12b && !LLAMA_12B_FAST_LAUNCH_DISABLED.load(Ordering::Relaxed);
         tauri::async_runtime::spawn_blocking(move || {
             mode_arc.store(1, Ordering::Relaxed);
             parallel_arc.store(n_parallel.min(255) as u8, Ordering::Relaxed);
-            start_cuda_llama_blocking(
-                &bin,
-                &mpath,
-                mtp_path.as_deref(),
-                None, // 校正は mmproj 無し
-                resolved_port,
-                n_parallel,
-                ctx_size,
-                gpu,
-                is_12b,
-                &child_arc,
-                &mode_arc,
-            )?;
+            LLAMA_12B_FAST_LAUNCH_ACTIVE.store(false, Ordering::Relaxed);
+            let start = |fast: bool| {
+                start_cuda_llama_blocking(
+                    &bin,
+                    &mpath,
+                    mtp_path.as_deref(),
+                    None, // 校正は mmproj 無し
+                    resolved_port,
+                    n_parallel,
+                    ctx_size,
+                    gpu,
+                    is_12b,
+                    fast,
+                    &child_arc,
+                    &mode_arc,
+                )
+            };
+            match start(fast_fit) {
+                Ok(()) => LLAMA_12B_FAST_LAUNCH_ACTIVE.store(fast_fit, Ordering::Relaxed),
+                Err(error) if fast_fit => {
+                    eprintln!("[LoTT][llm] 12B の高速起動設定で起動できなかったため、従来の設定で起動し直します: {error}");
+                    LLAMA_12B_FAST_LAUNCH_DISABLED.store(true, Ordering::Relaxed);
+                    mode_arc.store(1, Ordering::Relaxed);
+                    start(false)?;
+                }
+                Err(error) => return Err(error),
+            }
             purpose_arc.store(LLM_PURPOSE_PROOFREAD, Ordering::Relaxed);
             Ok("started".to_string())
         })
@@ -3279,6 +3315,7 @@ fn start_full_voice_input_server_blocking(
             VOICE_INPUT_GPU_CTX_SIZE,
             LlamaGpu::Vulkan(device.map(|d| d.index)),
             true, // autofit
+            false, // 高速起動設定は校正の 12B 専用
             child_arc,
             mode_arc,
         )
@@ -3309,6 +3346,7 @@ fn start_full_voice_input_server_blocking(
                 VOICE_INPUT_GPU_CTX_SIZE,
                 LlamaGpu::Cuda(None),
                 true, // autofit
+                false, // 高速起動設定は校正の 12B 専用
                 child_arc,
                 mode_arc,
             )
@@ -15192,6 +15230,8 @@ fn run_overall_proofread_blocking(
                 "chat_template_kwargs": {"enable_thinking": false}
             })),
             prompt_templates_dir,
+            // 会話のテーマを要約してから校正する（Rust 経路のみ。Python の llama_cpp 経路は従来どおり）。
+            theme_summary: true,
         };
 
         emit_progress(
@@ -15266,7 +15306,11 @@ fn run_overall_proofread_blocking(
                 })
             }
             Err(message) => {
-                let message = tag_vram_oom_if_present(message.clone(), &message, "");
+                let mut message = tag_vram_oom_if_present(message.clone(), &message, "");
+                if is_llama_server && LLAMA_12B_FAST_LAUNCH_ACTIVE.swap(false, Ordering::Relaxed) {
+                    LLAMA_12B_FAST_LAUNCH_DISABLED.store(true, Ordering::Relaxed);
+                    message = format!("{LLAMA_12B_SAFE_RETRY_MARKER} {message}");
+                }
                 Ok(OverallProofreadResponse {
                     success: false,
                     result: None,

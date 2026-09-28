@@ -794,6 +794,17 @@ export function isJapaneseLanguageValue(language: string | null | undefined): bo
   return (language ?? 'ja').toLowerCase() === 'ja';
 }
 
+/** Rust の全体校正が「12B の高速起動設定のまま失敗した」ときにエラー文へ付ける目印（lib.rs と同じ文字列）。 */
+export const LLAMA_12B_SAFE_RETRY_MARKER = '[LOTT_12B_SAFE_RETRY]';
+
+/** エラー文から目印を取り除き、従来の設定でやり直すべきかを返す。 */
+export function parseOverallProofreadSafeRetryValue(message: string): { retry: boolean; message: string } {
+  if (!message.includes(LLAMA_12B_SAFE_RETRY_MARKER)) {
+    return { retry: false, message };
+  }
+  return { retry: true, message: message.split(LLAMA_12B_SAFE_RETRY_MARKER).join('').trim() };
+}
+
 export function llmBackendModeHintValue(
   backendMode: string,
   proofreadModelTier: 'e4b' | '12b',

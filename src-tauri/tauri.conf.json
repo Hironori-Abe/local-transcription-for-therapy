@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev.bat",
     "beforeBuildCommand": "npm.cmd --prefix frontend run build",
-    "devUrl": "http://localhost:4200",
+    "devUrl": "http://127.0.0.1:4200",
     "frontendDist": "../frontend/dist/lott/browser"
   },
   "app": {

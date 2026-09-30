@@ -389,7 +389,13 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
         fi
       done
       [[ -n "$out" ]] || out="$APPIMAGE_DIR/${product}_${app_version}_amd64.AppImage"
-      removed="$(find "$appdir" -iname 'libwayland-*' -print -delete 2>/dev/null | wc -l)"
+      # ライブラリ本体とシンボリックリンクだけを消す。usr/share/doc/libwayland-*（著作権表示）は
+      # 空でないディレクトリなので -delete が失敗し、set -e で黙って止まっていた。
+      removed="$(find "$appdir" \( -type f -o -type l \) -iname 'libwayland-*.so*' -print -delete | wc -l)"
+      # linuxdeploy はエンジンの依存をたどって usr/lib へ libvulkan.so.1 も複写する。AppRun が
+      # usr/lib を LD_LIBRARY_PATH に入れるため、残すとホストの新しいローダーより優先されてしまう。
+      # ローダーは speech-engines/vulkan-loader の予備だけにする（無いときだけアプリが使う）。
+      find "$appdir/usr/lib" -maxdepth 1 \( -type f -o -type l \) -name 'libvulkan.so*' -print -delete
 
       # --- ホストの /bin/sh を壊す readline が AppDir に無いことの検査 ---
       # AppRun は $APPDIR/usr/lib を LD_LIBRARY_PATH 先頭へ入れ、それが子・孫プロセスまで

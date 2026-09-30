@@ -978,15 +978,6 @@ where
     overrides
 }
 
-/// `spawn()` して待たない子プロセスをゾンビのまま残さないよう、回収用スレッドを立てる。
-/// （`xdg-open` のようにアプリ側で終了コードを使わないケース向け）
-#[cfg(all(unix, not(target_os = "macos")))]
-fn reap_detached_child(mut child: Child) {
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-}
-
 #[derive(Copy, Clone)]
 enum RunningTaskKind {
     Transcription,

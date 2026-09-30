@@ -1,6 +1,6 @@
 # Linux配布ビルド（Full / Editor）
 
-> **状態: 未検証。** ここに書いた構成・手順は Stage 3 でスクリプトを書き直したものですが、Linux 実機でのビルド・起動はまだ行っていません（Linux 環境が無いため）。実機で確認できた項目から順に、この文書の「未検証事項」を更新してください。Windows の手順は [release-build-windows.md](release-build-windows.md) を参照してください。
+> **状態: 一部検証済み。** Docker 経路での Full / Editor のビルド、AppImage の起動、同梱エンジンの CPU 実行はWindows 上の WSL2（Ubuntu 26.04）で確認済み（2026-09-30）。Linux 実機（GPU・各ディストリビューション）での確認はまだで、下の「未検証事項」に残しています。Windows の手順は [release-build-windows.md](release-build-windows.md) を参照してください。
 
 ## 構成
 
@@ -99,13 +99,25 @@ Full のトークンは Windows と同じく `vulkan` です。
   - LGPL 構成 ffmpeg（Full のみ）
 - `--enable-gpl` / `--enable-nonfree` などを含む ffmpeg、GPL の GStreamer プラグインは配布物に含めません。
 
+## 確認済み事項（Windows 上の WSL2（Ubuntu 26.04）（2026-09-30））
+
+- Docker 経路で Full / Editor の deb と AppImage がビルドでき、GStreamer・libreadline・Vulkan ローダーの各検査が通ること
+- 同梱の libvulkan1 は 1.3.275、WebKitGTK は 2.52.6（CachyOS / NVIDIA で FORCE_SHM の効果を確かめた版と同じ）
+- 展開した AppImage の whisper-cli / nemo-speech / ffmpeg が、共有ライブラリの不足なく CPU で動くこと（15秒の音声で文字起こし・話者分離）
+- AppImage のアプリが起動し、GPU が無い場合の CPU 案内と初回セットアップ画面が表示されること
+
+WSL の最小構成の Ubuntu には、通常のデスクトップ環境なら入っている次の部品が無く、そのままでは起動できなかった（試験のときだけ別途用意した）。AppImage はこれらを同梱しない方針（ホストの Mesa・グラフィックスと衝突させないため）なので、最小構成のホストでは導入が必要になる。
+
+- `libwayland-server.so.0`（Ubuntu: `libwayland-server0`）
+- `libGLESv2.so.2`（Ubuntu: `libgles2`）
+- 日本語フォント（例: `fonts-noto-cjk`）。無いと画面の日本語が □ になる
+
 ## 未検証事項
 
-Linux 実機でのビルド・起動は未実施です。実機で次を確認してください。
+実機で次を確認してください。
 
-- Docker 経路で Full / Editor の deb と AppImage がビルドできること（各種検査が通ること）
-- AppImage / deb の起動、ファイル選択（ポータル）、音声の再生（wav / mp3 / flac / ogg / m4a）
-- `libvulkan.so.1` がある環境で、GPU（Mesa / NVIDIA）と CPU の両方でエンジンが動くこと
+- AppImage / deb の、実機のデスクトップ環境での起動、ファイル選択（ポータル）、音声の再生（wav / mp3 / flac / ogg / m4a）
+- `libvulkan.so.1` がある環境で、GPU（Mesa / NVIDIA）でエンジンが動くこと（WSL には GPU 用の Vulkan ドライバーが無く、CPU でしか確認できていない）
 - `libvulkan.so.1` が無い環境の AppImage で、同梱フォールバックにより CPU 実行でエンジンが起動すること（起動ログに `同梱の libvulkan.so.1 を LD_LIBRARY_PATH に追加しました` が出ること）
 - NVIDIA プロプライエタリドライバー環境で、ビルドログの `libwebkit2gtk-4.1-0` の版が `WEBKIT_DMABUF_RENDERER_FORCE_SHM` に対応し、起動・スクロールが問題ないこと
 - Wayland / X11 と日本語入力（fcitx5 など）

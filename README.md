@@ -45,7 +45,7 @@ GPU が複数ある PC では、内蔵 GPU 以外で VRAM が最大の GPU を�
 
 ## 動作環境
 
-- Windows 10 / 11 64bit、または Linux 64bit（x86_64。`.deb` / AppImage。試験的・未検証）
+- Windows 10 / 11 64bit、または Linux 64bit（x86_64。`.deb` / AppImage。試験的。Linux 実機での GPU 動作は未検証）
 - Linux では、CPU で動かすだけならホストの Vulkan ローダー（`libvulkan.so.1`。Ubuntu / Debian では `libvulkan1`）は必須ではありません（無い場合は同梱のフォールバックを使います。`.deb` は自動で導入します）。GPU を使うには、ホストのローダーと、Mesa または NVIDIA の Vulkan ドライバーも必要です（無い場合は CPU で処理します）
 - GPU 利用時: NVIDIA / AMD / Intel の GPU と、Vulkan に対応した最新のGPUドライバー（CUDA Toolkit・cuDNN は不要）
 - GPU ドライバーが入っていない・古い場合は、起動時のダイアログとバナーでドライバーの導入・更新を案内します（Windows のみ。Linux では表示しません）
@@ -104,7 +104,7 @@ Full 版は、Vulkan に対応した GPU が見つからない場合、自動的
 - ggml 音声エンジンの設計: [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
 - トラブルシューティング: [docs/troubleshooting.md](docs/troubleshooting.md)
 - 配布ビルド（Windows NSIS）: [docs/release-build-windows.md](docs/release-build-windows.md)
-- 配布ビルド（Linux deb / AppImage・未検証）: [docs/release-build-linux.md](docs/release-build-linux.md)
+- 配布ビルド（Linux deb / AppImage・試験的）: [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## ライセンス
 

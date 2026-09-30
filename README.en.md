@@ -49,7 +49,7 @@ On PCs with multiple GPUs, the audio engines automatically use the GPU with the 
 
 ## Requirements
 
-- Windows 10 / 11 64-bit, or 64-bit Linux (x86_64; `.deb` / AppImage; experimental and unverified)
+- Windows 10 / 11 64-bit, or 64-bit Linux (x86_64; `.deb` / AppImage; experimental; GPU operation on real Linux hardware is not yet verified)
 - On Linux, the host Vulkan loader (`libvulkan.so.1`; the `libvulkan1` package on Ubuntu / Debian) is no longer strictly required for CPU-only operation (a bundled fallback is used when it is missing; the `.deb` installs it automatically). To use a GPU you need the host loader plus a Mesa or NVIDIA Vulkan driver (without one, processing runs on the CPU)
 - To use a GPU: an NVIDIA / AMD / Intel GPU with an up-to-date GPU driver that supports Vulkan (no CUDA Toolkit or cuDNN is needed)
 - If the GPU driver is missing or outdated, a startup dialog and a banner tell you to install or update it (Windows only; not shown on Linux)
@@ -108,7 +108,7 @@ Use the button at the left of the tab row to cycle among System (default), Light
 - ggml speech engine design (Japanese): [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Distribution builds, Windows NSIS: [docs/release-build-windows.md](docs/release-build-windows.md)
-- Linux distribution build (deb / AppImage; unverified): [docs/release-build-linux.md](docs/release-build-linux.md)
+- Linux distribution build (deb / AppImage; experimental): [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## License
 

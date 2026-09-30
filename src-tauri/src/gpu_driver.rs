@@ -22,6 +22,7 @@ pub struct DisplayAdapter {
 }
 
 /// PCI のハードウェア ID（`PCI\VEN_10DE&DEV_...`）から GPU メーカーを読む。
+#[cfg(any(target_os = "windows", test))]
 pub fn vendor_from_hardware_ids(ids: &[String]) -> Option<&'static str> {
     ids.iter().find_map(|id| {
         let upper = id.to_ascii_uppercase();
@@ -36,6 +37,7 @@ pub fn vendor_from_hardware_ids(ids: &[String]) -> Option<&'static str> {
 }
 
 /// 互換 ID（`PCI\CC_0300` など）から、PCI の表示装置（クラスコード 03）かを判定する。
+#[cfg(any(target_os = "windows", test))]
 pub fn is_display_controller(compatible_ids: &[String]) -> bool {
     compatible_ids
         .iter()
@@ -43,6 +45,7 @@ pub fn is_display_controller(compatible_ids: &[String]) -> bool {
 }
 
 /// ドライバーが入っていないかを判定する（問題コードあり、サービス未設定、または BasicDisplay）。
+#[cfg(any(target_os = "windows", test))]
 pub fn driver_is_missing(problem_code: u32, service: Option<&str>) -> bool {
     problem_code != 0
         || match service.map(str::trim) {

@@ -113,7 +113,7 @@ scripts\run-dev-editor.bat   rem Editor 版
 
 ## Setup and Run (Ubuntu / Linux)
 
-Linux は Full 版・Editor 版とも deb + AppImage で配布する。**Linux 実機でのビルド・起動は未検証**（Linux 環境が無いため。検証できた項目から本書を更新する）。Python・LLM は使わない。
+Linux は Full 版・Editor 版とも deb + AppImage で配布する。Docker でのビルド、AppImage の起動、同梱エンジンの CPU 実行は WSL2（Ubuntu 26.04）で確認済み（2026-09-30）。**Linux 実機での GPU 実行・各ディストリビューションでの動作は未検証**（`docs/release-build-linux.md`）。Python・LLM は使わない。
 
 推奨フロー:
 
@@ -197,7 +197,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 - **ホスト側コマンド（`xdg-open` / `curl` / `tar` / `kill` / PATH 上の ffmpeg など）を起動するときは `apply_host_command_env` を必ず呼ぶ**。`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` / `G*_MODULE*` / `PYTHONHOME` 等を子プロセス環境から取り除く（AppImage 以外では no-op）。ライブラリ単位のもぐら叩きにせず、この境界で塞ぐ
 - **同梱バイナリ（同梱 ffmpeg・ggml 音声エンジン）には適用しない**。AppDir 内のライブラリが必要で、剥がすと動かなくなる
 - 過去の 0.9.8 では同梱 Python の `readline` 拡張モジュールが `libreadline.so.8` を AppDir へ引き込んでいた。Python を同梱しなくなったため通常は混入しない。`setup-build-tools-linux.sh` の `libreadline.so.8` チェックは、もう除外処理ではなく**検出のための検査**（残っていればビルドを落とす）
-- `spawn()` して待たない子プロセス（`xdg-open`）は `reap_detached_child` で回収する。放置するとゾンビが積もり、別の不具合の切り分けを濁す
+- 外部リンクを開く `xdg-open` の呼び出しは、外部サイトを開くボタンの削除とともに無くなった。今後 `spawn()` して待たない子プロセスを足す場合は、ゾンビが積もらないよう回収用スレッドで `wait()` する
 
 ## Proofreading Policy
 
@@ -264,7 +264,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ## Distribution Strategy
 
-**現行方針（2026-09-29）: 配布は Full 版と Editor 版の2つ。Windows（NSIS）と Linux（deb + AppImage）を対象とする。Linux は Docker 経路でビルドする構成まで書き直したが、実機でのビルド・起動は未検証。** 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）で動かし、GPU が無い PC では CPU で動かす。LLM・Python は含めない。CUDA 版・AMD (ROCm) 版・CPU 版は削除した。
+**現行方針（2026-09-29）: 配布は Full 版と Editor 版の2つ。Windows（NSIS）と Linux（deb + AppImage）を対象とする。Linux は Docker 経路でのビルドと AppImage の起動を WSL2 で確認済み。実機での GPU 実行は未検証。** 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）で動かし、GPU が無い PC では CPU で動かす。LLM・Python は含めない。CUDA 版・AMD (ROCm) 版・CPU 版は削除した。
 
 1. Full version（**主配布**。旧称「Vulkan 版」）
    - identifier `net.gakkousya.lott`。文字起こし（whisper.cpp）・話者分離（NeMo-Speech.cpp + Nemotron-3-Diarization）・ルールベース句読点付与・音声入力を含む

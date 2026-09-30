@@ -1,206 +1,55 @@
 @echo off
 chcp 65001 > nul
 setlocal EnableExtensions
+set "HOLD_ON_EXIT=1"
+if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
 
-cd /d "%~dp0\.."
+REM Vulkan development launcher for NVIDIA, AMD, and Intel.
+REM Speech engines: python_sidecar\speech-engines.
+REM Setup commands:
+REM   powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
+REM   powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
+cd /d "%~dp0.."
 
-call "%~dp0sanitize-dev-env.bat" nvidia
-if errorlevel 1 goto :err_environment
-
-if /I not "%LOTT_DEV_VARIANT%"=="nvidia" goto :err_entrypoint
-set "LOTT_TORCH_BACKEND=cuda"
-
-if not defined PYTHON_BIN set "PYTHON_BIN=py"
-if not defined LOTT_NVIDIA_DEV_PYTHON_BIN if exist ".venv312-nvidia\Scripts\python.exe" set "PYTHON_BIN=%cd%\.venv312-nvidia\Scripts\python.exe"
-set "CUDA_HINT_1=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin"
-set "CUDA_HINT_2=C:\Program Files\NVIDIA\CUDNN\v9.20\bin\12.9\x64"
-set "EMULATION_MODE=none"
-if not "%LOTT_DEV_EMULATION_MODE%"=="" set "EMULATION_MODE=%LOTT_DEV_EMULATION_MODE%"
-if not "%RUN_DEV_EMULATION_MODE%"=="" set "EMULATION_MODE=%RUN_DEV_EMULATION_MODE%"
-if /I not "%EMULATION_MODE%"=="no_cuda" if /I not "%EMULATION_MODE%"=="missing_community1" set "EMULATION_MODE=none"
-set "LOTT_DEV_EMULATION_MODE=%EMULATION_MODE%"
+if not exist "python_sidecar\speech-engines\whisper\bin\whisper-cli.exe" goto :err_engines
+if not exist "python_sidecar\speech-engines\nemo\bin\nemo-speech.exe" goto :err_engines
 if "%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%"=="" set "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=1800"
-set "EMULATION_STATE_FILE=%cd%\.dev-runtime-emulation.env"
-
-(
-  echo # LoTT dev emulation flags
-  echo LOTT_DEV_EMULATION_MODE=%EMULATION_MODE%
-) > "%EMULATION_STATE_FILE%"
 
 where npm >nul 2>&1
 if errorlevel 1 goto :err_npm
 
-if not exist "%PYTHON_BIN%" (
-  where %PYTHON_BIN% >nul 2>&1
-  if errorlevel 1 goto :err_py
-)
-
-where cargo >nul 2>&1
-if errorlevel 1 goto :err_cargo
-
-echo Python preflight:
-call "%PYTHON_BIN%" -c "import sys; print('executable=', sys.executable); print('version=', sys.version)"
-if errorlevel 1 goto :err_py_preflight
-set "PYTHON_VERSION="
-set "PYTHON_MAJOR_MINOR="
-for /f "tokens=2" %%V in ('"%PYTHON_BIN%" -VV 2^>nul') do if not defined PYTHON_VERSION set "PYTHON_VERSION=%%V"
-for /f "tokens=1,2 delims=." %%A in ("%PYTHON_VERSION%") do set "PYTHON_MAJOR_MINOR=%%A.%%B"
-if not "%PYTHON_MAJOR_MINOR%"=="3.12" goto :err_python_version
-
-set "CUDA_READY=1"
-if /I "%EMULATION_MODE%"=="no_cuda" (
-  echo [INFO] LOTT_DEV_EMULATION_MODE=no_cuda
-  echo [INFO] Emulating a machine without CUDA support.
-  set "CUDA_READY=0"
-) else (
-  echo CUDA DLL preflight:
-  where.exe cublas64_12.dll >nul 2>&1
-  if errorlevel 1 (
-    echo [WARN] cublas64_12.dll is not visible on PATH in this terminal.
-    echo        Add this directory to PATH, for example:
-    echo          %CUDA_HINT_1%
-    set "CUDA_READY=0"
-  )
-  where.exe cudnn64_9.dll >nul 2>&1
-  if errorlevel 1 (
-    echo [WARN] cudnn64_9.dll is not visible on PATH in this terminal.
-    echo        Add this directory to PATH, for example:
-    echo          %CUDA_HINT_2%
-    set "CUDA_READY=0"
-  )
-
-  set "_PRINTED_CUBLAS="
-  for /f "delims=" %%i in ('where.exe cublas64_12.dll 2^>nul') do (
-    if not defined _PRINTED_CUBLAS (
-      echo [OK] cublas64_12.dll: %%i
-      set "_PRINTED_CUBLAS=1"
-    )
-  )
-  set "_PRINTED_CUDNN="
-  for /f "delims=" %%i in ('where.exe cudnn64_9.dll 2^>nul') do (
-    if not defined _PRINTED_CUDNN (
-      echo [OK] cudnn64_9.dll: %%i
-      set "_PRINTED_CUDNN=1"
-    )
-  )
-
-  echo ctranslate2 preflight:
-  call "%PYTHON_BIN%" -c "import ctranslate2 as ct; n=ct.get_cuda_device_count(); print('cuda_device_count=', n); exit(0 if n > 0 else 2)"
-  if errorlevel 1 (
-    echo [WARN] ctranslate2 CUDA preflight failed in this terminal.
-    echo        Transcription tab may be hidden; Read/Edit mode still works.
-    echo        Recovery:
-    echo          scripts\setup-dev-nvidia.bat
-    set "CUDA_READY=0"
-  )
-)
-
-if "%CUDA_READY%"=="1" (
-  echo [INFO] CUDA preflight passed. Transcription tab should be available.
-) else (
-  echo [INFO] CUDA preflight failed or emulated-off. Launching in Read/Edit-oriented mode.
-)
-if /I "%EMULATION_MODE%"=="missing_community1" (
-  echo [INFO] LOTT_DEV_EMULATION_MODE=missing_community1
-  echo [INFO] Emulating missing diarization model: community-1.
-)
-echo [INFO] Emulation state saved: %EMULATION_STATE_FILE%
-
-echo [INFO] LLM backend: bundled/downloaded llama.cpp llama-server direct launch.
-
-if not exist "python_sidecar\models\pyannote-speaker-diarization-community-1" (
-  echo [INFO] Diarization model directory not found.
-  echo [INFO] Creating placeholder directory so Tauri resource check passes.
-  echo [INFO] Speaker diarization will be unavailable at runtime.
-  mkdir "python_sidecar\models\pyannote-speaker-diarization-community-1"
-)
-
 echo Starting Angular dev server in background...
 start /b cmd /c "npm.cmd --prefix frontend run start"
 echo Waiting 8 seconds for frontend startup...
-timeout /t 8 >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 8"
 
-echo Starting Tauri dev...
-echo PYTHON_BIN=%PYTHON_BIN%
-echo LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=%LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS%
-call npm run tauri:dev -- --config tauri.nvidia.dev.windows.override.json
+echo Starting Tauri dev (Vulkan)...
+call npm run tauri:dev -- --config tauri.vulkan.dev.windows.override.json --features vulkan
 if errorlevel 1 goto :err_tauri
-
-echo.
-echo [INFO] tauri:dev command returned without an error code.
 goto :hold_success
+
+:err_engines
+echo [ERROR] ggml speech engines were not found. Run:
+echo         powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
+goto :hold_error
 
 :err_npm
 echo [ERROR] npm was not found. Please run scripts\setup-dev-nvidia.bat first.
 goto :hold_error
 
-:err_entrypoint
-echo [ERROR] Windows development variant was not selected; refusing to default to NVIDIA/CUDA.
-echo         Use one of:
-echo           scripts\run-dev-nvidia.bat
-echo           scripts\run-dev-amd.bat
-echo           scripts\run-dev-cpu.bat
-exit /b 2
-
-:err_py
-echo [ERROR] Python launcher "%PYTHON_BIN%" was not found.
-echo         Please run scripts\setup-dev-nvidia.bat first.
-echo         Recommended runtime is .venv312-nvidia\Scripts\python.exe
-goto :hold_error
-
-:err_cargo
-echo [ERROR] cargo was not found.
-echo.
-echo This causes:
-echo   failed to run 'cargo metadata' ... program not found
-echo.
-echo Install Rustup:
-echo   winget install Rustlang.Rustup
-echo Then reopen terminal and verify:
-echo   cargo --version
-echo   rustup --version
-echo.
-echo If needed, add PATH:
-echo   %%USERPROFILE%%\.cargo\bin
-echo.
-echo Also install Visual Studio Build Tools [C++] :
-echo   https://visualstudio.microsoft.com/visual-cpp-build-tools/
-goto :hold_error
-
-:err_py_preflight
-echo [ERROR] Python preflight failed.
-goto :hold_error
-
-:err_python_version
-echo [ERROR] NVIDIA development Python 3.12 is required.
-echo         Selected: %PYTHON_BIN% ^(%PYTHON_VERSION%^)
-echo         Recreate .venv312-nvidia with Python 3.12 or set LOTT_NVIDIA_DEV_PYTHON_BIN.
-goto :hold_error
-
-:err_environment
-echo [ERROR] Could not sanitize inherited CUDA/ROCm environment for NVIDIA.
-echo         PowerShell is required to start the isolated development backend.
-goto :hold_error
-
 :err_tauri
-echo.
-echo [ERROR] tauri:dev exited with an error.
-echo Common causes:
-echo - src-tauri\tauri.conf.json invalid JSON
-echo - Rust toolchain missing
-echo - icon/resource missing
-echo - Python sidecar failed to start
+echo [ERROR] tauri dev failed.
 goto :hold_error
 
 :hold_error
+if "%HOLD_ON_EXIT%"=="0" exit /b 1
 echo.
-echo Window is held because an error occurred.
 echo Type Q and press Enter to close.
 goto :hold_loop
 
 :hold_success
+if "%HOLD_ON_EXIT%"=="0" exit /b 0
 echo.
-echo Window is held for log review.
 echo Type Q and press Enter to close.
 goto :hold_loop
 

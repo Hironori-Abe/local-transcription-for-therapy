@@ -9,6 +9,39 @@
 
 ## [Unreleased]
 
+音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換え、Python サイドカーと LLM 校正、CUDA / AMD (ROCm) / CPU 版を廃止して、配布を Full 版と Editor 版の2つ（Windows と Linux）に整理したリリース。
+
+### 追加
+
+- 文字起こしを faster-whisper から whisper.cpp（Whisper large-v3-turbo + Silero VAD）へ、話者分離を pyannote.audio から NeMo-Speech.cpp + Nemotron-3-Diarization へ切り替えた。どちらも Vulkan ビルドを同梱し、NVIDIA / AMD / Intel の GPU を1つのインストーラーで扱う。Hugging Face のアカウントやトークンは不要で、モデルは固定 revision・SHA-256 検証・中断再開で取得する。
+- Vulkan の GPU が無い PC では CPU で動作するようにした。CPU 実行のときだけ起動時に最低要件（RAM 16GB以上、AVX2、論理スレッド8以上）を確認し、処理時間の注意を毎回表示する。
+- 文字起こし画面に「処理装置: GPU（名前）/ CPU（理由）」を常時表示し、CPU 処理中は状況表示にも明示するようにした。話者分離が GPU 失敗で CPU に切り替わったときは、結果画面に案内する。開発ビルドには `--cpu` オプションを追加した。
+- 複数 GPU の PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動選択し、設定タブから変更できるようにした。
+- Windows で GPU ドライバーの問題や Vulkan GPU の未検出があるとき、起動時のダイアログとバナーでドライバーの導入・更新を案内するようにした。
+- GPU ドライバーが無く Vulkan ローダーが無い PC でも CPU 実行できるよう、フォールバック用の Vulkan ローダーを同梱した（Windows / Linux）。
+- 文字起こしにフィラー・相づちを残すための句読点入り例文を毎回渡し、1文1行に分けて文ごとに話者を割り当てるようにした。1秒未満の相づち行は、近い同じ話者の行へつなぐ。
+- Linux 向けに、Full 版・Editor 版とも deb + AppImage を Ubuntu 24.04 の Docker 経路でビルドする構成を用意した。Linux 実機でのビルド・起動は未検証。
+- 設定タブに、旧エディション（CUDA / AMD / CPU 版）が残したモデル・キャッシュ・実行資源を一覧して削除する機能を追加した。Full 版・Editor 版とも対象で、削除対象はサーバー側で決め直す。
+- Linux で NVIDIA プロプライエタリドライバーを検出したとき、`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定するようにした。
+
+### 変更
+
+- 配布を Full 版（旧「Vulkan 版」。identifier `net.gakkousya.lott`）と Editor 版の2つにした。CUDA 版・AMD (ROCm) 版・CPU 版と、CachyOS / Arch 向けパッケージは廃止した。
+- 校正は Rust のローカルルールによる句読点付与だけにした。カウンセリング会話のフィラー・相づちは保持し、日本語直後の半角「?」「!」は全角へ統一する。氏名・地名などの注意喚起は従来どおり残す。
+- 音声入力は whisper.cpp を使い、例文付きの1回の実行で候補を1件提示する形にした。Full 版は GPU があれば GPU、無ければ CPU で動き、Editor 版は常に CPU で動く。音声入力パックは Whisper large-v3-turbo と Silero VAD（約1.6GB）だけになった。
+- 初回セットアップで取得するモデルを、音声認識モデル（約1.6GB）と話者分離モデル（約0.1GB）だけにした。CUDA Toolkit、cuDNN、Python は不要になった。
+- 「音声調整」を ffmpeg のフィルター（ハイパス・ノイズ除去・音量の正規化）で行うようにした。調整は文字起こしに渡す音声だけにかけ、話者分離には元の音声を使う。既定は「何もしない」。
+- 開発用 Angular dev server は `127.0.0.1` にだけ bind するようにした。
+
+### 削除
+
+- Python サイドカー、faster-whisper、pyannote.audio を削除した。Python は同梱も使用もしない。
+- Gemma 4 E4B / 12B による AI 校正・全体校正、LM Studio / Ollama 連携、区間聞き直しを削除した。会話データを推論サーバーへ渡す経路は無くなった。
+- 文字起こし設定の「再試行の理由」を削除した。旧話者分離（pyannote）のクラスタリング基準を変える設定で、Nemotron には対応する設定が無いため。
+- 「頻出語・注目語」の指定を削除した。whisper.cpp で毎回の窓に付けると、話されていない語（臨床用語）が出力される誤認識が確認されたため。
+- CUDA / ROCm の導入案内や Hugging Face のトークン取得ページなど、外部サイトを開くボタンを削除した（該当する手順が無くなったため）。
+
+
 ## [0.9.8] - 2026-08-31
 
 Linux NVIDIA版の配布を開始し、文字起こしから句読点付与までの流れ、初回セットアップ、GPU検出、Linuxデスクトップ互換性、開発環境の分離をまとめて見直したリリース。

@@ -371,19 +371,6 @@
   margin: 0 8px;
 }
 
-.speech-device-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.speech-device-icon {
-  font-size: 18px;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
-}
-
 .speech-device-cpu {
   color: light-dark(#8a4b00, #ffb74d);
 }
@@ -399,6 +386,7 @@
 
 .prompt-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
   width: 100%;
@@ -409,6 +397,13 @@
     flex-shrink: 0;
     margin-top: 0;
     margin-bottom: 0;
+  }
+
+  // 横幅に余裕があればセレクトの右、狭いときは下の行へ回り込む。
+  .audio-preprocess-note {
+    flex: 1 1 320px;
+    min-width: 0;
+    margin: 4px 0 0 8px;
   }
 
 }

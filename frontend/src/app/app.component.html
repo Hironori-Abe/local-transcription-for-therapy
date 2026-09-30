@@ -182,14 +182,12 @@
             <div class="actions-row run-controls-row">
               <p class="estimate-line">
                 音声ファイルの長さ: {{ getAudioDurationMessage() }}
+                <ng-container *ngIf="speechDeviceLine()">
+                  <span class="estimate-separator"> / </span>
+                  <span [class.speech-device-cpu]="speechRunsOnCpu()">{{ speechDeviceLine() }}</span>
+                </ng-container>
                 <span class="estimate-separator"> / </span>
                 {{ getEstimatedTimeLabel() }}: {{ getEstimatedTimeMessage() }}
-              </p>
-            </div>
-            <div *ngIf="speechDeviceLine()" class="actions-row run-controls-row">
-              <p class="estimate-line speech-device-line" [class.speech-device-cpu]="speechRunsOnCpu()">
-                <mat-icon class="material-symbols-outlined speech-device-icon">{{ speechRunsOnCpu() ? 'memory' : 'developer_board' }}</mat-icon>
-                {{ speechDeviceLine() }}
               </p>
               <p *ngIf="devForceCpu()" class="estimate-line dev-force-cpu-badge">開発オプション: CPU強制（LOTT_DEV_FORCE_CPU）</p>
             </div>
@@ -216,9 +214,7 @@
                 </mat-select>
                 <mat-hint>{{ audioPreprocessPresetHint() }}</mat-hint>
               </mat-form-field>
-            </div>
-            <div *ngIf="!editorOnlyBuild">
-              <p class="estimate-line" style="padding-top: 10px; padding-bottom: 10px;">
+              <p *ngIf="!editorOnlyBuild" class="estimate-line audio-preprocess-note">
                 音声調整は「やれば、必ず文字起こしの精度が上がる」ものではありません。用意された録音が良質なことが最も重要です。良質な音声ファイルを調整すると、むしろ精度が下がることがあります。</p>
             </div>
 

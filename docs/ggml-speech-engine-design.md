@@ -2,9 +2,11 @@
 
 - 作成日: 2026-09-25
 - ブランチ: `N3-Diarization`
-- 状態: **段階2を実装中（Linux / Vulkan、Windows / CUDA・Vulkan で動作確認）**。PoC の手順と実測値は `demo_data/ggml-poc/README.md` を参照
+- 状態: **実装済み。ggml エンジンが唯一の経路（2026-09-29 に Python・faster-whisper・pyannote・LLM・CUDA / AMD / CPU 版を削除）**。PoC の手順と実測値は `demo_data/ggml-poc/README.md` を参照
+- 注記: 本書の「現行」「標準」（faster-whisper / pyannote / LLM 校正など）は導入前の構成で、すべて削除済み。それらとの比較測定と設計判断は履歴として残している
 - 開発環境の準備（ビルドとモデル取得。SHA-256 検証あり）:
-  - Linux: `bash scripts/setup-ggml-speech-linux.sh --backend vulkan`
+  - Linux: `bash scripts/setup-ggml-speech-linux.sh --backend vulkan`（`--engines-dir DIR` で配置先を変更、`--skip-nemo` で NeMo-Speech.cpp と Nemotron を省く。配布ビルド（`setup-build-tools-linux.sh`）は `--engines-dir src-tauri/resources/speech-engines --skip-models`（Editor は `--skip-nemo` も）で呼ぶ。未検証）
+  - Linux のエンジンは patchelf で `RUNPATH=$ORIGIN` を設定して隣の ggml ライブラリを読み、OpenMP ランタイム `libgomp` を実行ファイルの隣へ同梱する（Windows の VC++ ランタイムと同じ考え方）。`libvulkan.so.1` は同梱せずホストのものを使う。アプリは `apply_host_command_env` を通してエンジンを起動し、AppImage の `LD_LIBRARY_PATH` を持ち込まない
   - Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1`（既定 `-Backend vulkan`。CUDA 版は `-Backend cuda` で、比較・切り分け用）
 - 関連: `AGENTS.md`（Non-Negotiable Constraints / Stable Areas / Audio Decode Policy / 校正エンジンのライフサイクル）
 
@@ -20,9 +22,9 @@
 | 話者分離 | pyannote.audio community-1（Python / PyTorch） | **NeMo-Speech.cpp + Nemotron-3-Diarization**（ggml） |
 | 句読点付与 | CUDA / AMD 版は既存の LLM 経路、Vulkan 版はローカルルール | Vulkan 版もローカルルールのみ |
 | 全体校正 | LLM を搭載する版の llama.cpp llama-server | **Vulkan 版は非搭載** |
-| Vulkan版のマイク音声入力 | Gemma 4 E4B + mmproj（llama-server） | **whisper.cpp**（音声入力パック不要） |
+| Vulkan版・Windows Editor版のマイク音声入力 | Gemma 4 E4B + mmproj（llama-server） | **whisper.cpp**（Editor版は音声入力パックでモデルを取得） |
 
-狙いは、文字起こしと話者分離を **ggml** ベースのネイティブ実行ファイルに置き換えることにある。「llama.cpp に一本化」ではない。Vulkan 版は `whisper-cli` と `nemo-speech` の2つを同梱し、LLM / `llama-server` は含まない。LLM 校正を搭載する他の版の構成はこの設計変更の対象外。
+狙いは、文字起こしと話者分離を **ggml** ベースのネイティブ実行ファイルに置き換えられるようにすることにある。「llama.cpp に一本化」ではない。Vulkan 版は `whisper-cli` と `nemo-speech` の2つを同梱し、LLM / `llama-server` は含まない。Windows Editor 版もマイク入力に `whisper-cli` を使うが、バンドルする音声エンジンは whisper のみ。LLM 校正を搭載する他の版の構成はこの設計変更の対象外。
 
 期待する効果:
 
@@ -375,17 +377,17 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 
 方針（AGENTS.md Distribution Strategy）に沿って、NVIDIA / AMD / Intel 共通の Vulkan 版を追加した。
 
-- 判定: Rust の feature `vulkan`（identifier は CUDA 版の `net.gakkousya.lott` を引き継ぐ）。文字起こし・話者分離は常に ggml、標準（Python）経路は持たない
-- ビルド: `scripts\setup-build-tools.bat --vulkan` → `scripts\prepare-vulkan-bundle-windows.ps1`（音声エンジン約109MB。Python と llama-server は同梱しない。ルールベース校正・暗号化保存・モデル取得は Rust）
+- Full 版（identifier `net.gakkousya.lott`）。文字起こし・話者分離は常に ggml で、Python 経路は持たない（Cargo feature `vulkan` は廃止）
+- ビルド: Vulkan は `scripts\setup-build-tools.bat --vulkan` → `scripts\prepare-vulkan-bundle-windows.ps1`（音声エンジン約109MB）。Windows Editor は `scripts\setup-build-tools.bat --editor` が同じ準備スクリプトを whisper のみで実行し、`resources/speech-engines/whisper` と whisper.cpp / ggml のライセンスを収集する。Editor のバンドルに NeMo は含めない。どちらも Python と llama-server は同梱しない
 - 初回セットアップ: whisper.cpp の文字起こしモデル・VAD・Nemotron を `ggml_speech::GGML_MODEL_FILES` から取得する。固定 revision・SHA-256・サイズを使い、`.part` から再開して配置直前に検証する。Gemma 4 E4B / 12B の取得はなく、LLM 校正・全体校正も提供しない
-- マイク音声入力: セットアップ済み whisper.cpp（`generate_whisper_voice_input_candidates_blocking`）を使う。フィラー例文付きの書き起こしを候補1にし、例文なしの書き起こしへルールで句読点を付けた結果は、空白・句読点を除いた本文が候補1と異なる場合だけ候補2にする。音声入力パックやGemma音声mmprojは不要。前後行の文脈はプロンプトに渡さない（話していない語が混ざるため）
+- マイク音声入力: Full 版と Editor 版はセットアップ済み whisper.cpp（`generate_whisper_voice_input_candidates_blocking`）を使う。フィラー例文付きの1回だけ実行し、候補1件を返す（当初は例文なしの2回目も実行して候補2としていたが、待ち時間を優先して1回にした）。Editor は常に `-ng` で CPU 実行し、音声入力パックで Whisper turbo と VAD（約1.6GB）を取得する。Gemma 音声 mmproj は不要。前後行の文脈はプロンプトに渡さない（話していない語が混ざるため）
 - GPU: 設定タブの1つの欄で、文字起こし・話者分離・whisper.cpp による音声入力に同じ GPU を使う（`set_preferred_vulkan_gpu`）。GPU が無いときは CPU で動き、その旨を表示する
 
 未完了（次の作業）:
 
 1. インストーラーを実際にビルドし、別フォルダ・別 PC・オフラインで起動確認する
-2. ライセンス: Nemotron（OpenMDW-1.1）・Silero VAD の本文は `licenses/manual/` に配置済み、`THIRD_PARTY_LICENSES.md` にも追記済み（2026-09-25）。セットアップ画面の話者分離の行から Nemotron の本文を表示できる（`read_bundled_license`）。Vulkan 版は Python / llama.cpp を同梱しないため、`setup-build-tools.bat --vulkan` は `collect_licenses.py --no-python --exclude-manual llama.cpp-LICENSE.txt` で Rust / Node / その他の手動補完を集める
-3. ~~不要データの削除ボタン~~ 実装済み（設定タブ。`list_legacy_cuda_data` / `delete_legacy_cuda_data`。リリース版の Vulkan 版のみ。2026-09-28 の LLM 非搭載決定に合わせ、旧 Gemma 4 12B / E4B データ・階層マーカー・旧 `resources/llama-server-vulkan` を削除対象に追加。NSIS のバックグラウンド更新 `/UPDATE` は旧版アンインストールを省略するため、削除済みの資源が残る場合がある）。インストーラーでの実機確認が残り
+2. ライセンス: Nemotron（OpenMDW-1.1）・Silero VAD の本文は `licenses/manual/` に配置済み、`THIRD_PARTY_LICENSES.md` にも追記済み（2026-09-25）。セットアップ画面の話者分離の行から Nemotron の本文を表示できる（`read_bundled_license`）。Vulkan 版は Python / llama.cpp を同梱しないため、`setup-build-tools.bat` は `collect_licenses.py --no-python` で Rust / Node / その他の手動補完を集める
+3. ~~不要データの削除ボタン~~ 実装済み（設定タブ。`list_legacy_cuda_data` / `delete_legacy_cuda_data`。リリース版の Full 版・Editor 版のみ。2026-09-28 の LLM 非搭載決定に合わせ、旧 Gemma 4 12B / E4B データ・階層マーカー・旧 `resources/llama-server-vulkan` を削除対象に追加。NSIS のバックグラウンド更新 `/UPDATE` は旧版アンインストールを省略するため、削除済みの資源が残る場合がある）。インストーラーでの実機確認が残り
 4. README（日本語・英語）に Vulkan 版の説明を追記済み（v0.9.9）。AGENTS.md / README では2026-09-28の製品決定を反映し、LoTT Vulkan 版に LLM 校正・全体校正を含めない
 
 ## 9. ライセンス
@@ -403,7 +405,7 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 
 ## 10. 導入の段階
 
-AGENTS.md は `transcribe_cli.py` と `diarize_cli.py` を触れないところとしている。そのため**既存経路を残したまま、新エンジンを選択式で追加する**。
+当初計画（履歴）: 既存の Python 経路を残したまま、新エンジンを選択式で追加する方針だった。**2026-09-29 に段階5・6まで完了し、標準（Python）経路を削除した。以下の表は当時の計画である。**
 
 | 段階 | 内容 | 既定 |
 |---|---|---|
@@ -451,4 +453,4 @@ AGENTS.md は `transcribe_cli.py` と `diarize_cli.py` を触れないところ�
 - NeMo-Speech.cpp: <https://github.com/NVIDIA/NeMo-Speech.cpp>（PoC commit `97a15af`）
 - Nemotron-3-Diarization: <https://huggingface.co/nvidia/Nemotron-3-Diarization>
 - OpenMDW-1.1: <https://openmdw.ai/license/1-1/>
-- 現行の関連実装: `run_transcription_blocking` / `run_diarization_blocking` / `assign_speakers_to_segments`（`src-tauri/src/lib.rs`）、`python_sidecar/transcribe_cli.py`、`python_sidecar/diarize_cli.py`
+- 現行の関連実装: `execute_ggml_transcription` / `execute_ggml_diarization` / `run_ggml_engine_process` / `assign_speakers_to_segments`（`src-tauri/src/lib.rs`）。旧 Python 実装（`transcribe_cli.py` / `diarize_cli.py`）は削除済み

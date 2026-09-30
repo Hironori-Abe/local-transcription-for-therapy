@@ -1,10 +1,4 @@
 {
-  "build": {
-    "beforeDevCommand": "echo Frontend is managed by scripts/run-dev.sh",
-    "beforeBuildCommand": "npm --prefix frontend run build",
-    "devUrl": "http://localhost:4200",
-    "frontendDist": "../frontend"
-  },
   "app": {
     "windows": [
       {
@@ -15,6 +9,21 @@
         "resizable": true,
         "focus": false
       }
+    ]
+  },
+  "build": {
+    "beforeDevCommand": "echo Frontend is managed by scripts/run-dev.sh",
+    "devUrl": "http://127.0.0.1:4200",
+    "frontendDist": "../frontend"
+  },
+  "bundle": {
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "resources/proofread/punctuation_rules",
+      "resources/ffmpeg"
     ]
   }
 }

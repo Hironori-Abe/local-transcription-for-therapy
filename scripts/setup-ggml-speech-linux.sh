@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # ggml 音声エンジン（whisper.cpp + NeMo-Speech.cpp / Nemotron-3-Diarization）を開発環境へ準備する。
 #
-#   bash scripts/setup-ggml-speech-linux.sh [--backend vulkan|cpu] [--skip-build] [--skip-models]
+#   bash scripts/setup-ggml-speech-linux.sh [--backend vulkan|cpu] [--engines-dir DIR] [--skip-build] [--skip-models] [--skip-nemo]
 #
-# - 固定 commit からソースビルドし、python_sidecar/speech-engines/<engine>/ へ配置する
+# - 固定 commit からソースビルドし、既定では python_sidecar/speech-engines/<engine>/ へ配置する
+#   （--engines-dir でリリースビルド用の src-tauri/resources/speech-engines などへ変更できる）
+# - --skip-nemo: NeMo-Speech.cpp のビルドと Nemotron モデル取得を省く（Editor 版は whisper.cpp のみ）
 # - モデルは固定 revision から取得し、SHA-256 を検証して python_sidecar/models/ へ配置する
 # - ネットワークを使うのはこのセットアップ時だけ。アプリの実行時は通信しない
 # - システムに無いビルド依存（SPIRV-Headers / sentencepiece）はビルドキャッシュ内の prefix へ入れる（sudo 不要）
@@ -12,11 +14,15 @@ set -euo pipefail
 BACKEND="vulkan"
 SKIP_BUILD=0
 SKIP_MODELS=0
+SKIP_NEMO=0
+ENGINES_DIR_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-models) SKIP_MODELS=1; shift ;;
+    --skip-nemo) SKIP_NEMO=1; shift ;;
+    --engines-dir) ENGINES_DIR_ARG="${2:-}"; [ -n "$ENGINES_DIR_ARG" ] || { echo "--engines-dir にはディレクトリを指定してください" >&2; exit 2; }; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -26,7 +32,8 @@ case "$BACKEND" in
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENGINES_DIR="$REPO_ROOT/python_sidecar/speech-engines"
+ENGINES_DIR="${ENGINES_DIR_ARG:-$REPO_ROOT/python_sidecar/speech-engines}"
+case "$ENGINES_DIR" in /*) ;; *) ENGINES_DIR="$PWD/$ENGINES_DIR" ;; esac
 MODELS_DIR="$REPO_ROOT/python_sidecar/models"
 WORK="${XDG_CACHE_HOME:-$HOME/.cache}/lott-ggml-speech-build"
 PREFIX="$WORK/prefix"
@@ -86,6 +93,45 @@ build_deps() {
   fi
 }
 
+# 実行ファイルと同じディレクトリのライブラリを RUNPATH=$ORIGIN で読ませ、OpenMP ランタイム（libgomp）を隣へ置く。
+# システムの libvulkan.so.1 は同梱しない（GPU ドライバーの ICD はホストのローダーが解決する）。
+# Windows 版が VC++ ランタイム（OpenMP 含む）を exe の隣へ置くのと同じ考え方で、libgomp が無い最小構成のホストでも動かす。
+finalize_engine_bin() { # bin_dir
+  local bin="$1" f
+  if command -v patchelf >/dev/null 2>&1; then
+    local gomp
+    gomp="$( (ldd "$bin"/* 2>/dev/null || true) | awk '/libgomp[.]so/ && $3 ~ /^\// { print $3; exit }' || true)"
+    if [ -n "$gomp" ] && [ ! -e "$bin/$(basename "$gomp")" ]; then
+      cp -L "$gomp" "$bin/"
+      log "libgomp を同梱: $(basename "$gomp")"
+      # 同梱するならライセンス（GPL-3.0 + GCC Runtime Library Exception）の本文も添える
+      local gomp_copyright
+      gomp_copyright="$(ls /usr/share/doc/libgomp1/copyright 2>/dev/null || true)"
+      if [ -z "$gomp_copyright" ]; then
+        echo "libgomp のライセンス本文（/usr/share/doc/libgomp1/copyright）が見つかりません" >&2
+        exit 1
+      fi
+      cp "$gomp_copyright" "$bin/LICENSE-libgomp.txt"
+    fi
+    for f in "$bin"/*; do
+      [ -f "$f" ] && [ ! -L "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+    done
+  else
+    log "警告: patchelf が無いため RUNPATH の設定と libgomp の同梱を省きました（配布ビルドでは必須）"
+  fi
+  # 隣のライブラリで解決できない依存を検査する（libvulkan.so.1 だけはホスト側で解決する前提）
+  local deps missing
+  deps="$(LD_LIBRARY_PATH="$bin" ldd "$bin"/* 2>/dev/null || true)"
+  missing="$(awk '/not found/ && !/libvulkan[.]so[.]1/ { print $1 }' <<<"$deps" | sort -u | paste -sd' ' -)"
+  if [ -n "$missing" ]; then
+    echo "解決できない共有ライブラリがあります: $missing" >&2
+    exit 1
+  fi
+  if [ "$BACKEND" = "vulkan" ] && ! grep -q 'libvulkan[.]so[.]1' <<<"$deps"; then
+    echo "警告: Vulkan ビルドなのに libvulkan.so.1 へ依存していません: $bin" >&2
+  fi
+}
+
 build_whisper() {
   checkout whisper.cpp "$WHISPER_CPP_REPO" "$WHISPER_CPP_COMMIT"
   local build="$WORK/build/whisper-$BACKEND" gpu=OFF
@@ -98,6 +144,7 @@ build_whisper() {
   local dest="$ENGINES_DIR/whisper"
   rm -rf "$dest.tmp" && mkdir -p "$dest.tmp/bin"
   cp "$build/bin/whisper-cli" "$dest.tmp/bin/"
+  finalize_engine_bin "$dest.tmp/bin"
   cp "$WORK/src/whisper.cpp/LICENSE" "$dest.tmp/LICENSE-whisper.cpp.txt"
   printf 'whisper.cpp %s\nbackend %s\n' "$WHISPER_CPP_COMMIT" "$BACKEND" >"$dest.tmp/BUILD_INFO.txt"
   rm -rf "$dest" && mv "$dest.tmp" "$dest"
@@ -118,6 +165,7 @@ build_nemo() {
   # nemo-speech は RUNPATH=$ORIGIN なので、同じディレクトリの共有ライブラリと一緒に置く
   cp "$out/nemo-speech" "$dest.tmp/bin/"
   cp -P "$out"/*.so* "$dest.tmp/bin/" 2>/dev/null || true
+  finalize_engine_bin "$dest.tmp/bin"
   for f in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
     cp "$WORK/src/NeMo-Speech.cpp/$f" "$dest.tmp/$f-NeMo-Speech.cpp" 2>/dev/null || true
   done
@@ -128,6 +176,7 @@ build_nemo() {
 download_models() {
   for entry in "${MODELS[@]}"; do
     IFS='|' read -r rel url sha <<<"$entry"
+    if [ "$SKIP_NEMO" -eq 1 ] && [[ "$rel" == nemotron-* ]]; then continue; fi
     local path="$MODELS_DIR/$rel"
     if [ -f "$path" ] && echo "$sha  $path" | sha256sum -c --status; then
       log "取得済み: $rel"
@@ -156,12 +205,16 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   export CPLUS_INCLUDE_PATH="$PREFIX/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
   build_deps
   build_whisper
-  build_nemo
+  [ "$SKIP_NEMO" -eq 1 ] || build_nemo
 fi
 [ "$SKIP_MODELS" -eq 0 ] && download_models
 
 log "完了"
 log "  whisper-cli : $ENGINES_DIR/whisper/bin/whisper-cli"
-log "  nemo-speech : $ENGINES_DIR/nemo/bin/nemo-speech"
-log "  models      : $MODELS_DIR/whisper-ggml/, $MODELS_DIR/nemotron-3-diarization/"
+if [ "$SKIP_NEMO" -eq 0 ]; then
+  log "  nemo-speech : $ENGINES_DIR/nemo/bin/nemo-speech"
+  log "  models      : $MODELS_DIR/whisper-ggml/, $MODELS_DIR/nemotron-3-diarization/"
+else
+  log "  models      : $MODELS_DIR/whisper-ggml/"
+fi
 log "ビルドログ: $LOGS"

@@ -1,131 +1,92 @@
 # トラブルシューティング
 
+現在の配布は Full 版（Vulkan。GPU が無ければ CPU）と Editor 版です。Windows と Linux（deb / AppImage。Linux は未検証）を対象とし、後半に Linux 向けの項目があります。
+
+## 「GPU のドライバーを確認してください」と表示された
+
+- Full 版は起動時に Vulkan の GPU を探します。NVIDIA / AMD / Intel の GPU が PC にあるのに、ドライバーが入っていない・Windows 標準の表示ドライバー（Microsoft 基本ディスプレイ アダプター）で動いている・ドライバーが古くて Vulkan の GPU として見つからない場合に、起動時ダイアログと画面上のバナーでドライバーの導入・更新を案内します。
+- GPU メーカー（NVIDIA / AMD / Intel）の公式サイトから、この GPU 用の最新ドライバーを入れてアプリを起動し直してください。ノート PC で GPU が2つある場合は、両方のドライバーを確認してください。
+- ドライバーを入れなくても、そのまま CPU で処理できます。ただし時間がかかります（下記）。仮想マシンの表示装置（Hyper-V・VMware など）は案内の対象外です。
+- 案内文を開発環境で再現するには、デバッグビルドで環境変数 `LOTT_DEV_GPU_DRIVER_SCENARIO=missing`（未導入）または `old`（古い）を指定します（[開発ガイド](development.md#実行環境エミュレーション)）。
+
 ## GPU が無い / CPU のみで動かしたい
 
-- 対応 GPU がない場合は **LoTT CPU** を使用できます。CPU 版は文字起こし・話者分離・単純な句読点付与に対応し、全体校正は搭載しません。
-- CPU 版の最低要件は RAM 16GB、AVX2 対応の4コア / 8スレッドCPUです。推奨要件は RAM 24GB以上、6コア / 12スレッド以上です。
-- CPU 版は処理時間が長いためお試し用であり、日常的・継続的な常用は推奨しません。処理時間の目安は音声時間の約1.5〜2.5倍ですが、CPU性能によりさらに長くなる場合があります。
-- 音声入力を使う場合は、音声入力パックを導入してください。Gemma 4 E4BもCPUで実行するため、RAM 24GB以上を推奨します。
+- Full 版は、Vulkan の GPU が見つからない場合に自動で CPU で処理します。CPU 用の別エディションはありません。
+- GPU が使えず CPU で処理する場合の最低要件は、RAM 16GB以上、AVX2 対応 CPU、8論理スレッド以上（4コア / 8スレッド以上）です。起動時に確認し、満たさない場合は不足項目を表示してアプリを終了します。満たす場合も、CPU で処理する旨と処理時間の注意を毎回表示します。
+- CPU 処理は時間が長いため、お試し用途向けです。処理時間の目安は音声時間の約1.5〜2.5倍ですが、CPU 性能によりさらに長くなる場合があります。日常的・継続的な利用には GPU 搭載 PC をお勧めします。
+- Editor 版の音声入力は常に CPU で動かします。GPU は不要です。
 
-## VRAM 不足でクラッシュ・処理が進まない
+## GPU ドライバーが全く入っていない PC で動くか
 
-- Full CUDA 版の **最低要件は VRAM 8GB** です。文字起こし・話者分離・LLM 校正を同時に走らせると VRAM 使用量が増えます。
-- VRAM が不足する場合は、他の GPU 利用アプリを終了する、話者分離や LLM 校正を分けて実行するなどで使用量を抑えてください。
+- whisper.cpp / NeMo-Speech.cpp の実行ファイルは Vulkan のローダー（`vulkan-1.dll`）を読み込みます。GPU ドライバーが無く System32 にローダーが無い PC では、同梱のローダー（`resourcesspeech-enginesulkan-loader`）を使って CPU 実行で起動します。それでもエンジンが起動しない場合は、GPU メーカーのドライバーを導入してから再試行してください。
+
+## VRAM 不足・処理が進まない
+
+- 他の GPU 利用アプリ（ゲーム、動画編集、ブラウザのハードウェアアクセラレーションなど）を終了してから再試行してください。
+- 複数の GPU がある PC では、設定タブで使う GPU を切り替えられます。VRAM が小さい GPU が選ばれている場合は、VRAM の大きい GPU を選んでください。
+
+## 意図しない GPU が使われる
+
+- 複数の GPU がある PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動選択します。設定タブで別の GPU を選べます。選択は GPU の UUID で保存されます。
 
 ## cargo が見つからない
 
 - `cargo metadata ... program not found`
 - Rustup をインストールし、ターミナル再起動後に `cargo --version` を確認してください。
 
-## CUDA/cuDNN 関連でクラッシュ
+## 文字起こしが「モデルが見つからない」エラーで失敗する
 
-- `exit=-1073740791` など
-- CUDA 12.x / cuDNN 9.x の `bin` が PATH で見えるか確認してください:
-
-```powershell
-where.exe cublas64_12.dll
-where.exe cudnn64_9.dll
-```
-
-## Linux / CachyOS NVIDIA: `nvidia-smi` が無い / CUDAが検出されない
-
-- CachyOS / Arch向けNVIDIAパッケージでは、`nvidia-utils`（`nvidia-smi` とNVIDIAユーザー空間
-  ランタイム）を必須依存にしています。古いパッケージを使用している場合は、次で補完してから
-  アプリを再起動してください。
-
-```sh
-sudo pacman -S --needed nvidia-utils
-```
-
-- `nvidia-utils`はカーネルモジュールを含みません。使用中のカーネルに合うCachyOSのNVIDIA
-  ドライバー（`nvidia` / `nvidia-open` / `nvidia-dkms`など）を導入し、再起動してください。
-- 次の2つが成功することを確認します。`nvidia-smi`が無い場合は、まずパッケージ導入状態を確認します。
-
-```sh
-command -v nvidia-smi
-nvidia-smi -L
-```
-
-- モデルのダウンロード完了はCUDA利用可能の判定ではありません。アプリの「GPUを再確認」を、
-  ドライバー導入・再起動後に実行してください。
-- このLinux NVIDIA版では、文字起こし・話者分離・LLM校正すべてでCUDAを使用します。Linux用
-  CUDA `llama-server`は公式Linux archiveではなく、llama.cpp b10075ソースからビルドして
-  配布物へ同梱しています。CUDA Toolkitは実行時には不要で、Vulkan版の取得や設定も不要です。
-  `nvidia-smi -L`が成功するのに校正だけ失敗する場合は、アプリを更新し、同梱サーバーの
-  `resources/llama-server/cuda/LLAMA_CPP_BUILD_INFO.txt`が存在する配布物か確認してください。
-
-## Linux AppImage: CUDA/cuDNN 混在による cuBLAS エラー
-
-- 原因: ユーザー導入の CUDA/cuDNN が `LD_LIBRARY_PATH` に混ざると、pip 版 `nvidia-*` と異なる版が解決されることがあります。新しい AppImage は pip 版を優先します。
-- 旧版の一時回避: `env -u CUDA_HOME -u LD_LIBRARY_PATH "/path/to/Local Transcription for Therapy.AppImage"` で起動してください。
-- 確認:
-
-```bash
-tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'CUDA_HOME|LD_LIBRARY_PATH'
-```
-
-## 文字起こしが「モデルが見つからない」「オフライン」エラーで失敗する
-
-- 本アプリは通常運用時、モデル取得ライブラリ（Hugging Face Hub）を**オフラインモードに固定**しています（意図しないインターネット接続を防ぐためのフェイルクローズ設計）。そのため、文字起こしモデル（Whisper）が未取得の状態では実行時に自動ダウンロードされず、`LocalEntryNotFoundError` / "outgoing traffic has been disabled" のようなエラーになります。
-- セットアップタブから**文字起こしモデル（Whisper turbo）を事前にダウンロード**してください。モデル取得はネット接続が必要な工程で、ダウンロード後はオフラインで動作します。
-- ダウンロードと文字起こしは同じアプリ専用キャッシュを参照します。セットアップで取得済みであれば、オフラインのままでも読み込めます。
+- 本アプリは通常運用時に自動でモデルをダウンロードしません（意図しないインターネット接続を防ぐためのフェイルクローズ設計）。文字起こしモデル（Whisper large-v3-turbo）や Silero VAD が未取得だと、不足しているファイルを示してエラーになります。
+- セットアップタブから**文字起こしモデルを事前にダウンロード**してください。モデル取得はネット接続が必要な工程で、ダウンロード後はオフラインで動作します。
+- ダウンロードが途中で切れた場合は、セットアップを再実行すると続きから取得します（固定 revision・SHA-256 検証）。
+- 開発環境では、`scripts\setup-ggml-speech-windows.ps1` が `python_sidecar\models\` へモデルを配置します。
 
 ## 話者分離モデルが見つからない
 
-- `python_sidecar/models/pyannote-speaker-diarization-community-1` にモデル一式を配置してください（dev）。
-- または `DIARIZATION_MODEL_PATH` を設定してください。
+- セットアップタブから話者分離モデル（Nemotron-3-Diarization）をダウンロードしてください。Hugging Face のアカウントやトークンは不要です。
+- 開発環境では `python_sidecar\models\nemotron-3-diarization\` を参照します（`scripts\setup-ggml-speech-windows.ps1`）。
 - リリースビルドでは `%LOCALAPPDATA%\{identifier}\models\` 配下を参照します。
 
-## AMD ROCm: "no ROCm-capable device is detected"（Linux）
+## 旧版のデータが残っている
 
-- GPU セレクターで device 1 以上を選択しているのに「ROCm デバイスが見つからない」エラーが出る場合、`ROCR_VISIBLE_DEVICES` と `HIP_VISIBLE_DEVICES` の二重フィルターが原因の可能性があります。
-- ROCR が先にデバイスリストを絞り込んだ後、HIP が絞り込み済みのリストにアクセスするためインデックスがずれます。
-- 修正済み（`src-tauri/src/lib.rs` で `ROCR_VISIBLE_DEVICES` を削除、`HIP_VISIBLE_DEVICES` のみ設定）。
+- CUDA / AMD / CPU 版から上書きインストールした PC では、旧版の実行資源（旧 Gemma モデル、旧 Python 環境、旧校正エンジンのキャッシュなど）が残ることがあります。リリース版の設定タブに一覧が表示され、そこから削除できます。会話データは対象に含まれません。
+- NSIS のバックグラウンド更新（`/UPDATE`）は旧版のアンインストールを省略するため、削除済みの資源が残ることがあります。
 
-## AMD ROCm: GPUは使えるのに「AMD GPU ランタイムが検出されませんでした」が消えない
+## Linux 向けの項目
 
-- `rocminfo`、CTranslate2、PyTorchを個別に実行すると成功するのにUIだけ未検出になる場合、
-  CTranslate2とPyTorchのROCm初期化を同じPythonプロセスで連続実行したことによる競合が原因でした。
-- 実運用の文字起こしと話者分離は別サイドカープロセスです。ランタイム確認も同じ構成に合わせ、
-  CTranslate2とPyTorchを別々のPythonプロセスで検査するよう修正済みです。
-- Linux CUDA版と同様に、AMD版でも「GPUを再確認」時のbounded retryと、セットアップ直後の
-  1回限りの遅延再確認を行います。再確認後はアプリを再起動せずUIへ反映されます。
+以下は Linux 版（deb / AppImage）の項目です。Linux 実機でのビルド・起動は未検証で、過去の調査記録を含みます。
 
-## AMD ROCm: 話者分離が非常に遅い（旧世代 iGPU / Linux）
+## Linux: `libvulkan.so.1` が無くてエンジンが起動しない
 
-- Radeon 780M / 旧890M（gfx1103）では MIOpen の対応カーネルが未収録のため、GPU 話者分離に失敗します。
-- `diarize_cli.py` が自動で CPU フォールバックするため処理は完了しますが、10 分音声で約 15〜20 分かかります（正常動作）。
-- Ryzen AI 9 HX 370 内蔵の Radeon 890M（gfx1150）は PyTorch 2.11.0+rocm7.2 以降で GPU 話者分離・文字起こしともに動作します。
+- 症状: 文字起こし・話者分離を始めるとエンジン（whisper.cpp / NeMo-Speech.cpp）の起動に失敗する。エラーに `libvulkan.so.1: cannot open shared object file` が含まれる。
+- 原因: Linux 版はホストの Vulkan ローダー（`libvulkan.so.1`）を優先します。ホストに無い場合は、同梱のフォールバック（`resources/speech-engines/vulkan-loader/`）をアプリが起動時に `LD_LIBRARY_PATH` へ足すため、通常はこの症状は出ません。それでも出る場合は、同梱ディレクトリが欠けている（deb 以外の手動配置など）か、ライブラリ探索の環境が上書きされている可能性があります。起動ログの `同梱の libvulkan.so.1 を LD_LIBRARY_PATH に追加しました` の有無も確認してください。GPU を使うにはホストのローダーと ICD が必要です。
+- 確認方法:
 
-## AMD ROCm: 文字起こし中にクラッシュする（gfx1102 / RX 7600M XT）
-
-- RX 7600M XT（gfx1102）では ctranslate2-rocm による文字起こし中に `CUDA failed with error an illegal memory access` でクラッシュすることがありました。
-- 原因はデフォルトのメモリアロケータ（MallocAsync）が AMD GPU と非互換であること（OpenNMT/CTranslate2 issue #2012）。
-- 修正済み: `transcribe_cli.py` が ROCm 検出時に `CT2_CUDA_ALLOCATOR=cub_caching` を自動設定します。公式 ctranslate2-rocm v4.7.1 / v4.7.2 ホイールは gfx1102 をネイティブ収録しており、RX 7600M XT で `HSA_OVERRIDE_GFX_VERSION` なしの10分文字起こしが完走することを確認済みです。
-- `HSA_OVERRIDE_GFX_VERSION=11.0.0`（gfx1102 を gfx1100 として扱わせる設定）は通常運用では使用しません。`demo_data/10minutes` では、設定なしの方が既存JSONに対する文字編集距離が420から356へ約15%減り、セグメント数も既存JSONに近づきました。
-- **今後、CTranslate2 / ROCm / GPUドライバー更新後に gfx1102 でクラッシュ、著しい欠落、異常な文字起こしが発生した場合は、gfx1102ネイティブ経路の互換性を最初に疑ってください。** 最初の切り分けとして、同じ音声を次の一時設定で再実行し、症状が変化するか確認します。恒久設定にはせず、確認後は必ず解除してください。
-
-```bash
-export HSA_OVERRIDE_GFX_VERSION=11.0.0
-bash scripts/run-dev-amd.sh
-# 切り分け後
-unset HSA_OVERRIDE_GFX_VERSION
+```sh
+ldconfig -p | grep libvulkan
 ```
 
-- 一時設定でだけ改善する場合は、使用中のCTranslate2ホイールにgfx1102コードが含まれるか、ROCm/hipBLASLtの対象archサポートに回帰がないかを確認します。ただし、このoverrideは認識結果を変え、品質を下げる可能性があるため、互換性問題の恒久対策にはしません。
-- 話者分離（pyannote + MIOpen）も gfx1102 で GPU 動作します。
+- 対策: ローダーを導入してから、アプリを起動し直します。GPU を使う場合は、次の項目の ICD も確認してください。
 
-## AMD: 高精度(12B)校正が ROCm にならず Vulkan（やや遅い）で動く
+```sh
+# Ubuntu / Debian
+sudo apt-get install libvulkan1
+# Arch / CachyOS
+sudo pacman -S --needed vulkan-icd-loader
+```
 
-- 12B 校正は AMD で **ROCm 優先 → 失敗時 Vulkan フォールバック**です。ROCm 経路（約35〜37 tok/s）が選ばれず Vulkan（約28〜29 tok/s）になる主因は次のいずれか。
-  - **ROCm ビルドが古い**: ROCm ビルドが b9585 未満（例 b9247）だとドラフト arch `gemma4-assistant` を読めません。セットアップタブから ROCm バックエンド（Rust 側の `install_llm_backend`、既定 b9631）を再取得してください（`~/.cache/{app-id}/llm-engine/bin/llamacpp/rocm-stable/` に展開されます。旧版の`lemonade` cacheは移行時だけフォールバックとして読み取ります）。
-  - **対象 GPU arch の rocBLAS が無い**: ROCm 直起動は rocBLAS を system ROCm（`/opt/rocm*/lib/rocblas/library/*<gfx>*`）から解決します。dGPU の arch（例 gfx1102）の Tensile が無いと起動前ゲート（`system_rocm_tensile_has_arch`）で弾かれ Vulkan になります。system ROCm を導入してください（DL ビルド同梱の therock は iGPU arch 専用のことがあり dGPU には使えません）。
-- いずれも該当しなければ Vulkan で安全に動作します（機能差はなく速度のみ）。
-- 関連クラッシュ痕跡: ROCm を therock 経由で起動すると `rocBLAS error: Cannot read ... TensileLibrary.dat ... for GPU arch : gfx1102` が出ます。本アプリは therock を `LD_LIBRARY_PATH` に載せないことでこれを回避しています。
+## Linux: GPU が使われず CPU で処理される
+
+- Full 版は、Vulkan の GPU が見つからない場合に自動で CPU で処理します（時間がかかります）。Linux では GPU ドライバー案内のバナーやダイアログは表示しません（Windows のみ）。
+- 確認方法: `vulkaninfo --summary`（Ubuntu では `vulkan-tools` パッケージ）に GPU が表示されるか確認します。表示されない場合は、GPU 用の Vulkan ドライバー（ICD）が入っていません。
+  - AMD / Intel: Mesa の Vulkan ドライバー（Ubuntu / Debian: `mesa-vulkan-drivers`。Arch 系: `vulkan-radeon` / `vulkan-intel`）
+  - NVIDIA: NVIDIA プロプライエタリドライバー（Vulkan ICD を含む。`/usr/share/vulkan/icd.d/nvidia_icd.json` などを確認）
+- ノート PC で GPU が2つある場合は、設定タブで使う GPU を選べます（内蔵 GPU 以外で VRAM が最大の GPU を自動選択します）。
+- ドライバーを入れなくても CPU で処理できます。最低要件は RAM 16GB以上、AVX2、8論理スレッド以上です（Linux でも起動時に確認します）。
 
 ## Linux 開発環境: MP3の再生開始時に固まる
 
-- 症状: `scripts/run-dev-{nvidia,amd,cpu}.sh` で起動した開発版へMP3を読み込み、区間再生を開始すると応答しなくなる。
+- 症状: `scripts/run-dev.sh` で起動した開発版へMP3を読み込み、区間再生を開始すると応答しなくなる。
 - 原因: WebKitGTKが利用するホストGStreamerに `gst-plugins-good` がなく、MP3先頭のID3タグを処理する `id3demux` や、配布方針で利用するLGPLデコーダが欠落している。MP3デコーダ単体が存在してもID3タグを剥がせず、WebKitGTKが `loadedmetadata` / `error` のどちらも返さない場合がある。
 - 確認方法:
 
@@ -133,7 +94,7 @@ unset HSA_OVERRIDE_GFX_VERSION
 gst-inspect-1.0 id3demux mpg123audiodec flacdec
 ```
 
-- 対策: ディストリビューションに応じて、以下のシステムパッケージを明示的に導入する。その後、使用中のバックエンドに対応する `scripts/setup-dev-nvidia.sh` / `setup-dev-amd.sh` / `setup-dev-cpu.sh` を再実行し、`[OK] Verified Linux audio playback dependencies` が表示されてから同じバックエンドの `run-dev-*.sh` を起動する。セットアップは不足を検出した場合、システムを自動変更せず、必要なコマンドを表示して停止する。
+- 対策: ディストリビューションに応じて、以下のシステムパッケージを明示的に導入する。その後、`scripts/setup-dev.sh` を再実行し、`[OK] Verified Linux audio playback dependencies` が表示されてから`run-dev.sh` を起動する。セットアップは不足を検出した場合、システムを自動変更せず、必要なコマンドを表示して停止する。
 
 ```sh
 # CachyOS / Arch
@@ -152,10 +113,10 @@ CodexやVS Codeなど、権限昇格を禁止したサンドボックス内か�
 ```sh
 grep NoNewPrivs /proc/self/status
 cd /home/seitoku/Code/local-transcription-for-therapy
-bash scripts/setup-dev-amd.sh  # このPCがAMD開発機の場合
+bash scripts/setup-dev.sh
 ```
 
-各 `setup-dev-*.sh` の共通実装は `NoNewPrivs=1` を `sudo` 実行前に検出し、実行可能な端末へ移るよう案内して停止する。
+`setup-dev.sh` は `NoNewPrivs=1` を `sudo` 実行前に検出し、実行可能な端末へ移るよう案内して停止する。
 
 ## Linux AppImage: 音声ファイルを選んだ直後に固まる
 
@@ -191,7 +152,7 @@ for name in (b"playbin3", b"filesrc", b"wavparse"):
 ```
 
   同時に `xdg-open` のゾンビプロセスがアプリの子として残る。CachyOS / Arch 系ホストで再現し、Ubuntu では再現しない。
-- 原因: linuxdeploy 製の `AppRun` が `LD_LIBRARY_PATH` の先頭に `$APPDIR/usr/lib` を入れ、それが子・孫プロセスまで継承されます。ビルドホスト（Ubuntu 24.04）の `libreadline.so.8` は 8.2 で、Arch 系ホストの bash 5.3 が要求する `rl_print_keybinding` を持ちません。`/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、ホストの `/bin/sh`（= bash）が同梱 readline を掴んだ時点で起動に失敗します。同梱 readline は、同梱 Python の `readline` 拡張モジュールに引っ張られて AppDir に入っていました。
+- 原因: linuxdeploy 製の `AppRun` が `LD_LIBRARY_PATH` の先頭に `$APPDIR/usr/lib` を入れ、それが子・孫プロセスまで継承されます。ビルドホスト（Ubuntu 24.04）の `libreadline.so.8` は 8.2 で、Arch 系ホストの bash 5.3 が要求する `rl_print_keybinding` を持ちません。`/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、ホストの `/bin/sh`（= bash）が同梱 readline を掴んだ時点で起動に失敗します。同梱 readline は、当時同梱していた Python の `readline` 拡張モジュールに引っ張られて AppDir に入っていました。現在は Python を同梱しないため通常は混入しません。
 - 手元での再現（GPU 不要）:
 
 ```bash
@@ -202,8 +163,8 @@ LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
 ```
 
 - 対策（実施済み）:
-  - ホスト側コマンド（`xdg-open` / `nvidia-smi` / `rocm-smi` / `rocminfo` / `kill` / `curl` / `wget` / `tar` / PATH 上の ffmpeg）の起動時に、`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` などを子プロセス環境から取り除く（`apply_host_command_env`）。同梱バイナリ（同梱 Python / llama-server / 同梱 ffmpeg）には適用しない。
-  - 同梱 Python の `readline` 拡張モジュールをビルド時に除外し、`libreadline.so.8` / `libhistory.so.8` を AppDir から除去する。残っていればビルドを落とす。
+  - ホスト側コマンド（`xdg-open` / `kill` / `curl` / `wget` / `tar` / PATH 上の ffmpeg など）と、ggml 音声エンジン（`RUNPATH=$ORIGIN` の自前ビルドで、隣のライブラリとホストの GPU ドライバーだけを使う）の起動時に、`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` などを子プロセス環境から取り除く（`apply_host_command_env`）。同梱 ffmpeg には適用しない。
+  - Python を同梱しなくなったため readline は通常混入しない。ビルド時に `libreadline.so.8` が AppDir に残っていないことを検査し、残っていればビルドを落とす（検出のみ）。
   - `xdg-open` の子プロセスを回収し、ゾンビを残さない。
 - 補足: この症状は「外部リンク・フォルダオープンが効かない」ものです。音声ファイルを選んだ直後のフリーズは別原因（上の GStreamer の項目）です。
 
@@ -218,8 +179,8 @@ LD_LIBRARY_PATH="$APP_LD" /bin/sh -c 'echo shell-ok'
   経路は変更していません。
 - AppImage の実行前提: ホストに `xdg-desktop-portal` と、デスクトップ環境に対応する
   backend（標準のGTK環境では `xdg-desktop-portal-gtk`）を導入してください。ポータル呼び出し
-  が失敗した場合の rfd fallback に使う `zenity` も必要です。CachyOS / Arch パッケージおよび
-  開発セットアップではこれらを依存・導入対象にしています。KDE では `xdg-desktop-portal-kde`
+  が失敗した場合の rfd fallback に使う `zenity` も必要です。`.deb` と開発セットアップ
+  （`setup-dev.sh`）ではこれらを依存・導入対象にしています。KDE では `xdg-desktop-portal-kde`
   があれば KDE のポータル backend が選ばれます。
 - 確認方法:
 
@@ -246,6 +207,8 @@ tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODU
 ```
 
 ## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（原因確定済み）
+
+> **注記:** この節は CUDA 版と Arch / CachyOS 向けホストパッケージ（`packaging/arch`）があった当時の調査記録です。Arch パッケージは削除済みで、以下に出てくるランチャー（`packaging/arch/lott`）の設定 `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` は削除済みです。現在はアプリ自身が、NVIDIA プロプライエタリカーネルドライバー（`/proc/driver/nvidia/version`）を検出したときに起動冒頭で `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定します（AppImage / deb 共通。ユーザーが `WEBKIT_DMABUF_RENDERER_FORCE_SHM` / `WEBKIT_DISABLE_DMABUF_RENDERER` を設定済みなら尊重し、`LOTT_ENABLE_DMABUF_RENDERER=1` なら設定しません）。`WEBKIT_DISABLE_DMABUF_RENDERER=1` は既定にしないでください。同梱 WebKitGTK が FORCE_SHM に対応する版かは、ビルドログの `libwebkit2gtk-4.1-0` の版で確認します（対応版は未確認）。
 
 > **結論から読む場合:** 原因と恒久対策は本節末尾の[原因の確定と恒久対策](#原因の確定と恒久対策2026-08-28確定)にあります。以下は確定に至るまでの履歴で、当時「可能性が低い」と判断した候補の記録として残しています。
 

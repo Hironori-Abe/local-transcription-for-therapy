@@ -37,8 +37,6 @@
     <p>起動準備中です...</p>
   </div>
 
-  <div class="dev-emulation-label" *ngIf="runtimeCheckDone() && devEmulationLabel()">{{ devEmulationLabel() }}</div>
-
   <div class="tabs-shell" *ngIf="runtimeCheckDone()">
     <button mat-icon-button type="button" class="theme-toggle-btn" (click)="onThemeToggleClick()"
       [matTooltip]="themeToggleTooltip()" aria-label="表示テーマを切り替える">
@@ -49,112 +47,7 @@
     (selectedIndexChange)="onTabIndexChange($event)" [dynamicHeight]="true" animationDuration="150ms">
     <mat-tab [label]="getTranscriptionTabLabel()" *ngIf="canShowTranscriptionTab()">
       <div class="tab-content">
-        <!-- GPU未検出バナー（CUDA/ROCm未インストール時） -->
-        <!-- 開発用プレビュー: LOTT_DEV_EMULATION_MODE=no_cuda で表示 -->
-        <div *ngIf="!runtimeCpuOnlyBuild() && !vulkanBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
-          <div class="gpu-setup-banner-header">
-            <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
-            <span class="gpu-setup-title">
-              {{ buildVariant() === 'rocm' ? 'AMD GPU ランタイム' : buildVariant() === 'cuda' ? 'CUDA' : 'GPU ランタイム' }}
-              が検出されませんでした
-            </span>
-          </div>
-          <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
-          <p class="gpu-setup-desc">文字起こし・話者分離には GPU ランタイムが必要です。以下の内容を確認し、必要なものをインストールしてから下の「GPUを再確認」を押してください。</p>
-
-          <div class="gpu-setup-columns">
-            <div class="gpu-setup-section" *ngIf="showCudaInstallLinks()">
-              <div class="gpu-setup-section-title">
-                <mat-icon class="material-symbols-outlined gpu-setup-brand-icon">memory</mat-icon>
-                NVIDIA GPU の場合
-              </div>
-              <ng-container *ngIf="runtimePlatform() === 'linux'; else cudaWindowsSetup">
-                <p class="gpu-setup-section-note">
-                  Linux 版では CUDA Toolkit と cuDNN を個別にインストールする必要はありません。
-                  必要な CUDA ライブラリはセットアップ時にアプリ専用の Python 環境へ導入されます。
-                  必要なのは NVIDIA プロプライエタリドライバーだけです。
-                  端末で <code>nvidia-smi</code> を実行して GPU 名が表示されるか確認してください。
-                </p>
-              </ng-container>
-              <ng-template #cudaWindowsSetup>
-                <p class="gpu-setup-section-note">CUDA Toolkit 12.X （11や13は不可） と cuDNN 9.x の両方が必要です。</p>
-                <div class="gpu-setup-links">
-                  <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cuda-12-9-2-download-archive')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    CUDA Toolkit 12.9.2
-                  </button>
-                  <button mat-stroked-button class="gpu-setup-link-btn" (click)="openExternalUrl('https://developer.nvidia.com/cudnn-downloads')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    cuDNN 9.X
-                  </button>
-                </div>
-              </ng-template>
-            </div>
-
-            <div class="gpu-setup-section" *ngIf="showRocmInstallLinks()">
-              <div class="gpu-setup-section-title">
-                <mat-icon class="material-symbols-outlined gpu-setup-brand-icon">developer_board</mat-icon>
-                AMD GPU の場合
-              </div>
-              <ng-container *ngIf="runtimePlatform() === 'windows'; else rocmNonWindowsSetup">
-                <p class="gpu-setup-section-note">
-                  Windows と Linux では対応GPU・ドライバー・導入方法が異なります。
-                  Windows向けの最新対応表でGPUとOSの組み合わせを確認してください。
-                </p>
-                <div class="gpu-setup-links">
-                  <button mat-stroked-button class="gpu-setup-link-btn"
-                    (click)="openExternalUrl('https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    ROCm 対応表（Windows / Ryzen）
-                  </button>
-                  <button mat-stroked-button class="gpu-setup-link-btn"
-                    (click)="openExternalUrl('https://rocm.docs.amd.com/en/latest/install/rocm.html')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    ROCm インストール（Windows）
-                  </button>
-                </div>
-              </ng-container>
-              <ng-template #rocmNonWindowsSetup>
-                <p class="gpu-setup-section-note" *ngIf="runtimePlatform() === 'linux'">
-                  Linux版の文字起こしにはROCm 7.2.2以降が必要です。
-                </p>
-                <p class="gpu-setup-section-note" *ngIf="runtimePlatform() !== 'linux'">
-                  お使いのOSに対応するROCm環境を公式対応表で確認してください。
-                </p>
-                <div class="gpu-setup-links" *ngIf="runtimePlatform() === 'linux'">
-                  <button mat-stroked-button class="gpu-setup-link-btn"
-                    (click)="openExternalUrl('https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    ROCm クイックスタート（Linux）
-                  </button>
-                </div>
-                <div class="gpu-setup-links" *ngIf="runtimePlatform() !== 'linux'">
-                  <button mat-stroked-button class="gpu-setup-link-btn"
-                    (click)="openExternalUrl('https://rocm-handbook.amd.com/projects/amd-rocm-programming-guide/en/latest/compatibility/compatibility-matrix.html')">
-                    <mat-icon class="material-symbols-outlined">open_in_new</mat-icon>
-                    ROCm 対応表
-                  </button>
-                </div>
-              </ng-template>
-            </div>
-          </div>
-
-          <p class="gpu-setup-footer">インストールには一時的なインターネット接続が必要です。完了後は通常、アプリの再起動は不要です。</p>
-
-          <div class="gpu-setup-recheck">
-            <p class="gpu-setup-recheck-note">
-              GPUランタイムがすでにインストール済みにもかかわらずこの画面が出る場合は、
-              下の「GPU を再確認」ボタンを押してください。直らないときは、別のタブをクリックして戻ってください。
-            </p>
-            <button mat-flat-button color="primary" class="gpu-setup-recheck-btn" [disabled]="gpuRechecking()"
-              (click)="recheckGpuRuntime()">
-              <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-              {{ gpuRechecking() ? '再確認中...' : 'GPU を再確認' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Vulkan 版: 同梱エンジンが見つからない（インストールの破損） -->
+        <!-- 同梱エンジンが見つからない（インストールの破損） -->
         <div *ngIf="vulkanBuild() && isTranscriptionTabDisabled() && !needsFullSetup()" class="gpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
@@ -168,10 +61,11 @@
         <div *ngIf="vulkanBuild() && vulkanAvailable() === false && !isTranscriptionTabDisabled()" class="gpu-setup-banner cpu-setup-banner">
           <div class="gpu-setup-banner-header">
             <mat-icon class="material-symbols-outlined gpu-setup-icon">info</mat-icon>
-            <span class="gpu-setup-title">GPU が見つからないため、CPU で処理します</span>
+            <span class="gpu-setup-title">{{ devForceCpu() ? '開発オプション: CPU強制（LOTT_DEV_FORCE_CPU）のため、CPUで処理します' : gpuDriverHint() ? 'GPUのドライバーを確認してください' : 'GPUが見つからないため、CPUで処理します' }}</span>
           </div>
+          <p *ngIf="gpuDriverHint()" class="gpu-setup-desc">{{ gpuDriverHint() }}</p>
           <p class="gpu-setup-desc">
-            このままでも使えますが、文字起こし・話者分離{{ vulkanBuild() ? '' : '・AI校正' }}に時間がかかります（目安: GPU の数倍〜十数倍）。
+            このままでも使えますが、文字起こし・話者分離に時間がかかります（目安: GPU の数倍〜十数倍）。
             GPU を搭載している場合は、GPU メーカー（NVIDIA / AMD / Intel）の最新ドライバーを入れてから「GPU を再確認」を押してください。
           </p>
           <div class="gpu-setup-recheck">
@@ -183,45 +77,13 @@
           </div>
         </div>
 
-        <!-- CPUランタイム未検出バナー（通常セットアップ完了後の実行環境エラー） -->
-        <div *ngIf="isCpuRuntimeSetupBannerVisible()" class="gpu-setup-banner cpu-setup-banner">
-          <div class="gpu-setup-banner-header">
-            <mat-icon class="material-symbols-outlined gpu-setup-icon">warning</mat-icon>
-            <span class="gpu-setup-title">CPU推論ランタイムが検出されませんでした</span>
-          </div>
-          <p class="gpu-setup-reason">{{ transcriptionRuntimeReason() }}</p>
-          <p class="gpu-setup-desc">CPU版で文字起こしを利用するには、CPU推論ランタイムが必要です。文字起こし画面上部のセットアップ状態を確認し、必要ならセットアップを再実行してからアプリを再起動してください。</p>
-          <div class="gpu-setup-recheck">
-            <p class="gpu-setup-recheck-note">セットアップやPython環境を変更した後は、状態を再確認してください。</p>
-            <button mat-stroked-button class="gpu-setup-recheck-btn" (click)="onRecheckAllSetupStatus()">
-              <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-              状態を再確認
-            </button>
-          </div>
-        </div>
-
         <!-- 統合セットアップブロック -->
         <div *ngIf="needsFullSetup()" class="unified-setup-block">
           <p class="unified-setup-title">初期セットアップが必要です</p>
 
           <!-- コンポーネント一覧 -->
           <div class="setup-component-list">
-            <!-- Python ランタイム（同梱） -->
-            <div class="setup-component-row" *ngIf="allSetupStatus()?.pythonEnvExpectedPath">
-              <mat-icon class="setup-comp-icon material-symbols-outlined"
-                [class.setup-comp-ok]="allSetupStatus()?.pythonEnv"
-                [class.setup-comp-missing]="!allSetupStatus()?.pythonEnv"
-                [class.setup-comp-downloading]="setupProgressMap()['python_env']?.status === 'downloading'">{{
-                setupProgressMap()['python_env']?.status === 'downloading' ? 'downloading' :
-                (allSetupStatus()?.pythonEnv || setupProgressMap()['python_env']?.status === 'done' || setupProgressMap()['python_env']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">Python 3.12 ランタイム</span>
-              <span class="setup-comp-note" *ngIf="!allSetupStatus()?.pythonEnv">パッケージのインストールが必要です</span>
-              <span class="setup-comp-progress"
-                [class.setup-comp-progress-error]="setupProgressMap()['python_env']?.status === 'error'"
-                [class.setup-comp-progress-done]="setupProgressMap()['python_env']?.status === 'done' || setupProgressMap()['python_env']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['python_env'] as p">{{ p.message }}</span>
-            </div>
-            <!-- faster-whisper turbo -->
+            <!-- 音声認識モデル（whisper.cpp） -->
             <div class="setup-component-row" *ngIf="transcriptionTabVisible()">
               <mat-icon class="setup-comp-icon material-symbols-outlined"
                 [class.setup-comp-ok]="allSetupStatus()?.whisperTurbo"
@@ -229,8 +91,8 @@
                 [class.setup-comp-downloading]="setupProgressMap()['whisper_turbo']?.status === 'downloading'">{{
                 setupProgressMap()['whisper_turbo']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.whisperTurbo || setupProgressMap()['whisper_turbo']?.status === 'done' || setupProgressMap()['whisper_turbo']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">{{ vulkanBuild() ? '音声認識モデル（Whisper large-v3-turbo・無音検出）' : '音声認識モデル（faster-whisper turbo）' }}</span>
-              <span class="setup-comp-size">{{ vulkanBuild() ? '約 1.6 GB' : '約 1.5 GB' }}</span>
+              <span class="setup-comp-name">音声認識モデル（Whisper large-v3-turbo・無音検出）</span>
+              <span class="setup-comp-size">約 1.6 GB</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['whisper_turbo']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['whisper_turbo']?.status === 'done' || setupProgressMap()['whisper_turbo']?.status === 'skipped'"
@@ -244,65 +106,19 @@
                 [class.setup-comp-downloading]="setupProgressMap()['diarization']?.status === 'downloading'">{{
                 setupProgressMap()['diarization']?.status === 'downloading' ? 'downloading' :
                 (allSetupStatus()?.diarization || setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">{{ vulkanBuild() ? '話者分離モデル（Nemotron-3-Diarization）' : '話者分離モデル（pyannote community-1）' }}</span>
-              <span class="setup-comp-size" *ngIf="vulkanBuild()">約 0.1 GB</span>
-              <button *ngIf="vulkanBuild()" mat-button type="button" class="setup-license-btn"
+              <span class="setup-comp-name">話者分離モデル（Nemotron-3-Diarization）</span>
+              <span class="setup-comp-size">約 0.1 GB</span>
+              <button mat-button type="button" class="setup-license-btn"
                 (click)="toggleNemotronLicense()">{{ setupLicenseText() ? 'ライセンスを閉じる' : 'ライセンス（OpenMDW-1.1）' }}</button>
-              <span class="setup-comp-note" *ngIf="!vulkanBuild()">要Hugging Face トークン（下記参照）</span>
               <span class="setup-comp-progress"
                 [class.setup-comp-progress-error]="setupProgressMap()['diarization']?.status === 'error'"
                 [class.setup-comp-progress-done]="setupProgressMap()['diarization']?.status === 'done' || setupProgressMap()['diarization']?.status === 'skipped'"
                 *ngIf="setupProgressMap()['diarization'] as p">{{ p.status === 'error' ? 'エラー（下の詳細を確認してください）' : setupProgressLabel(p) }}</span>
             </div>
-            <!-- AI校正実行エンジン: バンドル済みバイナリがある場合は非表示 -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild() && !allSetupStatus()?.llmBackend">
-              <mat-icon class="setup-comp-icon material-symbols-outlined"
-                [class.setup-comp-ok]="allSetupStatus()?.llmBackend"
-                [class.setup-comp-missing]="!allSetupStatus()?.llmBackend"
-                [class.setup-comp-downloading]="setupProgressMap()['llm_backend']?.status === 'downloading'">{{
-                setupProgressMap()['llm_backend']?.status === 'downloading' ? 'downloading' :
-                (allSetupStatus()?.llmBackend || setupProgressMap()['llm_backend']?.status === 'done') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">AI校正実行エンジン（{{ llmBackendSetupLabel() }}）</span>
-              <span class="setup-comp-note">{{ llmBackendSetupNote() }}</span>
-              <span class="setup-comp-progress"
-                [class.setup-comp-progress-error]="setupProgressMap()['llm_backend']?.status === 'error'"
-                [class.setup-comp-progress-done]="setupProgressMap()['llm_backend']?.status === 'done'"
-                *ngIf="setupProgressMap()['llm_backend'] as p">{{ p.message }}</span>
-            </div>
-            <!-- Gemma GGUF -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
-              <mat-icon class="setup-comp-icon material-symbols-outlined"
-                [class.setup-comp-ok]="allSetupStatus()?.gemmaGguf"
-                [class.setup-comp-missing]="!allSetupStatus()?.gemmaGguf"
-                [class.setup-comp-downloading]="setupProgressMap()['gemma_gguf']?.status === 'downloading'">{{
-                setupProgressMap()['gemma_gguf']?.status === 'downloading' ? 'downloading' :
-                (allSetupStatus()?.gemmaGguf || setupProgressMap()['gemma_gguf']?.status === 'done' || setupProgressMap()['gemma_gguf']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">自動句読点・校正モデル（Gemma 4 E4B QAT UD-Q4_K_XL）</span>
-              <span class="setup-comp-size">約 5 GB</span>
-              <span class="setup-comp-progress"
-                [class.setup-comp-progress-error]="setupProgressMap()['gemma_gguf']?.status === 'error'"
-                [class.setup-comp-progress-done]="setupProgressMap()['gemma_gguf']?.status === 'done' || setupProgressMap()['gemma_gguf']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['gemma_gguf'] as p">{{ p.message }}</span>
-            </div>
-            <!-- Gemma MTP GGUF -->
-            <div class="setup-component-row" *ngIf="runtimeAiProofreadBuild() && buildVariant() === 'cuda'">
-              <mat-icon class="setup-comp-icon material-symbols-outlined"
-                [class.setup-comp-ok]="allSetupStatus()?.gemmaMtpGguf"
-                [class.setup-comp-missing]="!allSetupStatus()?.gemmaMtpGguf"
-                [class.setup-comp-downloading]="setupProgressMap()['gemma_mtp_gguf']?.status === 'downloading'">{{
-                setupProgressMap()['gemma_mtp_gguf']?.status === 'downloading' ? 'downloading' :
-                (allSetupStatus()?.gemmaMtpGguf || setupProgressMap()['gemma_mtp_gguf']?.status === 'done' || setupProgressMap()['gemma_mtp_gguf']?.status === 'skipped') ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-              <span class="setup-comp-name">MTP高速化モデル（Gemma 4 E4B）</span>
-              <span class="setup-comp-size">約 60 MB</span>
-              <span class="setup-comp-progress"
-                [class.setup-comp-progress-error]="setupProgressMap()['gemma_mtp_gguf']?.status === 'error'"
-                [class.setup-comp-progress-done]="setupProgressMap()['gemma_mtp_gguf']?.status === 'done' || setupProgressMap()['gemma_mtp_gguf']?.status === 'skipped'"
-                *ngIf="setupProgressMap()['gemma_mtp_gguf'] as p">{{ p.message }}</span>
-            </div>
           </div>
 
           <!-- Nemotron-3-Diarization のライセンス本文（ダウンロード前に確認できるようにする） -->
-          <div *ngIf="vulkanBuild() && setupLicenseText()" class="setup-license-panel">
+          <div *ngIf="setupLicenseText()" class="setup-license-panel">
             <p class="setup-guide-note">話者分離モデル Nemotron-3-Diarization（NVIDIA）は、次のライセンスで提供されています。ダウンロードすると、この条件に同意したものとみなされます。</p>
             <pre class="setup-license-text">{{ setupLicenseText() }}</pre>
           </div>
@@ -315,50 +131,14 @@
               <div class="diarization-error-title">話者分離モデルのダウンロードに失敗しました</div>
               <div class="diarization-error-message">{{ setupProgressMap()['diarization']?.message }}</div>
               <div class="diarization-error-actions">
-                <ng-container *ngIf="!vulkanBuild()">
-                  <button mat-stroked-button color="primary" (click)="openDiarizationConsentPage()">同意ページを開く</button>
-                  <button mat-stroked-button color="primary" (click)="openHuggingFaceTokenPage()">トークン作成ページを開く</button>
-                </ng-container>
-                <button mat-flat-button color="primary" [disabled]="setupRunning() || setupNeedsHfToken()" (click)="runFullSetup()">もう一度ダウンロード</button>
+                <button mat-flat-button color="primary" [disabled]="setupRunning()" (click)="runFullSetup()">もう一度ダウンロード</button>
               </div>
             </div>
           </div>
 
-          <!-- HF トークンセクション（話者分離モデルが未インストールの場合のみ） -->
-          <ng-container *ngIf="transcriptionTabVisible() && !allSetupStatus()?.diarization && !vulkanBuild()">
-            <div class="unified-setup-guide">
-              <p>話者分離モデルのダウンロードには Hugging Face アクセストークンが必要です。</p>
-              <ol>
-                <li>Hugging Face にログイン（未登録なら無料でアカウント作成）</li>
-                <li><code>pyannote/speaker-diarization-community-1</code> のページで利用条件に同意</li>
-                <li><code>Settings &gt; Access Tokens</code> → <code>New token</code>（権限: <code>read</code>）</li>
-                <li>発行された <code>hf_...</code> を下のフォームに貼り付ける</li>
-              </ol>
-              <p class="setup-guide-note">注意: トークンは保存せず、このダウンロード処理にのみ使用します。</p>
-            </div>
-            <div class="actions-row">
-              <button mat-stroked-button color="primary" (click)="openDiarizationConsentPage()">同意ページを開く</button>
-              <button mat-stroked-button color="primary" (click)="openHuggingFaceTokenPage()">トークン作成ページを開く</button>
-            </div>
-            <mat-form-field appearance="outline" class="token-input-field">
-              <mat-label>Hugging Face アクセストークン</mat-label>
-              <input matInput [type]="diarizationInstallTokenInputType()" autocomplete="off" [disabled]="setupRunning()"
-                [value]="diarizationInstallToken()" (input)="diarizationInstallToken.set($any($event.target).value)"
-                placeholder="hf_..." />
-              <button mat-icon-button matSuffix type="button" [disabled]="setupRunning()"
-                (click)="diarizationInstallTokenVisible.set(!diarizationInstallTokenVisible())"
-                [attr.aria-label]="diarizationInstallTokenVisibilityLabel()"
-                [attr.aria-pressed]="diarizationInstallTokenVisible()"
-                [attr.title]="diarizationInstallTokenVisibilityLabel()">
-                <mat-icon class="material-symbols-outlined" aria-hidden="true">{{ diarizationInstallTokenVisibilityIcon() }}</mat-icon>
-              </button>
-            </mat-form-field>
-          </ng-container>
-
           <!-- アクションボタン -->
           <div class="actions-row unified-setup-actions" *ngIf="!setupRunning()">
-            <button mat-flat-button color="primary" [disabled]="setupRunning() || setupNeedsHfToken()"
-              [matTooltip]="setupNeedsHfToken() ? '話者分離モデルのダウンロードにはHFトークンが必要です' : ''" (click)="runFullSetup()">
+            <button mat-flat-button color="primary" [disabled]="setupRunning()" (click)="runFullSetup()">
               不足しているファイルをすべてダウンロード
             </button>
             <button mat-stroked-button (click)="onRecheckAllSetupStatus()">
@@ -406,6 +186,13 @@
                 {{ getEstimatedTimeLabel() }}: {{ getEstimatedTimeMessage() }}
               </p>
             </div>
+            <div *ngIf="speechDeviceLine()" class="actions-row run-controls-row">
+              <p class="estimate-line speech-device-line" [class.speech-device-cpu]="speechRunsOnCpu()">
+                <mat-icon class="material-symbols-outlined speech-device-icon">{{ speechRunsOnCpu() ? 'memory' : 'developer_board' }}</mat-icon>
+                {{ speechDeviceLine() }}
+              </p>
+              <p *ngIf="devForceCpu()" class="estimate-line dev-force-cpu-badge">開発オプション: CPU強制（LOTT_DEV_FORCE_CPU）</p>
+            </div>
 
             <div class="prompt-row">
               <mat-form-field appearance="outline" class="speaker-count-field">
@@ -418,72 +205,27 @@
                   </mat-option>
                 </mat-select>
               </mat-form-field>
-              <mat-checkbox [style.display]="'none'"
-                [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                [checked]="highpassFilter()" (change)="onHighpassFilterChange($event.checked)">
-                ハイパス
-              </mat-checkbox>
-              <mat-checkbox [style.display]="'none'"
-                [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                [checked]="noiseReduction()" (change)="onNoiseReductionChange($event.checked)">
-                <span class="preproc-checkbox-label">ノイズ低減<span class="preproc-checkbox-sub">（所要時間増加）</span></span>
-              </mat-checkbox>
-              <mat-checkbox [style.display]="'none'"
-                [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                [checked]="normalizeAudio()" (change)="onNormalizeAudioChange($event.checked)">
-                正規化
-              </mat-checkbox>
-              <mat-form-field appearance="outline" class="audio-preprocess-preset-field">
+              <mat-form-field *ngIf="!editorOnlyBuild" appearance="outline" class="audio-preprocess-preset-field">
                 <mat-label>音声調整</mat-label>
                 <mat-select
                   [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                  [value]="audioPreprocessPreset()" (valueChange)="onAudioPreprocessPresetChange($event)">
+                  [value]="audioPreprocess()" (valueChange)="onAudioPreprocessPresetChange($event)">
                   <mat-option *ngFor="let option of audioPreprocessPresetOptions" [value]="option.value">
                     {{ option.label }}
                   </mat-option>
-                  <mat-option *ngIf="audioPreprocessPreset() === 'manual'" [value]="'manual'" disabled>
-                    手動設定
-                  </mat-option>
                 </mat-select>
-                <mat-hint *ngIf="audioPreprocessPresetHint()">{{ audioPreprocessPresetHint() }}</mat-hint>
-              </mat-form-field>
-              <mat-form-field appearance="outline" class="clustering-adjust-field">
-                <mat-label>再試行の理由（必要時のみ）</mat-label>
-                <mat-select
-                  [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                  [value]="clusteringAdjust()" (valueChange)="clusteringAdjust.set($event)">
-                  <mat-option value="standard">再試行ではない</mat-option>
-                  <mat-option value="over_split">一人の声が複数の話者に分かれる</mat-option>
-                  <mat-option value="under_split">話者の切り替わりが検出されない</mat-option>
-                </mat-select>
-              </mat-form-field>
-              <mat-form-field appearance="outline" class="prompt-field">
-                <mat-label>頻出語・注目語</mat-label>
-                <input matInput id="initial-prompt-input" type="text"
-                  [disabled]="running() || isDiarizationModelMissing()" [value]="initialPrompt()"
-                  (input)="initialPrompt.set($any($event.target).value)"
-                  placeholder="複数ある場合は&quot;半角スペース&quot;で区切ってください" />
-                <mat-hint>（注）長いと話者の分離が失敗しやすくなります。</mat-hint>
+                <mat-hint>{{ audioPreprocessPresetHint() }}</mat-hint>
               </mat-form-field>
             </div>
-            <div>
+            <div *ngIf="!editorOnlyBuild">
               <p class="estimate-line" style="padding-top: 10px; padding-bottom: 10px;">
                 音声調整は「やれば、必ず文字起こしの精度が上がる」ものではありません。用意された録音が良質なことが最も重要です。良質な音声ファイルを調整すると、むしろ精度が下がることがあります。</p>
             </div>
 
             <div class="actions-row run-controls-row">
-              <mat-form-field appearance="outline" class="compute-type-field" [style.display]="'none'">
-                <mat-label>実行デバイス</mat-label>
-                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                  [value]="transcriptionDevice()" (valueChange)="onTranscriptionDeviceChange($event)">
-                  <mat-option *ngFor="let option of transcriptionDeviceOptions" [value]="option.value">
-                    {{ option.label }}
-                  </mat-option>
-                </mat-select>
-              </mat-form-field>
               <button mat-flat-button class="run-exec-btn" [color]="transcriptionPipelineRunning() ? 'warn' : 'accent'"
                 [ngClass]="{ 'run-exec-btn-warn': transcriptionPipelineRunning() }"
-                [disabled]="isTranscriptionTabDisabled() || (!transcriptionPipelineRunning() && (proofreadRunning() || diarizationRunning() || llmProofreadRunning() || llmProofreadCanceling())) || transcriptionRunLockedByImport() || !selectedAudioPath() || transcriptionPipelineCanceling() || audioFileLoading()"
+                [disabled]="isTranscriptionTabDisabled() || (!transcriptionPipelineRunning() && (proofreadRunning() || diarizationRunning())) || transcriptionRunLockedByImport() || !selectedAudioPath() || transcriptionPipelineCanceling() || audioFileLoading()"
                 (click)="transcriptionPipelineRunning() ? requestCancelRun('transcriptionPipeline') : runTranscription()">
                 {{
                 transcriptionPipelineRunning()
@@ -491,50 +233,15 @@
                 : '文字起こし開始'
                 }}
               </button>
-              <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・{{ transcriptionEngine() === 'ggml' ? '句読点付与' : 'AI句読点付与' }}を処理中です。しばらくお待ちください...</p>
+              <p *ngIf="transcriptionPipelineRunning()">文字起こし・話者分離・句読点付与を処理中です。しばらくお待ちください...</p>
               <ng-container *ngIf="result() && lastRunElapsedSeconds() > 0">
                 <p class="copy-status">所要時間: {{ formatElapsedMinuteSecond(lastRunElapsedSeconds())}}</p>
               </ng-container>
             </div>
 
-            <ng-container *ngIf="false">
-              <div class="section-separator"><span>話者分離</span></div>
-              <div class="actions-row run-controls-row proofread-controls-row">
-                <mat-form-field appearance="outline" class="speaker-count-field">
-                  <mat-label>話者数</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                    [value]="speakerCount()" (valueChange)="onSpeakerCountChange($event)">
-                    <mat-option *ngFor="let count of speakerCountOptions" [value]="count">
-                      {{ count }}
-                    </mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <mat-form-field appearance="outline" class="compute-type-field">
-                  <mat-label>話者分離デバイス</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                    [value]="diarizationDevice()" (valueChange)="onDiarizationDeviceChange($event)">
-                    <mat-option *ngFor="let option of transcriptionDeviceOptions" [value]="option.value">
-                      {{ option.label }}
-                    </mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <button mat-flat-button class="run-exec-btn" [color]="diarizationRunning() ? 'warn' : 'primary'"
-                  [ngClass]="{ 'run-exec-btn-warn': diarizationRunning() }"
-                  [disabled]="transcriptionPipelineRunning() || running() || proofreadRunning() || ((!diarizationRunning()) && !result()) || diarizationCanceling()"
-                  (click)="diarizationRunning() ? requestCancelRun('diarization') : runDiarization()">
-                  {{
-                  diarizationRunning()
-                  ? (diarizationCanceling() ? '中止要求送信中...' : '話者分離を中止')
-                  : '話者分離'
-                  }}
-                </button>
-              </div>
-            </ng-container>
-
             <div *ngIf="running()" class="running-area">
               <mat-progress-bar mode="indeterminate"></mat-progress-bar>
-              <div class="running-status-row" *ngIf="runningComputeType() || runningStepTotal() > 0">
-                <p class="running-status" *ngIf="runningComputeType()">採用方式: {{ runningComputeType() }}</p>
+              <div class="running-status-row" *ngIf="runningStepTotal() > 0">
                 <p class="running-status" *ngIf="runningStepTotal() > 0">{{ runningStatus() }} 工程：{{
                   runningStepCurrent() }}/{{ runningStepTotal() }} 経過時間：{{ runningSeconds() }} 秒</p>
               </div>
@@ -557,10 +264,6 @@
               </div>
             </div>
 
-            <div *ngIf="!runtimeCpuOnlyBuild() && gpuSetupHint" class="gpu-hint-block">
-              <p class="gpu-hint-title">GPU設定ヒント</p>
-              <pre class="gpu-hint">{{ gpuSetupHint }}</pre>
-            </div>
 
           </mat-card-content>
         </mat-card>
@@ -633,12 +336,9 @@
                 <mat-form-field appearance="outline" class="dev-delete-select">
                   <mat-label>削除対象</mat-label>
                   <mat-select [value]="devDeleteTarget()" (valueChange)="devDeleteTarget.set($event)" [disabled]="devDeletingModels()">
-                    <mat-option value="whisper_turbo">Whisper turbo</mat-option>
-                    <mat-option value="whisper_large_v3">Whisper large-v3</mat-option>
-                    <mat-option value="diarization">話者分離モデル</mat-option>
-                    <mat-option *ngIf="runtimeAiProofreadBuild()" value="llm">LLMモデル</mat-option>
-                    <mat-option value="python_runtime">Pythonランタイムのみ</mat-option>
-                    <mat-option value="all">すべて（Pythonランタイムを含む）</mat-option>
+                    <mat-option value="whisper_turbo">音声認識モデル（Whisper turbo・無音検出）</mat-option>
+                    <mat-option value="diarization">話者分離モデル（Nemotron）</mat-option>
+                    <mat-option value="all">すべて</mat-option>
                   </mat-select>
                 </mat-form-field>
                 <button mat-stroked-button color="warn" [disabled]="devDeletingModels()"
@@ -682,57 +382,8 @@
                         {{ option.label }}
                       </mat-option>
                     </mat-select>
-                    <mat-hint *ngIf="!vulkanBuild() && largeV3Installed() === false && !largeV3Downloading()">
-                      large-v3はダウンロードが必要です
-                    </mat-hint>
                   </mat-form-field>
-                  <div *ngIf="largeV3Downloading()" class="whisper-dl-progress">
-                    <mat-progress-bar
-                      [mode]="largeV3DownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
-                      [value]="largeV3DownloadPercent()"></mat-progress-bar>
-                    <span class="whisper-dl-bytes">{{ largeV3DownloadBytesLabel() || 'ダウンロード中...' }}</span>
-                  </div>
                 </div>
-                <ng-container *ngIf="!runtimeCpuOnlyBuild() && !vulkanBuild()">
-                  <ng-container *ngIf="computeEnvInfo(); else envLoading">
-                    <!-- <span class="compute-env-badge" [class.backend-cuda]="computeEnvInfo()!.backendType === 'cuda'"
-                      [class.backend-rocm]="computeEnvInfo()!.backendType === 'rocm'"
-                      [class.backend-none]="computeEnvInfo()!.backendType === 'none'">
-                      {{ computeEnvBackendLabel() }}
-                    </span> -->
-                    <mat-form-field *ngIf="computeEnvInfo()!.devices.length > 0" appearance="outline"
-                      class="settings-llm-field settings-field-device">
-                      <mat-label>使用デバイス</mat-label>
-                      <mat-select [disabled]="running() || diarizationRunning()" [value]="selectedHipDeviceIndex()"
-                        (valueChange)="onHipDeviceChange($event)">
-                        <mat-option [value]="-1">自動（デフォルト）</mat-option>
-                        <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
-                          {{ gpuDeviceLabel(d) }}
-                        </mat-option>
-                      </mat-select>
-                    </mat-form-field>
-                    <span *ngIf="computeEnvInfo()!.devices.length === 0" class="compute-env-no-dev">
-                      GPU デバイス未検出
-                    </span>
-                    <div *ngIf="selectedGpuAsrWarning()" class="gpu-asr-warning">
-                      <mat-icon class="material-symbols-outlined">warning</mat-icon>
-                      {{ selectedGpuAsrWarning() }}
-                    </div>
-                  </ng-container>
-                  <ng-template #envLoading>
-                    <span class="compute-env-no-dev">演算環境を確認中...</span>
-                  </ng-template>
-                </ng-container>
-                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>計算方式</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning() || isDiarizationModelMissing()"
-                    [value]="computeType()" (valueChange)="onComputeTypeChange($event)">
-                    <mat-option *ngFor="let option of computeTypeOptions()" [value]="option.value"
-                      [disabled]="option.value === 'int8' && isRocmGpu()">
-                      {{ option.label }}{{ option.value === 'int8' && isRocmGpu() ? '（ROCm 未検証）' : '' }}
-                    </mat-option>
-                  </mat-select>
-                </mat-form-field>
                 <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
                   <mat-label>対象言語</mat-label>
                   <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
@@ -742,41 +393,9 @@
                     </mat-option>
                   </mat-select>
                 </mat-form-field>
-                <!-- <button mat-icon-button (click)="loadComputeEnv()" aria-label="演算環境を再確認" matTooltip="演算環境を再確認"
-                  matTooltipPosition="above">
-                  <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-                </button> -->
-                <!-- 処理方法: 封印中 -->
-                <!-- <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact"
-                style="display: none">
-                <mat-label>処理方法</mat-label>
-                <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                  [value]="parallelMode()" (valueChange)="parallelMode.set($event)">
-                  <mat-option value="standard">継次処理</mat-option>
-                  <mat-option value="fast">並行処理</mat-option>
-                </mat-select>
-                <mat-hint>{{ parallelModeHint() }}</mat-hint>
-              </mat-form-field> -->
               </div>
-              <!-- 音声エンジン: 既定は標準（faster-whisper / pyannote）。ggml は whisper.cpp / Nemotron-3-Diarization の試験的経路。 -->
               <div class="actions-row settings-llm-row">
-                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>文字起こしエンジン</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                    [value]="transcriptionEngine()" (valueChange)="onTranscriptionEngineChange($event)">
-                    <mat-option value="standard">標準（faster-whisper）</mat-option>
-                    <mat-option value="ggml">whisper.cpp（試験的）</mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <mat-form-field *ngIf="!vulkanBuild()" appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>話者分離エンジン</mat-label>
-                  <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
-                    [value]="diarizationEngine()" (valueChange)="onDiarizationEngineChange($event)">
-                    <mat-option value="standard">標準（pyannote）</mat-option>
-                    <mat-option value="ggml">Nemotron（試験的）</mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <!-- Vulkan 版の ggml エンジンが使う GPU。自動は「単体 GPU の中で VRAM 最大 → 無ければ内蔵 GPU」。 -->
+                <!-- 音声エンジンが使う GPU。自動は「単体 GPU の中で VRAM 最大 → 無ければ内蔵 GPU」。 -->
                 <mat-form-field *ngIf="ggmlGpuSelectorVisible()" appearance="outline"
                   class="settings-llm-field settings-field-device">
                   <mat-label>音声エンジンの GPU</mat-label>
@@ -791,11 +410,16 @@
                   {{ ggmlSpeechWarning() }}
                 </div>
               </div>
-              <!-- Vulkan 版: CUDA 版から上書きしたときに残った不要データの削除 -->
-              <div *ngIf="vulkanBuild() && (legacyCudaData().length > 0 || legacyCudaDataMessage())" class="legacy-data-block">
+            </ng-container>
+
+            <!-- 以前の版で使っていたデータの削除（Editor 版・フル機能版とも） -->
+            <ng-container>
+              <div *ngIf="legacyCudaData().length > 0 || legacyCudaDataMessage()" class="legacy-data-block">
                 <ng-container *ngIf="legacyCudaData().length > 0">
                   <p class="estimate-line">
-                    以前の版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。この版の音声認識・話者分離モデルは削除しません。
+                    以前の版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。
+                    <ng-container *ngIf="editorOnlyBuild">現在のWhisper音声入力モデルは削除しません。</ng-container>
+                    <ng-container *ngIf="vulkanBuild()">この版の音声認識・話者分離モデルは削除しません。</ng-container>
                   </p>
                   <ul class="legacy-data-list">
                     <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ item.bytes >= 107374182 ? (item.bytes / 1073741824).toFixed(1) + ' GB' : (item.bytes / 1048576).toFixed(0) + ' MB' }}）</li>
@@ -818,12 +442,11 @@
               </div>
             </ng-container>
 
-            <!-- 音声入力パック: Vulkan版以外で表示。Editor版・CPU版はCPUバックエンド込み、Full版はGPU直起動のため
-                 mmproj（+未導入ならE4B本体）のみ導入する。 -->
-            <ng-container *ngIf="!vulkanBuild()">
+            <!-- 音声入力パック（Editor 版だけ。フル機能版は文字起こしと同じモデルを使うため不要） -->
+            <ng-container *ngIf="editorOnlyBuild">
               <div class="section-separator"><span>音声入力パック</span></div>
               <div class="voice-input-pack-panel">
-                <div *ngIf="editorOnlyBuild" class="actions-row settings-llm-row">
+                <div class="actions-row settings-llm-row">
                   <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
                     <mat-label>対象言語</mat-label>
                     <mat-select [disabled]="running() || proofreadRunning() || diarizationRunning()"
@@ -835,60 +458,19 @@
                   </mat-form-field>
                 </div>
                 <div class="setup-component-list voice-input-pack-list">
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.cpuBackendRequired ?? runtimeCpuVoiceInputBuild()">
-                    <mat-icon class="setup-comp-icon material-symbols-outlined"
-                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.cpuBackend"
-                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.cpuBackend"
-                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'downloading'">{{
-                      editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'downloading' ? 'downloading' :
-                      editorVoiceInputPackStatus()?.cpuBackend ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-                    <span class="setup-comp-name">llama.cpp CPU バックエンド</span>
-                    <span class="setup-comp-progress"
-                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'error'"
-                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_cpu_backend')?.status === 'skipped'"
-                      *ngIf="editorVoiceInputPackComponentProgress('voice_cpu_backend') as p">{{ p.message }}</span>
-                  </div>
-                  <div class="setup-component-row" *ngIf="editorVoiceInputPackStatus()?.ffmpegRequired ?? runtimeCpuVoiceInputBuild()">
-                    <mat-icon class="setup-comp-icon material-symbols-outlined"
-                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.ffmpeg"
-                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.ffmpeg"
-                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'downloading'">{{
-                      editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'downloading' ? 'downloading' :
-                      editorVoiceInputPackStatus()?.ffmpeg ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-                    <span class="setup-comp-name">音声切り出し用 ffmpeg（LGPL）</span>
-                    <span class="setup-comp-size">約 95 MiB</span>
-                    <span class="setup-comp-progress"
-                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'error'"
-                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_ffmpeg')?.status === 'skipped'"
-                      *ngIf="editorVoiceInputPackComponentProgress('voice_ffmpeg') as p">{{ p.message }}</span>
-                  </div>
                   <div class="setup-component-row">
                     <mat-icon class="setup-comp-icon material-symbols-outlined"
-                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.gemmaGguf"
-                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.gemmaGguf"
-                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'downloading'">{{
-                      editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'downloading' ? 'downloading' :
-                      editorVoiceInputPackStatus()?.gemmaGguf ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-                    <span class="setup-comp-name">Gemma 4 E4B QAT GGUF</span>
-                    <span class="setup-comp-size">約 4.0 GiB</span>
+                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.installed"
+                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.installed"
+                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('whisper_turbo')?.status === 'downloading'">{{
+                      editorVoiceInputPackComponentProgress('whisper_turbo')?.status === 'downloading' ? 'downloading' :
+                      editorVoiceInputPackStatus()?.installed ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
+                    <span class="setup-comp-name">音声認識モデル（Whisper large-v3-turbo・無音検出）</span>
+                    <span class="setup-comp-size">約1.6GB</span>
                     <span class="setup-comp-progress"
-                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'error'"
-                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_gemma_gguf')?.status === 'skipped'"
-                      *ngIf="editorVoiceInputPackComponentProgress('voice_gemma_gguf') as p">{{ p.message }}</span>
-                  </div>
-                  <div class="setup-component-row">
-                    <mat-icon class="setup-comp-icon material-symbols-outlined"
-                      [class.setup-comp-ok]="editorVoiceInputPackStatus()?.mmprojGguf"
-                      [class.setup-comp-missing]="!editorVoiceInputPackStatus()?.mmprojGguf"
-                      [class.setup-comp-downloading]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'downloading'">{{
-                      editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'downloading' ? 'downloading' :
-                      editorVoiceInputPackStatus()?.mmprojGguf ? 'check_circle' : 'radio_button_unchecked' }}</mat-icon>
-                    <span class="setup-comp-name">Gemma 4 E4B 音声入力 mmproj</span>
-                    <span class="setup-comp-size">約 946 MiB</span>
-                    <span class="setup-comp-progress"
-                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'error'"
-                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'done' || editorVoiceInputPackComponentProgress('voice_mmproj_gguf')?.status === 'skipped'"
-                      *ngIf="editorVoiceInputPackComponentProgress('voice_mmproj_gguf') as p">{{ p.message }}</span>
+                      [class.setup-comp-progress-error]="editorVoiceInputPackComponentProgress('whisper_turbo')?.status === 'error'"
+                      [class.setup-comp-progress-done]="editorVoiceInputPackComponentProgress('whisper_turbo')?.status === 'done' || editorVoiceInputPackComponentProgress('whisper_turbo')?.status === 'skipped'"
+                      *ngIf="editorVoiceInputPackComponentProgress('whisper_turbo') as p">{{ p.message }}</span>
                   </div>
                 </div>
                 <div *ngIf="editorVoiceInputPackInstalling()" class="voice-input-pack-progress">
@@ -899,18 +481,9 @@
                 <p class="reader-hint voice-input-pack-note">
                   音声入力は最大15秒の録音をローカルで処理し、入力候補を生成します。録音後の解析と候補の提示には時間がかかります。
                 </p>
-                <p *ngIf="runtimeCpuVoiceInputBuild() && editorVoiceInputMemoryWarning() as memoryWarning"
-                  class="reader-hint voice-input-pack-note voice-input-memory-warning"
-                  [class.voice-input-memory-warning-low]="editorVoiceInputMemoryTier() === 'low'">
-                  {{ memoryWarning }}
-                </p>
                 <p class="reader-hint voice-input-pack-note"
-                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && editorVoiceInputPackStatus()?.cpuBackendRequired">
-                  未導入の場合は、Gemma 4 E4B 本体・音声入力 mmproj・llama.cpp CPU バックエンド・音声切り出し用 ffmpeg を合わせて約5.1 GiBをダウンロードします。
-                </p>
-                <p class="reader-hint voice-input-pack-note"
-                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed && !editorVoiceInputPackStatus()?.cpuBackendRequired">
-                  未導入の場合は、音声入力用 mmproj 約946MiBをダウンロードします（Gemma 4 E4B 本体が未導入の場合は追加で約4.0GiB）。
+                  *ngIf="editorVoiceInputPackChecked() && !editorVoiceInputPackStatus()?.installed">
+                  未導入の場合は、Whisper large-v3-turbo と無音検出モデルを合わせて約1.6GBダウンロードします。
                 </p>
                 <p class="copy-status error-text" *ngIf="editorVoiceInputPackProgressMap()['_error'] as e">{{ e.message }}</p>
                 <div *ngIf="editorVoiceInputPackDeleteResult() as r" class="dev-delete-result">
@@ -931,16 +504,11 @@
                   </p>
                 </div>
                 <div class="actions-row">
-                  <button mat-flat-button [color]="editorVoiceInputDownloadButtonColor()"
+                  <button mat-flat-button color="primary"
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting() || editorVoiceInputPackStatus()?.installed"
                     (click)="installEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">download</mat-icon>
                     {{ editorVoiceInputPackStatus()?.installed ? '導入済み' : (editorVoiceInputPackInstalling() ? '導入中...' : '音声入力パックをダウンロード') }}
-                  </button>
-                  <button *ngIf="runtimeCpuVoiceInputBuild() && editorVoiceInputMemoryTier() === 'low' && editorVoiceInputPackStatus()?.installed && !editorLowMemoryVoiceInputOptIn()"
-                    mat-flat-button color="warn" (click)="enableEditorVoiceInputForLowMemory()">
-                    <mat-icon class="material-symbols-outlined">warning</mat-icon>
-                    非推奨環境で音声入力を有効にする
                   </button>
                   <button mat-stroked-button [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="checkEditorVoiceInputPackStatus()">
@@ -951,276 +519,13 @@
                     [disabled]="editorVoiceInputPackInstalling() || editorVoiceInputPackDeleting()"
                     (click)="devDeleteEditorVoiceInputPack()">
                     <mat-icon class="material-symbols-outlined">delete</mat-icon>
-                    {{ runtimeCpuVoiceInputBuild() ? 'llama.cpp CPU/mmproj/ffmpegを削除' : 'mmprojを削除' }}
+                    Whisperモデルを削除
                   </button>
                   <span *ngIf="editorVoiceInputPackDeleting()" class="copy-status">削除中...</span>
                 </div>
               </div>
             </ng-container>
 
-            <ng-container *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
-              <div class="section-separator"><span>校正用AIモデル</span></div>
-              <div class="actions-row settings-llm-row">
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
-                  <mat-label>AI校正バックエンド</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning() || gemma12bDownloading()"
-                    [value]="llmBackendSelection()" (valueChange)="onLlmBackendSelectionChange($event)">
-                    <mat-option *ngFor="let option of llmBackendModeOptions()" [value]="option.value">
-                      {{ option.label }}
-                    </mat-option>
-                  </mat-select>
-                  <mat-hint>{{ llmBackendModeHint() }}</mat-hint>
-                </mat-form-field>
-                <button *ngIf="proofreadModelTierVisible()" mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AI校正に使う内蔵モデルを選びます。&#10;Gemma4 E4B（高速・既定）: 軽量で高速。&#10;Gemma4 12B（高精度・要DL）: より高精度ですが約7GBの追加ダウンロードが必要で、処理は重くなります。&#10;変更は次回のAI校正から反映されます。"
-                  matTooltipClass="settings-info-tooltip" aria-label="AI校正バックエンドの説明">
-                  <mat-icon class="material-symbols-outlined">info</mat-icon>
-                </button>
-                <div *ngIf="proofreadModelTierVisible() && gemma12bDownloading()" class="whisper-dl-progress">
-                  <mat-progress-bar
-                    [mode]="gemma12bDownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
-                    [value]="gemma12bDownloadPercent()"></mat-progress-bar>
-                  <span class="whisper-dl-bytes">{{ gemma12bDownloadBytesLabel() || 'ダウンロード中...' }}</span>
-                  <span class="copy-status">{{ gemma12bDownloadMessage() }}</span>
-                </div>
-                <p *ngIf="proofreadModelTierVisible() && gemma12bInstalled() === false && !gemma12bDownloading()"
-                  class="reader-hint voice-input-pack-note">
-                  {{ gemma12bDownloadMessage() || 'Gemma4 12Bは未導入です。内蔵モデルを選択すると、約7GBのダウンロードが始まります。' }}
-                </p>
-                <mat-form-field *ngIf="llmBackendMode() === 'local_gguf' && computeEnvInfo()?.devices?.length"
-                  appearance="outline" class="settings-llm-field settings-field-device">
-                  <mat-label>使用デバイス</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning()" [value]="selectedLlmHipDeviceIndex()"
-                    (valueChange)="onLlmHipDeviceChange($event)">
-                    <mat-option [value]="-1">自動（デフォルト）</mat-option>
-                    <mat-option *ngFor="let d of computeEnvInfo()!.devices" [value]="d.index">
-                      {{ gpuDeviceLabel(d) }}
-                    </mat-option>
-                  </mat-select>
-                </mat-form-field>
-                <ng-container *ngIf="llmBackendMode() !== 'local_gguf'">
-                  <button mat-stroked-button (click)="loadLocalOpenAiModels()"
-                    [disabled]="llmProofreadRunning() || localOpenAiModelsLoading()">
-                    {{ localOpenAiModelsLoading() ? '取得中...' : 'モデルを取得' }}
-                  </button>
-                  <mat-form-field appearance="outline" class="settings-llm-field settings-field-wide">
-                    <mat-label>モデル名</mat-label>
-                    <mat-select [disabled]="llmProofreadRunning()" [value]="activeOpenAiModelInput()"
-                      (valueChange)="onLocalOpenAiModelInput($event)">
-                      <mat-option
-                        *ngIf="activeOpenAiModelInput() && !localOpenAiAvailableModels().includes(activeOpenAiModelInput())"
-                        [value]="activeOpenAiModelInput()">
-                        {{ activeOpenAiModelInput() }}
-                      </mat-option>
-                      <mat-option *ngFor="let model of localOpenAiAvailableModels()" [value]="model">
-                        {{ model }}
-                      </mat-option>
-                    </mat-select>
-                    <mat-hint
-                      *ngIf="localOpenAiAvailableModels().length === 0 && !activeOpenAiModelInput()">「モデルを取得」でモデル一覧を取得してください</mat-hint>
-                    <mat-hint
-                      *ngIf="localOpenAiAvailableModels().length === 0 && activeOpenAiModelInput()">「モデルを取得」で一覧を更新できます</mat-hint>
-                  </mat-form-field>
-                </ng-container>
-              </div>
-              <!-- LLM推論パラメータ行（行ごとの AI 句読点付与向け。Vulkan 版は句読点をルールで付け、
-                   全体校正の 12B は文脈長・並列数を固定しているため表示しない） -->
-              <div *ngIf="!vulkanBuild()" class="actions-row settings-llm-row settings-llm-inference-params-row">
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>コンテキスト長</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning()" [value]="llmNCtx()"
-                    (valueChange)="onLlmNCtxChange($event)">
-                    <mat-option [value]="0">自動（VRAMで判定）</mat-option>
-                    <mat-option [value]="4096">4,096</mat-option>
-                    <mat-option [value]="8192">8,192</mat-option>
-                    <mat-option [value]="16384">16,384</mat-option>
-                    <mat-option [value]="32768">32,768</mat-option>
-                    <mat-option [value]="65536">65,536</mat-option>
-                    <mat-option [value]="131072">131,072</mat-option>
-                  </mat-select>
-                  <mat-hint *ngIf="llmNCtxHint()">{{ llmNCtxHint() }}</mat-hint>
-                </mat-form-field>
-                <button mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AIが1回の呼び出しで保持できる文脈量の上限（n_ctx / 入力・出力を含むトークン数）。&#10;自動: VRAMで判定（16GB以上→32,768 / それ未満→16,384）。&#10;大きいほど長い会話に対応できますがVRAM使用量が増えます。&#10;変更は次回のAI校正から反映されます。"
-                  matTooltipClass="settings-info-tooltip" aria-label="コンテキスト長の説明">
-                  <mat-icon class="material-symbols-outlined">info</mat-icon>
-                </button>
-                <mat-form-field *ngIf="llmBackendMode() === 'local_gguf'"
-                  appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>並列処理数</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning()" [value]="selectedLlmParallel()"
-                    (valueChange)="onLlmParallelChange($event)">
-                    <mat-option [value]="0">自動（VRAMで判定）</mat-option>
-                    <mat-option [value]="1">1（並列なし）</mat-option>
-                    <mat-option [value]="2">2</mat-option>
-                    <mat-option [value]="4">4</mat-option>
-                    <mat-option [value]="8">8</mat-option>
-                    <mat-option [value]="12">12</mat-option>
-                    <mat-option [value]="16">16</mat-option>
-                    <mat-option [value]="20">20</mat-option>
-                    <mat-option [value]="24">24</mat-option>
-                  </mat-select>
-                  <mat-hint *ngIf="llmParallelHint()">{{ llmParallelHint() }}</mat-hint>
-                </mat-form-field>
-                <button *ngIf="llmBackendMode() === 'local_gguf'" mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AI校正で同時にAIへ送るバッチ数（継続バッチング）。GPUのアイドル時間を埋めて高速化します。&#10;RTX（CUDA）でのみ有効。自動: VRAMで判定（12GB以上→4 / 8GB以上→2 / それ未満→1）。手動指定は最大24です。&#10;VRAM不足でエラーが出る場合は小さい値に。変更は次回のAI校正から反映されます。"
-                  matTooltipClass="settings-info-tooltip" aria-label="並列処理数の説明">
-                  <mat-icon class="material-symbols-outlined">info</mat-icon>
-                </button>
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>一括処理セグメント数</mat-label>
-                  <input matInput type="number" [value]="llmMaxBatch()" min="1" max="100" step="1"
-                    [disabled]="llmProofreadRunning()" (change)="onLlmMaxBatchChange($any($event.target).value)">
-                  <mat-hint>既定: 40</mat-hint>
-                </mat-form-field>
-                <button mat-icon-button type="button" class="settings-info-icon"
-                  matTooltip="AIへの1回の呼び出しで処理するセグメント（行）の最大数。&#10;大きいほど効率的ですが、モデルが一度に扱うテキストが増えるため精度が下がる場合があります。&#10;既定値: 40"
-                  matTooltipClass="settings-info-tooltip" aria-label="一括処理セグメント数の説明">
-                  <mat-icon class="material-symbols-outlined">info</mat-icon>
-                </button>
-                <button mat-icon-button type="button" aria-label="推論パラメータを初期値に戻す" [disabled]="llmProofreadRunning()"
-                  (click)="resetLlmInferenceParams()" matTooltip="初期値に戻す">
-                  <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                </button>
-                <mat-form-field appearance="outline" class="settings-llm-field settings-field-compact">
-                  <mat-label>プロンプトフォーマット</mat-label>
-                  <mat-select [disabled]="llmProofreadRunning() || llmBackendMode() === 'local_gguf'" [value]="llmPromptType()"
-                    (valueChange)="onLlmPromptTypeChange($event)">
-                    <mat-option value="gemma4">Gemma4フォーマット</mat-option>
-                    <mat-option value="original">オリジナルフォーマット</mat-option>
-                  </mat-select>
-                </mat-form-field>
-              </div>
-              <!-- ローカルGGUF モデル選択: 封印中（内蔵 gemma/llama.cpp 固定） -->
-              <div *ngIf="llmBackendMode() === 'local_gguf'" class="actions-row settings-llm-row" style="display: none">
-                <mat-form-field appearance="outline" class="settings-llm-field">
-                  <mat-label>モデルの選択</mat-label>
-                  <mat-select [value]="llmModelPath()" (valueChange)="onLlmModelChange($event)"
-                    [disabled]="availableLlmModels().length === 0 || running() || diarizationRunning() || llmProofreadRunning()">
-                    <mat-option *ngFor="let model of availableLlmModels()" [value]="model.path">
-                      {{ model.name }}
-                    </mat-option>
-                  </mat-select>
-                  <mat-hint *ngIf="availableLlmModels().length === 0">モデルが見つかりません。フォルダに .gguf ファイルを追加してください。</mat-hint>
-                </mat-form-field>
-                <button mat-icon-button (click)="loadLlmModels()" aria-label="モデル一覧を更新">
-                  <mat-icon class="material-symbols-outlined">refresh</mat-icon>
-                </button>
-                <button mat-icon-button (click)="openLlmModelsFolder()" aria-label="モデルフォルダを開く">
-                  <mat-icon class="material-symbols-outlined">folder_open</mat-icon>
-                </button>
-              </div>
-              <p class="prompt-section-heading">全体校正プロンプト</p>
-              <!-- 全体校正システムプロンプト: local_gguf + Gemma4フォーマット -->
-              <div *ngIf="llmBackendMode() === 'local_gguf' && llmPromptType() === 'gemma4'"
-                class="prompt-template-editor">
-                <pre class="prompt-template-fixed">&lt;|turn&gt;system</pre>
-                <div class="prompt-template-body">
-                  <textarea cdkTextareaAutosize cdkAutosizeMinRows="4" cdkAutosizeMaxRows="12"
-                    class="prompt-template-textarea" [readonly]="true"
-                    [value]="overallProofreadSystemPrompt()"></textarea>
-                </div>
-                <pre class="prompt-template-fixed">出力ルール：
-- すべてのセグメントをJSON配列として返す
-- 先頭文字は「[」、末尾文字は「]」にする
-- 説明・前置き・マークダウン（``` など）は一切含めない
-- スキーマ: [&#123;"id": &lt;番号&gt;, "revised": "校正後テキスト", "note": "変更内容（変更なしは空文字）"&#125;]
-
-出力例：
-入力:
-[1] Th: えーと、今日はどんなことで来られましたか？
-[2] Cl: はい、最近動機がして、仕事も給食してるんです。
-
-出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
-&lt;turn|&gt;
-&lt;|turn&gt;user
-[テキストのリスト]
-&lt;turn|&gt;
-&lt;|turn&gt;model</pre>
-              </div>
-              <!-- 全体校正システムプロンプト: 非local_gguf + Gemma4フォーマット -->
-              <div *ngIf="llmBackendMode() !== 'local_gguf' && llmPromptType() === 'gemma4' && showProofreadSystemPromptEditor()"
-                class="prompt-template-editor">
-                <pre class="prompt-template-fixed">&lt;|turn&gt;system</pre>
-                <div class="prompt-template-body">
-                  <div *ngIf="!proofreadSystemPromptReadonly()" class="prompt-template-toolbar">
-                    <button mat-icon-button type="button" aria-label="全体校正プロンプトをデフォルトに戻す"
-                      matTooltip="プロンプトを初期値に戻します" matTooltipPosition="above"
-                      (click)="confirmResetOverallProofreadSystemPrompt()">
-                      <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                    </button>
-                    <span class="prompt-template-toolbar-label">システムプロンプト（編集可）<span class="prompt-save-badge" [class.is-saved]="overallProofreadPromptIsCustomized()">{{ overallProofreadPromptIsCustomized() ? '保存済み' : '初期値' }}</span></span>
-                    <button mat-icon-button type="button" aria-label="全体校正プロンプトを保存"
-                      [disabled]="!canSaveOverallProofreadSystemPrompt()"
-                      (click)="saveOverallProofreadSystemPrompt()">
-                      <mat-icon class="material-symbols-outlined">save</mat-icon>
-                    </button>
-                  </div>
-                  <textarea cdkTextareaAutosize cdkAutosizeMinRows="4" cdkAutosizeMaxRows="12"
-                    class="prompt-template-textarea" [readonly]="proofreadSystemPromptReadonly()"
-                    [value]="overallProofreadSystemPrompt()"
-                    (input)="proofreadSystemPromptReadonly() ? null : onOverallProofreadSystemPromptInput($event)"></textarea>
-                </div>
-                <pre class="prompt-template-fixed">出力ルール：
-- すべてのセグメントをJSON配列として返す
-- 先頭文字は「[」、末尾文字は「]」にする
-- 説明・前置き・マークダウン（``` など）は一切含めない
-- スキーマ: [&#123;"id": &lt;番号&gt;, "revised": "校正後テキスト", "note": "変更内容（変更なしは空文字）"&#125;]
-
-出力例：
-入力:
-[1] Th: えーと、今日はどんなことで来られましたか？
-[2] Cl: はい、最近動機がして、仕事も給食してるんです。
-
-出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
-&lt;turn|&gt;
-&lt;|turn&gt;user
-[テキストのリスト]
-&lt;turn|&gt;
-&lt;|turn&gt;model</pre>
-              </div>
-              <!-- 全体校正システムプロンプト: オリジナルフォーマット（全バックエンド共通） -->
-              <ng-container *ngIf="llmPromptType() === 'original'">
-                <div class="prompt-template-editor">
-                  <div class="prompt-template-body">
-                    <div *ngIf="!proofreadSystemPromptReadonly()" class="prompt-template-toolbar">
-                      <button mat-icon-button type="button" aria-label="全体校正プロンプトをデフォルトに戻す"
-                        matTooltip="プロンプトを初期値に戻します" matTooltipPosition="above"
-                        (click)="confirmResetOverallProofreadSystemPrompt()">
-                        <mat-icon class="material-symbols-outlined">restore</mat-icon>
-                      </button>
-                      <span class="prompt-template-toolbar-label">システムプロンプト <span class="prompt-save-badge" [class.is-saved]="overallProofreadPromptIsCustomized()">{{ overallProofreadPromptIsCustomized() ? '保存済み' : '初期値（未保存）' }}</span></span>
-                      <button mat-icon-button type="button" aria-label="全体校正プロンプトを保存"
-                        [disabled]="!canSaveOverallProofreadSystemPrompt()" (click)="saveOverallProofreadSystemPrompt()">
-                        <mat-icon class="material-symbols-outlined">save</mat-icon>
-                      </button>
-                    </div>
-                    <textarea cdkTextareaAutosize cdkAutosizeMinRows="4" cdkAutosizeMaxRows="10"
-                      class="prompt-template-textarea"
-                      [value]="overallProofreadSystemPrompt()"
-                      (input)="onOverallProofreadSystemPromptInput($event)"></textarea>
-                  </div>
-                  <pre class="prompt-template-fixed">### 出力ルール
-- すべてのセグメントをJSON配列として返す
-- コードブロック（``` など）・説明・前置き・マークダウンは一切含めない
-- 返答の最初の文字を「[」、最後の文字を「]」にする
-- スキーマ: [&#123;"id": &lt;番号&gt;, "revised": "校正後テキスト", "note": "変更内容（変更なしは空文字）"&#125;]
-
-### 出力例
-入力:
-[1] Th: えーと、今日はどんなことで来られましたか？
-[2] Cl: はい、最近動機がして、仕事も給食してるんです。
-
-出力:
-[&#123;"id": 1, "revised": "えーと、今日はどんなことで来られましたか？", "note": ""&#125;,&#123;"id": 2, "revised": "はい、最近動悸がして、仕事も休職してるんです。", "note": "「動機」→「動悸」、「給食」→「休職」"&#125;]
-
-[テキストのリスト]</pre>
-                </div>
-              </ng-container>
-              <!-- エンジンは校正実行時にオンデマンド起動し、ジョブ後に解放する。 -->
-            </ng-container>
           </mat-card-content>
         </mat-card>
       </div>
@@ -1248,14 +553,12 @@
               <ul>
                 <li>Tauri（Apache-2.0 / MIT）</li>
                 <li>Angular / Angular Material（MIT）</li>
-                <li>faster-whisper / CTranslate2（MIT, SYSTRAN）</li>
-                <li>pyannote.audio（MIT）/ SpeechBrain（Apache-2.0）</li>
+                <li>whisper.cpp / ggml（MIT, ggml-org）<br>
+                  文字起こし・音声入力に使用。</li>
+                <li>NeMo-Speech.cpp（Apache-2.0, NVIDIA）/ sentencepiece（Apache-2.0）<br>
+                  話者分離に使用。</li>
                 <li>FFmpeg CLI（LGPLv3, BtbN LGPL build）<br>
-                  音声デコード / WAV 変換に使用。配布用 Python 環境には PyAV（<code>av</code>）と <code>imageio-ffmpeg</code> を含めません。</li>
-                <li *ngIf="!vulkanBuild()">llama.cpp（ggml-org, MIT）<br>
-                  AI校正エンジン（ローカル LLM 推論）に使用。</li>
-                <li *ngIf="!vulkanBuild()">Gemma 4 E4B（Google DeepMind, Apache-2.0）<br>
-                  内蔵版: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code> UD-Q4_K_XL + MTP GGUF（QAT/MTP, Unsloth, Apache-2.0）</li>
+                  音声デコード / WAV 変換に使用。</li>
               </ul>
               <p>各コンポーネントの著作権表示、ライセンス条件、FFmpeg の取得元・ハッシュ・configure 情報は、それぞれの配布物・公式情報および同梱ファイルに従います。</p>
             </div>
@@ -1264,18 +567,14 @@
               <p class="info-section-title">モデルのライセンス・帰属表示</p>
               <ul>
                 <li>
-                  話者分離モデル: <code>pyannote/speaker-diarization-community-1</code><br>
-                  作者: Hervé Bredin および pyannote コントリビューター<br>
-                  ライセンス: CC-BY-4.0（<code>https://creativecommons.org/licenses/by/4.0/</code>）<br>
-                  取得元: <code>https://huggingface.co/pyannote/speaker-diarization-community-1</code><br>
-                  本アプリはモデルを改変せず、推論にのみ利用しています。
+                  文字起こしモデル: OpenAI Whisper large-v3-turbo（MIT / OpenAI）。ggml 形式（<code>ggerganov/whisper.cpp</code>）
                 </li>
                 <li>
-                  文字起こしモデル: OpenAI Whisper（turbo, MIT / OpenAI）
+                  無音検出モデル: Silero VAD（MIT）。ggml 形式（<code>ggml-org/whisper-vad</code>）
                 </li>
-                <li *ngIf="!vulkanBuild()">
-                  校正モデル: Gemma 4 E4B（Google DeepMind, Apache-2.0）/
-                  内蔵 GGUF: <code>unsloth/gemma-4-E4B-it-qat-GGUF</code>（QAT + MTP, Unsloth, Apache-2.0）
+                <li>
+                  話者分離モデル: NVIDIA Nemotron-3-Diarization（OpenMDW-1.1）<br>
+                  本アプリはモデルを改変せず、推論にのみ利用しています。
                 </li>
               </ul>
               <p>
@@ -1290,7 +589,7 @@
   </mat-tab-group>
   </div>
 
-  <ng-template #mergeAndOverallProofreadRow
+  <ng-template #mergeRow
     let-requireImportReady="requireImportReady"
     let-proofreadDialogMode="proofreadDialogMode"
     let-extraClass="extraClass">
@@ -1301,40 +600,6 @@
         発言の統合
       </button>
       <span class="copy-status" *ngIf="mergeStatus()">{{ mergeStatus() }}</span>
-      <div class="merge-overall-center" *ngIf="runtimeAiProofreadBuild() && !vulkanBuild()">
-        <button *ngIf="overallProofreadHasPendingItems(); else overallProofreadRunButtons"
-          mat-stroked-button class="run-exec-btn overall-proofread-save-btn" color="accent"
-          (click)="openOrRunOverallProofread(proofreadDialogMode)">
-          <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">list</mat-icon>全体校正結果の表示
-        </button>
-        <ng-template #overallProofreadRunButtons>
-          <div class="overall-proofread-split-button" role="group" aria-label="全体校正モデルを選択">
-            <button mat-stroked-button class="run-exec-btn overall-proofread-save-btn overall-proofread-split-main" color="accent"
-              [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
-              (click)="openOrRunOverallProofread(proofreadDialogMode, 'e4b')">
-              <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">auto_awesome</mat-icon>全体校正
-            </button>
-            <button *ngIf="!vulkanBuild()" mat-stroked-button class="run-exec-btn overall-proofread-split-toggle" color="accent"
-              [disabled]="running() || proofreadRunning() || diarizationRunning() || llmProofreadRunning() || overallProofreadRunning() || !result() || (requireImportReady && !importJsonReady())"
-              [matMenuTriggerFor]="overallProofreadModelMenu" aria-label="別の全体校正モデルを選択"
-              matTooltip="別の全体校正モデルを選択">
-              <mat-icon class="material-symbols-outlined" aria-hidden="true">arrow_drop_down</mat-icon>
-            </button>
-          </div>
-          <div *ngIf="gemma12bDownloading()" class="whisper-dl-progress overall-proofread-download-progress">
-            <mat-progress-bar
-              [mode]="gemma12bDownloadProgress()?.totalBytes ? 'determinate' : 'indeterminate'"
-              [value]="gemma12bDownloadPercent()"></mat-progress-bar>
-            <span class="whisper-dl-bytes">{{ gemma12bDownloadBytesLabel() || 'ダウンロード中...' }}</span>
-          </div>
-          <mat-menu #overallProofreadModelMenu="matMenu" xPosition="before">
-            <button mat-menu-item (click)="openOrRunOverallProofreadWith12b(proofreadDialogMode)">
-              <mat-icon class="material-symbols-outlined" aria-hidden="true">auto_awesome</mat-icon>
-              <span>全体校正（with 12B）</span>
-            </button>
-          </mat-menu>
-        </ng-template>
-      </div>
     </div>
     <mat-progress-bar *ngIf="mergeRunning()" mode="indeterminate" class="btn-progress-bar"></mat-progress-bar>
   </ng-template>
@@ -1420,7 +685,6 @@
               [class.segment-row-entity-yellow]="getProofreadHighlightLevel(segment.id) === 'yellow'"
               [ngClass]="getSpeakerColorClass(getAssignedSpeakerKey(segment))">
               @let assignedSpeaker = getAssignedSpeakerKey(segment);
-              @let llmStatus = llmSegmentStatus()[segment.id];
               @let isProofreadLocked = proofreadRunning() && proofreadEditingLocked();
               @let speakerRunCount = consecutiveSpeakerRunMap()[segment.id];
               <div class="segment-col-time segment-time-cell">
@@ -1465,7 +729,7 @@
                     }
                   </div>
                   <button mat-icon-button color="warn" class="segment-remove-btn" aria-label="この行を削除" tabindex="-1"
-                    [disabled]="llmStatus === 'processing'" (click)="requestRemoveSegment(segment.id)">
+                    (click)="requestRemoveSegment(segment.id)">
                     <mat-icon class="material-symbols-outlined floating-nav-icon">delete</mat-icon>
                   </button>
                 </div>
@@ -1517,25 +781,20 @@
                     </span>
                   </button>
                   <mat-form-field appearance="outline" class="segment-text-field">
-                    @if (llmStatus === 'processing') {
-                    <span matPrefix class="llm-status-icon llm-status-processing" title="AI校正中">auto_awesome</span>
-                    } @else if (llmStatus === 'done') {
-                    <span matPrefix class="llm-status-icon llm-status-done" title="AI校正完了">check_circle</span>
-                    }
                     <textarea matInput #segmentTextInput cdkTextareaAutosize cdkAutosizeMinRows="2"
                       cdkAutosizeMaxRows="12" class="segment-content-input"
                       [attr.data-segment-id]="segment.id"
                       [lottPreserveUndoValue]="getEditableTextFromMap(segment, editedSegmentTextMap())"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing'"
+                      [disabled]="isProofreadLocked"
                       (input)="onSegmentTextInput(segment.id, $event)"></textarea>
                     <mat-hint *ngIf="proofreadHintBySegmentId()[segment.id] as proofreadHint"
                       class="proofread-hint-row">
                       <span>{{ proofreadHint }}</span>
                     </mat-hint>
-                    <button *ngIf="editorVoiceInputButtonsVisible()" matSuffix mat-icon-button type="button"
+                    <button *ngIf="isTauriRuntime()" matSuffix mat-icon-button type="button"
                       class="segment-voice-input-btn" tabindex="-1"
                       [class.segment-voice-input-btn-unavailable]="!editorVoiceInputAvailable()"
-                      [disabled]="isProofreadLocked || llmStatus === 'processing' || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
+                      [disabled]="isProofreadLocked || (voiceInputProcessingSegmentId() !== null && !isVoiceInputProcessing(segment.id))"
                       [disableRipple]="!editorVoiceInputAvailable()"
                       [attr.aria-disabled]="!editorVoiceInputAvailable() ? true : null"
                       (pointerdown)="onVoiceInputPointerDown($event, segment.id, segmentTextInput)"
@@ -1603,7 +862,7 @@
           </div>
         </div>
 
-        <ng-container *ngTemplateOutlet="mergeAndOverallProofreadRow; context: { requireImportReady: requireImportReady, proofreadDialogMode: false, extraClass: 'result-overall-row' }"></ng-container>
+        <ng-container *ngTemplateOutlet="mergeRow; context: { requireImportReady: requireImportReady, proofreadDialogMode: false, extraClass: 'result-overall-row' }"></ng-container>
         <div class="actions-row result-save-actions">
           <mat-checkbox class="utterance-number-checkbox" [checked]="addUtteranceNumber()"
             (change)="onAddUtteranceNumberChange($event.checked)">発言番号を付与</mat-checkbox>
@@ -1668,94 +927,6 @@
   }
 </div>
 
-<div class="overall-proofread-wait-overlay" *ngIf="!vulkanBuild() && overallProofreadRunning()" aria-live="polite">
-  <div class="overall-proofread-wait-box">
-    <mat-spinner diameter="48" strokeWidth="4"></mat-spinner>
-    <span class="overall-proofread-wait-title">全体校正を実行中です</span>
-    <span class="overall-proofread-wait-status" *ngIf="overallProofreadStatus()">{{ overallProofreadStatus() }}</span>
-    <button mat-flat-button class="overall-proofread-wait-cancel-btn"
-      [disabled]="overallProofreadCanceling()"
-      (click)="cancelOverallProofread()">
-      {{ overallProofreadCanceling() ? '中止中...' : '中止' }}
-    </button>
-  </div>
-</div>
-
-<div class="overall-proofread-overlay" *ngIf="!vulkanBuild() && overallProofreadDialogOpen()" role="dialog" aria-modal="true"
-  aria-label="全体校正ダイアログ">
-  <mat-card class="overall-proofread-card">
-    <mat-card-header class="overall-proofread-header">
-      <mat-card-title>
-        <mat-icon class="material-symbols-outlined overall-proofread-title-icon">auto_awesome</mat-icon>
-        全体校正
-      </mat-card-title>
-      <button mat-stroked-button color="warn" class="overall-proofread-dismiss-all-btn"
-        *ngIf="overallProofreadVisibleItems().length > 0"
-        (click)="dismissAllOverallProofreadItems()">
-        すべて却下
-      </button>
-    </mat-card-header>
-    <mat-card-content class="overall-proofread-content">
-      <div *ngIf="overallProofreadError()" class="overall-proofread-error">
-        <mat-icon class="material-symbols-outlined">error</mat-icon>
-        <span>{{ overallProofreadError() }}</span>
-      </div>
-      <ng-container *ngIf="!overallProofreadError() && overallProofreadResult() as result">
-        <div class="overall-proofread-result-wrap">
-          <div class="overall-proofread-summary">
-            <span>変更提案 <strong>{{ result.changedCount }}</strong> 件</span>
-            <span class="overall-proofread-summary-sep">/</span>
-            <span>変更なし {{ result.unchangedCount }} 件</span>
-            <span *ngIf="overallProofreadVisibleItems().length === 0 && result.changedCount > 0" class="overall-proofread-all-done">— すべての提案を処理しました</span>
-          </div>
-          <div class="overall-proofread-item-list" *ngIf="overallProofreadVisibleItems().length > 0">
-            <div class="overall-proofread-item" *ngFor="let item of overallProofreadVisibleItems()">
-              <div class="overall-proofread-item-body">
-                <div class="overall-proofread-item-row">
-                  <span class="overall-proofread-item-label overall-proofread-item-original-label">元</span>
-                  <span class="overall-proofread-item-id">[{{ segmentRowNumberMap()[item.id] }}]</span>
-                  <span *ngIf="item.speakerLabel" class="overall-proofread-item-speaker">{{ item.speakerLabel }}:</span>
-                  <span class="overall-proofread-item-text">{{ item.originalText }}</span>
-                </div>
-                <div class="overall-proofread-item-row">
-                  <span class="overall-proofread-item-label overall-proofread-item-revised-label">案</span>
-                  <span class="overall-proofread-item-id">[{{ segmentRowNumberMap()[item.id] }}]</span>
-                  <span *ngIf="item.speakerLabel" class="overall-proofread-item-speaker">{{ item.speakerLabel }}:</span>
-                  <span class="overall-proofread-item-text overall-proofread-item-revised-text">{{ item.revisedText }}</span>
-                </div>
-                <div class="overall-proofread-item-note" *ngIf="item.note">※ {{ item.note }}</div>
-              </div>
-              <div class="overall-proofread-item-actions">
-                <button mat-flat-button color="primary" (click)="acceptOverallProofreadItem(item)">採用</button>
-                <button mat-stroked-button (click)="dismissOverallProofreadItem(item)">却下</button>
-              </div>
-            </div>
-          </div>
-          <div *ngIf="result.changedCount === 0" class="overall-proofread-no-changes">（提案する変更はありませんでした）</div>
-        </div>
-      </ng-container>
-    </mat-card-content>
-    <mat-card-actions align="end" class="overall-proofread-actions">
-      <button mat-flat-button (click)="closeOverallProofreadDialog()">閉じる</button>
-    </mat-card-actions>
-  </mat-card>
-</div>
-
-<div class="confirm-overlay" *ngIf="amdGpuFailureDialog() as dialog" role="alertdialog" aria-modal="true"
-  aria-label="AMD GPU処理エラーダイアログ">
-  <mat-card class="confirm-card">
-    <mat-card-title>AMD GPU処理を終了しました</mat-card-title>
-    <mat-card-content>
-      <p>{{ dialog.operation }}をGPUで完了できなかったため、この処理を終了しました。</p>
-      <p>AMD GPU版ではCPUへフォールバックしません。GPU・ROCm環境と、このGPU向けにビルドした依存関係を確認してください。</p>
-      <p>{{ dialog.message }}</p>
-    </mat-card-content>
-    <mat-card-actions align="end">
-      <button mat-flat-button color="primary" (click)="closeAmdGpuFailureDialog()">閉じる</button>
-    </mat-card-actions>
-  </mat-card>
-</div>
-
 <div class="confirm-overlay" *ngIf="pendingConfirmDialog() as dialog" role="dialog" aria-modal="true"
   aria-label="確認ダイアログ">
   <mat-card class="confirm-card">
@@ -1775,12 +946,6 @@
       </button>
     </mat-card-actions>
   </mat-card>
-</div>
-
-<div class="floating-overall-proofread" *ngIf="!vulkanBuild() && overallProofreadHasPendingItems() && result() && overallProofreadBtnAboveViewport()">
-  <button mat-flat-button color="accent" class="floating-overall-proofread-btn" (click)="openOrRunOverallProofread(false)">
-    <mat-icon class="material-symbols-outlined overall-proofread-btn-icon">list</mat-icon>全体校正結果の表示
-  </button>
 </div>
 
 <div class="floating-nav" aria-label="ページ移動" *ngIf="result() && isResultPanelTabActive() && isSegmentTableInView()">

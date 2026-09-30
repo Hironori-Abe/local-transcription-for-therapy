@@ -13,22 +13,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 文字起こし・話者分離に使うエンジン。既定は従来の Python 経路。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SpeechEngine {
-    Standard,
-    Ggml,
-}
-
-impl SpeechEngine {
-    pub(crate) fn parse(value: Option<&str>) -> Self {
-        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-            Some("ggml") => SpeechEngine::Ggml,
-            _ => SpeechEngine::Standard,
-        }
-    }
-}
-
 pub(crate) const WHISPER_MODELS_SUBDIR: &str = "whisper-ggml";
 pub(crate) const VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
 pub(crate) const DIAR_MODELS_SUBDIR: &str = "nemotron-3-diarization";
@@ -327,25 +311,6 @@ pub(crate) fn whisper_cli_args(
         args.push("-ng".into());
     }
     args
-}
-
-/// 音声入力（Vulkan 版）の候補を並べる。1件目はフィラー例文付きの結果（文字起こしと同じ書き方で、
-/// 句読点が付く）。例文を付けると冒頭の文を落とすことがあるため、例文なしの結果も2件目に出す。
-/// ただし句読点・空白を除いた中身が1件目と同じなら出さない。
-pub(crate) fn voice_input_candidates(with_prompt: &str, plain: &str) -> Vec<String> {
-    let core = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !c.is_whitespace() && !"、。，．,.？！?!「」".contains(*c))
-            .collect()
-    };
-    let mut out: Vec<String> = Vec::new();
-    for text in [with_prompt.trim(), plain.trim()] {
-        if text.is_empty() || out.iter().any(|c| core(c) == core(text)) {
-            continue;
-        }
-        out.push(text.to_string());
-    }
-    out
 }
 
 /// whisper-cli の応答ファイル（`whisper-cli @<file>`。1行1引数、BOM 無し UTF-8）の内容を作る。
@@ -914,17 +879,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn engine_parse_defaults_to_standard() {
-        assert_eq!(SpeechEngine::parse(None), SpeechEngine::Standard);
-        assert_eq!(
-            SpeechEngine::parse(Some("standard")),
-            SpeechEngine::Standard
-        );
-        assert_eq!(SpeechEngine::parse(Some("unknown")), SpeechEngine::Standard);
-        assert_eq!(SpeechEngine::parse(Some(" GGML ")), SpeechEngine::Ggml);
-    }
-
-    #[test]
     fn model_file_mapping() {
         assert_eq!(whisper_model_file("turbo"), Some("ggml-large-v3-turbo.bin"));
         assert_eq!(whisper_model_file("large-v3"), Some("ggml-large-v3.bin"));
@@ -1437,26 +1391,6 @@ mod tests {
             vec![json!({"id": 0, "start": 0.0, "end": 2.0, "text": "はい", "speaker": null})];
         let diar = vec![json!({"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"})];
         assert!(split_segments_by_speaker(&segments, &diar).is_none());
-    }
-
-    #[test]
-    fn voice_input_candidates_skip_punctuation_only_differences() {
-        assert_eq!(
-            voice_input_candidates("冬を越せた。", "冬を越せた"),
-            vec!["冬を越せた。".to_string()]
-        );
-        assert_eq!(
-            voice_input_candidates("発行は、広報課。", "大会は8月です 発行は広報課"),
-            vec![
-                "発行は、広報課。".to_string(),
-                "大会は8月です 発行は広報課".to_string()
-            ]
-        );
-        assert_eq!(
-            voice_input_candidates("", "うん"),
-            vec!["うん".to_string()]
-        );
-        assert!(voice_input_candidates(" ", "").is_empty());
     }
 
     #[test]

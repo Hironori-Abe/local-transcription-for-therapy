@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  applyTextUpdates,
   buildVisibleTranscriptText,
   changedRangeEnd,
   coalescingInputKind,
@@ -96,24 +95,6 @@ test('selection insertion replaces and clamps ranges without mutating the source
   assert.deepEqual(insertTextAtSelection('abc', 'X', 2, 1), { text: 'abXc', caret: 3 });
   assert.deepEqual(insertTextAtSelection('abc', 'X', Number.NaN, Number.NaN), { text: 'abcX', caret: 4 });
   assert.equal(source, '相談内容');
-});
-
-test('text updates replace requested rows and preserve all unaffected references', () => {
-  const first = { id: 1, text: '旧本文', start: 0 };
-  const second = { id: 2, text: 'そのまま', start: 1 };
-  const result = applyTextUpdates([first, second], { 1: '新本文', 2: 'そのまま', 99: '対象外' });
-
-  assert.equal(result.changed, true);
-  assert.deepEqual(result.rows[0], { id: 1, text: '新本文', start: 0 });
-  assert.notEqual(result.rows[0], first);
-  assert.equal(result.rows[1], second);
-});
-
-test('text updates report unchanged input without replacing row objects', () => {
-  const row = { id: 1, text: '本文' };
-  const result = applyTextUpdates([row], {});
-  assert.equal(result.changed, false);
-  assert.equal(result.rows[0], row);
 });
 
 test('sentence splitting preserves Japanese punctuation on each part', () => {

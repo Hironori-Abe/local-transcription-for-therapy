@@ -1,14 +1,15 @@
 # Third-Party Licenses / 第三者ライセンス表示（NOTICES）
 
 本ファイルは Local Transcription for Therapy (LoTT) が**同梱・依存・配布する第三者ソフトウェアおよびモデル**の
-ライセンス表示（attribution / NOTICE）をまとめたものです。配布物（NSIS インストーラー、Linux
-パッケージ）に同梱し、アプリ内からも参照できるようにすることを想定しています。
+ライセンス表示（attribution / NOTICE）をまとめたものです。配布物（NSIS インストーラー）に同梱し、
+アプリ内からも参照できるようにすることを想定しています。
 
-> 主要項目（F章の4点・手動補完ライセンス）とLinuxメディア配布構成は確認・対応済み（2026-08-24）。
+> 現行の配布は Full 版（Vulkan）と Editor 版です（Windows と Linux の deb / AppImage。Linux は未検証）。
+> CUDA / AMD / CPU 版、Python サイドカー、LLM（llama.cpp / Gemma）は削除済みで、配布物に含みません。
 > 依存やバージョンを更新した場合は、該当行とチェックリストを再確認すること。
 > 本ファイルは法的助言ではありません。
 
-最終更新: 2026-08-24
+最終更新: 2026-09-29
 
 ---
 
@@ -24,39 +25,21 @@
 
 | コンポーネント | 用途 | ライセンス | 義務 / 注意 |
 |---|---|---|---|
-| **Python 3.12 runtime**（Windows: `resources/python312/`、Linux: `resources/python312-linux/`） | Python ランタイム | PSF License Agreement | ライセンス本文を各配布リソースへ同梱。Linux版はUbuntu 24.04コンテナで基本ランタイムを構成 |
-| **llama.cpp** (`resources/llama-server/` の Windows DLL / Linux `cuda/llama-server` 等) | LLM 推論サーバー | **MIT** (ggml-org/llama.cpp) | Windowsは公式CUDA archive、Linux CUDAは固定commit b10075 source build。著作権表示＋MIT本文の同梱。再ビルド手順は `scripts/build-llama-server-cuda-linux.sh` |
-| **whisper.cpp / ggml**（Vulkan 版: `resources/speech-engines/whisper/`） | 文字起こし | **MIT** (ggml-org/whisper.cpp) | 固定 commit のソースビルド。`LICENSE-whisper.cpp.txt` を同梱 |
-| **NeMo-Speech.cpp**（Vulkan 版: `resources/speech-engines/nemo/`） | 話者分離 | **Apache-2.0**（NVIDIA 著作分）＋ sentencepiece（Apache-2.0、静的リンク） | 固定 commit のソースビルド。`LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` を同梱。sentencepiece は `licenses/manual/sentencepiece-LICENSE.txt` |
-| **Microsoft VC++ ランタイム**（Vulkan 版の各実行ファイルの隣） | C/C++ 実行時 | Visual Studio の再頒布可能ファイル（Distributable Code） | VS Build Tools の `VC\Redist\MSVC` から、変更せずにアプリローカル配置 |
-| ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg(.exe)`) | 音声デコード / WAV変換 / LinuxのAAC再生用FLAC変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | Windows・Linux配布リソースへ同梱。`--enable-gpl` / `--enable-nonfree` / GPL系encoderなし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt`を同梱 |
-| ✅ **GStreamer core / base / good / ALSA / PulseAudio plugins**（Linux AppImage） | WebKitGTKの音声再生 | **LGPL-2.1（プラグインによりLGPL互換のMIT / BSDを含む）** | `bundleMediaFramework`で同梱。`plugins-ugly` / `gst-libav` / `faad`等は導入せず、GPL系プラグイン名の混入をビルド時に拒否。公式licensing FAQ: `https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html` |
-| ✅ **NVIDIA CUDA 再頒布ランタイム** (`cublas*`, `cudart*`, `nvrtc*` 等 — CUDA 12.4 devel imageからLinux source build時に抽出 / Windows公式ビルド由来DLL) | CUDA 実行時 | **NVIDIA CUDA Toolkit EULA（再頒布可能サブセット）** | Attachment A 収録確認済み。EULA 本文＋Attachment B（cuBLAS 第三者帰属）を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（F-3）。Linux source buildは公式コンテナ内のEULA/LICENSE候補を `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt` にもコピーし、見つからなければビルド失敗。`libcuda.so.1`（NVIDIAドライバー）は同梱しない |
+| **whisper.cpp / ggml**（`resources/speech-engines/whisper/`。Full 版・Editor 版） | 文字起こし | **MIT** (ggml-org/whisper.cpp) | 固定 commit のソースビルド（Vulkan 版）。`LICENSE-whisper.cpp.txt` を同梱 |
+| **NeMo-Speech.cpp**（`resources/speech-engines/nemo/`。Full 版のみ） | 話者分離 | **Apache-2.0**（NVIDIA 著作分）＋ sentencepiece（Apache-2.0、静的リンク） | 固定 commit のソースビルド（Vulkan 版）。`LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` を同梱。sentencepiece は `licenses/manual/sentencepiece-LICENSE.txt` |
+| **Vulkan Loader**（`resources/speech-engines/vulkan-loader/vulkan-1.dll`（Windows）/ `libvulkan.so.1`（Linux）） | GPU ドライバー・ローダーが無い PC で ggml エンジンを CPU 実行で起動するためのローダー | **Apache-2.0**（Khronos Group / LunarG。Windows は LunarG Vulkan Runtime 再頒布物、Linux は Ubuntu 24.04 の `libvulkan1` パッケージの実体） | `LICENSE-Vulkan-Loader.txt`（Linux は `/usr/share/doc/libvulkan1/copyright`）と `BUILD_INFO.txt`（版・取得元）を同梱。Windows は System32 に `vulkan-1.dll` が無い場合だけ PATH 経由、Linux はホストに `libvulkan.so.1` が無い場合だけ `LD_LIBRARY_PATH` 経由で使う（エンジンの隣には置かない） |
+| **Microsoft VC++ ランタイム**（各エンジン実行ファイルの隣） | C/C++ 実行時 | Visual Studio の再頒布可能ファイル（Distributable Code） | VS Build Tools の `VC\Redist\MSVC` から、変更せずにアプリローカル配置 |
+| ✅ **FFmpeg CLI** (`resources/ffmpeg/ffmpeg.exe`。Full 版のみ) | 音声デコード / 話者分離前の WAV 変換 | **LGPL-3.0（BtbN `lgpl` build / `--enable-version3`）** | `--enable-gpl` / `--enable-nonfree` / GPL系encoderなし。`LICENSE.txt`、対応ソース入手手段、`FFMPEG_BUILD_INFO.txt`を同梱（F章） |
+| **GStreamer core / base / good / ALSA / PulseAudio plugins**（Linux AppImage のみ） | WebKitGTKの音声再生 | **LGPL-2.1-or-later（プラグインによりLGPL互換のMIT / BSDを含む）** | `bundleMediaFramework`で同梱し、`plugins-ugly` / `gst-libav` / `faad`等は導入しない。GPL系プラグイン名の混入と必須プラグイン欠落をビルド時に拒否する（`Dockerfile.appimage-ubuntu24` と `setup-build-tools-linux.sh`）。Windows・`.deb` には同梱しない。公式licensing FAQ: `https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html` |
+| **libgomp**（GCC OpenMP ランタイム。Linux の Full / Editor。エンジン実行ファイルの隣） | ggml エンジンの OpenMP 実行時（Windows の VC++ ランタイムに相当） | **GPL-3.0-or-later WITH GCC-exception-3.1**（GCC Runtime Library Exception） | ビルドホストの `libgomp.so.1` を変更せずに同梱（`setup-ggml-speech-linux.sh` が `patchelf` で `RUNPATH=$ORIGIN` を設定）。GCC Runtime Library Exception により、GPL 非互換のコードとリンクした配布でも例外条件を満たせば再配布できる。ライセンス本文（GPL-3.0 と GCC Runtime Library Exception）と対応ソースの入手先（https://gcc.gnu.org/）を配布物に含める。Linux 実機ビルドでの収録確認は未実施 |
 
-> LLM校正を搭載する版は、同梱またはセットアップで取得する llama.cpp `llama-server` を直接起動します。LoTT Vulkan 版には LLM / llama-server を含めず、全体校正も提供しません。外部のランタイム管理デーモンやCLIは配布しません。既存ユーザーの移行期間中は、旧 `%LOCALAPPDATA%\{app-id}\lemonade\` キャッシュを読み取る場合がありますが、現在の保存先は `llm-engine` です。
+> Python ランタイム・Python パッケージ・llama.cpp・CUDA 再頒布ランタイムは同梱しません。
 
 ---
 
-## B. Python ランタイム依存（`requirements-runtime.txt` 等で導入・venv 同梱 or ポストインストール）
+## B. Python ランタイム依存
 
-| パッケージ | ライセンス | 義務 / 注意 |
-|---|---|---|
-| faster-whisper | MIT (SYSTRAN) | 著作権＋本文同梱 |
-| ctranslate2 | MIT (SYSTRAN) | 著作権＋本文同梱 |
-| torch / torchaudio | BSD-3-Clause (+ NOTICE 同梱要) | NOTICE ファイルの保持 |
-| transformers | Apache-2.0 | NOTICE 保持 |
-| pyannote.audio (コード) | MIT | 著作権＋本文同梱（※モデルは別、E章参照） |
-| speechbrain | Apache-2.0 | NOTICE 保持 |
-| huggingface-hub | Apache-2.0 | NOTICE 保持 |
-| numpy / scipy 系 | BSD-3-Clause | 著作権＋本文同梱 |
-| msoffcrypto-tool | MIT | 著作権＋本文同梱 |
-| pyzipper | MIT | 著作権＋本文同梱 |
-| sympy | BSD-3-Clause | 著作権＋本文同梱 |
-| protobuf | BSD-3-Clause | 著作権＋本文同梱 |
-| llama-cpp-python（任意の direct Python backend 検証時のみ別途ビルド） | MIT | 同梱・配布する場合は著作権＋本文同梱 |
-
-> venv 内の各パッケージは `*.dist-info/` に `LICENSE` を保持しています。これらを束ねて配布物に含めるのが確実です（自動収集スクリプトは後述）。
-> 配布用 Python 環境には `av`（PyAV）と `imageio-ffmpeg` を入れません。`faster-whisper` は `--no-deps` で導入し、音声デコードは同梱 LGPL FFmpeg CLI で行います（F-4）。
+なし。Python は同梱・使用しません（ビルド時のライセンス収集・成果物整理にだけ、配布物に含めないビルド用 Python の標準ライブラリを使います）。
 
 ---
 
@@ -79,7 +62,9 @@
 |---|---|---|
 | tauri / tauri-plugin-dialog / tauri-build | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | serde / serde_json | MIT / Apache-2.0 | 著作権＋本文同梱 |
-| zip | MIT | 著作権＋本文同梱 |
+| zip（読み書き・AES ZIP 書き込み） | MIT | 著作権＋本文同梱 |
+| aes / cbc / hmac / cfb / sha2 / getrandom（暗号化保存・モデル検証） | MIT / Apache-2.0 | 著作権＋本文同梱 |
+| ash（Vulkan の GPU 一覧。ローダーは実行時に動的読み込み） | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | base64 / encoding_rs / regex / chrono | MIT / Apache-2.0 | 著作権＋本文同梱 |
 | windows-sys | MIT / Apache-2.0 | 著作権＋本文同梱 |
 
@@ -87,89 +72,23 @@
 
 ---
 
-## E. モデル（ポストインストールでダウンロード／ローカル配置）
+## E. モデル（ポストインストールでダウンロード）
 
 | モデル | ライセンス | 義務 / 注意 |
 |---|---|---|
-| 🔴 **pyannote speaker-diarization-community-1** | **CC-BY-4.0** | **帰属表示が必須**。作者クレジット＋ライセンスへのリンク＋（改変した場合）変更の明示。アプリの About / NOTICE に記載 |
-| **Whisper turbo**（faster-whisper / Systran 変換版） | MIT（OpenAI Whisper 由来） | 著作権＋本文同梱 |
-| **Whisper large-v3-turbo（ggml 変換版、Vulkan 版）**（`ggerganov/whisper.cpp`） | MIT（OpenAI Whisper 由来） | 固定 revision・SHA-256 で取得 |
-| **Silero VAD v6.2.0（ggml 変換版、Vulkan 版）**（`ggml-org/whisper-vad`） | **MIT**（Silero Team） | 本文は `licenses/manual/silero-vad-LICENSE.txt` |
-| 🟡 **Nemotron-3-Diarization（Vulkan 版）**（`nvidia/Nemotron-3-Diarization`） | **OpenMDW-1.1** | 商用利用・改変・再配布可。再配布時はライセンス文と帰属表示を残す。特許・著作権訴訟を起こすと権利が終了する条項あり。アプリには同梱せずダウンロードするが、本文を `licenses/manual/Nemotron-3-Diarization-OpenMDW-1.1.txt` に置く |
-| **Gemma 4 E4B GGUF**（`unsloth/gemma-4-E4B-it-qat-GGUF`、Vulkan 版を除く） | ✅ **Apache-2.0**（Gemma 4 は旧 Gemma Terms / 禁止用途ポリシー非適用。確認済み） | Google DeepMind ＋ Unsloth を Apache-2.0 として帰属表示（F-2 参照） |
-| **Gemma 4 12B GGUF + MTP draft**（`unsloth/gemma-4-12B-it-qat-GGUF`、CUDA / AMD 版のみ） | ✅ **Apache-2.0** | 本体と`mtp-gemma-4-12B-it.gguf`をオプション取得。Google DeepMind＋Unslothを帰属表示（F-2参照）。LoTT Vulkan 版には含まない |
+| **Whisper large-v3-turbo（ggml 変換版）**（`ggerganov/whisper.cpp`） | MIT（OpenAI Whisper 由来） | 固定 revision・SHA-256 で取得 |
+| **Silero VAD v6.2.0（ggml 変換版）**（`ggml-org/whisper-vad`） | **MIT**（Silero Team） | 本文は `licenses/manual/silero-vad-LICENSE.txt` |
+| 🟡 **Nemotron-3-Diarization**（`nvidia/Nemotron-3-Diarization`。Full 版のみ） | **OpenMDW-1.1** | 商用利用・改変・再配布可。再配布時はライセンス文と帰属表示を残す。特許・著作権訴訟を起こすと権利が終了する条項あり。アプリには同梱せずダウンロードするが、本文を `licenses/manual/Nemotron-3-Diarization-OpenMDW-1.1.txt` に置き、セットアップ画面から表示できる |
 
 ---
 
-## F. 🔴 特別な注意が必要な4点（配布前に必ず確認）
+## F. ffmpeg — ✅ **LGPL 構成の CLI を同梱（Windows）**
 
-### F-1. pyannote community-1 — CC-BY-4.0（帰属義務）
-- **必須対応**: アプリ内 About 画面または NOTICE に以下を記載。
-  - モデル名・作者（pyannote / Hervé Bredin ほか）
-  - CC-BY-4.0 ライセンスへのリンク
-  - モデルを改変・再学習した場合はその旨（本プロジェクトは推論利用のみなら「改変なし」）
-- これは**最も確実に対処すべき**項目。表示するだけで義務を満たせます。
-
-### F-2. Gemma — ✅ **Apache-2.0 と確認。禁止用途ポリシーは非適用（2026-06-01 調査）**
-
-調査結果:
-- 本アプリが取得・案内するモデルは `download_gemma_gguf_cli.py` の **`unsloth/gemma-4-E4B-it-qat-GGUF`**（`gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf`）。
-- 当該 HF リポジトリのライセンスタグは **`apache-2.0`**（`https://ai.google.dev/gemma/docs/gemma_4_license` を参照）。著者は Google DeepMind。
-- Google の Gemma 利用規約ページが明言: **「Gemma 4 は（旧）Gemma Terms of Use の対象外。Gemma 4 は Apache 2.0」**。**Prohibited Use Policy（禁止用途ポリシー）は Gemma 1 / 2 / 3 / 3n に適用され、Gemma 4 には適用されない**。
-- 帰結: **Gemma 4 E4B は純粋に Apache-2.0**。Apache-2.0 は利用分野（field-of-use）の制限を持たないため、**臨床心理・カウンセリング用途に制限はかからない**。フロント About の「Apache-2.0」表記は正しい。
-
-残対応（軽微・帰属のみ）:
-1. NOTICE / About に **Google DeepMind（原モデル）＋ Unsloth（GGUF 量子化）** を Apache-2.0 として明記（対応済み: NOTICE 更新）。
-2. （任意・保険）`gemma_4_license` ページを一度通読し、純 Apache-2.0 であることを最終確認。
-3. ⚠️ 注意: 旧 Gemma（1/2/3/3n）モデルに切り替える場合は禁止用途ポリシーが復活するため、**Gemma 4 系に固定**しておくのが安全。
-
-### F-3. NVIDIA CUDA 再頒布 DLL — ✅ **再頒布可能と確認。第三者帰属が必要（2026-06-01 調査）**
-
-調査結果:
-- 同梱: `cudart64_12.dll`（CUDA Runtime）/ `cublas64_12.dll` / `cublasLt64_12.dll`（cuBLAS）。
-- NVIDIA Full CUDA版の llama.cpp は公式リリース **b10075** の `llama-b10075-bin-win-cuda-12.4-x64.zip`（SHA-256 `acb782eb7d82b7aefaab4ea4f92f84793d11fdddacf888299ef3af9a63054744`）と `cudart-llama-bin-win-cuda-12.4-x64.zip`（SHA-256 `8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6`）から配置する。Editor版・CPU版のCPUバックエンドも同じ公式リリースの `llama-b10075-bin-win-cpu-x64.zip`（SHA-256 `67ccd320365193e5fa5e2778773a30ee3fc19802b2a9f324023641d160a1e802`）を取得する。AMD版のダウンロード型ROCm / Vulkanバックエンドはb9631のまま別管理とする。
-- CUDA Toolkit EULA の **Attachment A（再頒布可能ファイル一覧）に cudart・cublas・cublasLt はすべて収録**。→ 同梱・再頒布は許可される。
-- ただし cuBLAS には EULA **Attachment B** の **第三者 BSD 系帰属表示**が必要。代表例:
-  - UC Regents（Vasily Volkov 由来コード）: `Copyright (c) 2007-2009, Regents of the University of California. All rights reserved.` ＋ BSD 系条件・免責。
-  - 他に Davide Barbieri、University of Tennessee、Jonathan Hogg（STFC）等の各 BSD 系表示。
-- **必須対応**:
-  1. ✅ EULA 本文＋ Attachment A/B を `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt` として同梱（2026-06-12 対応。出典: `docs.nvidia.com/cuda/archive/12.4.1/eula/`。同梱 DLL は llama.cpp 公式ビルド付属の CUDA 12.4 由来）。
-  2. ✅ Linux CUDA source buildでは、固定digestの公式CUDA develコンテナ内にある
-     `/NGC-DL-CONTAINER-LICENSE` または `/usr/local/cuda` 配下のEULA/LICENSE候補を
-     `resources/llama-server/cuda/NVIDIA-CUDA-RUNTIME-LICENSE.txt`へコピーする。候補が無い場合はビルドを失敗させる。
-  3. ✅ NOTICE に「NVIDIA CUDA ランタイムライブラリを CUDA Toolkit EULA に基づき再頒布」「cuBLAS は UC Regents ほかの第三者 BSD 表示を含む」と記載（対応済み: NOTICE 更新）。
-  4. CUDA バージョン更新時（`scripts/setup-dev.bat` の `LLAMA_CUDA_ZIP` の CUDA 版数変更時）は、対応するアーカイブ版 EULA へ差し替え、Attachment A/B の収録・文言を再確認。
-
-### F-4. ffmpeg / PyAV 非依存化 — ✅ **Windows / Linux配布経路対応済み**
-
-調査結果:
-
-| 経路 | 使用箇所 | パッケージ自体 | 実バイナリ | リンク形態 |
-|---|---|---|---|---|
-| **imageio-ffmpeg 0.6.0** | `diarize_cli.py` の `resolve_ffmpeg_bin()` → ffmpeg CLI で WAV 変換 | BSD-2-Clause | `ffmpeg-win-x86_64-v7.1.exe`（gyan.dev essentials, **`--enable-gpl --enable-version3`** + libx264/x265）= **GPLv3** | **サブプロセス呼び出し**（別プロセス実行） |
-| **PyAV (av 17.0.0)** | `transcribe_cli.py` の音声前処理 ＋ **faster-whisper 内部のデコード** | BSD-3-Clause | `av.libs/` に **libx264 / libx265 同梱** = ffmpeg は **GPL ビルド** | **動的リンク**（C 拡張がライブラリにリンク） |
-
-ポイント:
-- **パッケージのライセンス（BSD）≠ 同梱 ffmpeg バイナリのライセンス（GPL）**。混同に注意。
-- 本アプリが ffmpeg に求めるのは**音声デコード／WAV 変換のみ**で、GPL を強制する libx264/libx265（動画エンコーダ）は**不要**。→ **LGPL ビルドで完全に代替可能**。
-
-採用方針:
-- **配布用 Python 環境に `av` と `imageio-ffmpeg` を入れない**。
-- `faster-whisper` は `--no-deps` で導入し、`av` を依存解決で入れない。
-- `faster-whisper` のトップレベル `import av` は、`transcribe_cli.py` の最小 stub で import だけ通す。
-- 実際の音声デコードは、同梱または PATH 上の **LGPL 構成 `ffmpeg` CLI** で行い、numpy 配列として `WhisperModel.transcribe()` に渡す。
-- `diarize_cli.py` の `imageio-ffmpeg` フォールバックは既定で無効。開発時に必要な場合だけ `ALLOW_GPL_FFMPEG=1` で明示許可する。
-
-実装状況:
-- ✅ `transcribe_cli.py`: 既定 backend を `ffmpeg` に変更。`--audio-decode-backend pyav` は開発・比較用。
-- ✅ `setup_venv_cli.py` / dev scripts: `av` / `imageio-ffmpeg` を削除し、`faster-whisper` を `--no-deps` で導入。
-- ✅ `requirements-runtime.txt` / `requirements-amd.txt`: `faster-whisper` 実行依存を明示し、`av` / `imageio-ffmpeg` を追加禁止。
-- ✅ `diarize_cli.py`: `imageio-ffmpeg` は明示許可時のみ。
-- ✅ Tauri: 同梱 LGPL ffmpeg があれば `FFMPEG_BIN` として Python サイドカーへ渡す。
-- ✅ `scripts/setup_ffmpeg_lgpl.py`: BtbN `lgpl` build を取得し、`--enable-gpl` / GPL 系ライブラリの混入を検査する。
-- ✅ Windows: `resources/ffmpeg/ffmpeg.exe`、`LICENSE.txt`、`FFMPEG_BUILD_INFO.txt` を生成し、NSIS インストール後の配置まで確認済み。
-- ✅ Linux: `resources/ffmpeg/ffmpeg`をAppImage / `.deb` / CachyOSパッケージへ同梱。AAC系ファイルの再生用FLAC変換にも使用する。
-- ✅ Linux AppImage: LGPLのGStreamer base / good系だけを同梱し、GPL系プラグインの混入と必須プラグイン欠落をビルド時に検査する。
+方針:
+- 本アプリが ffmpeg に求めるのは**音声デコード／WAV 変換のみ**で、GPL を強制する libx264/libx265（動画エンコーダ）は**不要**。→ **LGPL ビルド**で足りる。
+- 実際の音声デコードは、同梱または PATH 上の **LGPL 構成 `ffmpeg` CLI** をサブプロセスとして呼び出して行う（Rust の `decode_audio_to_private_wav`）。ライブラリとしてはリンクしない。
+- PyAV（`av`）・`imageio-ffmpeg`（GPL ビルドの ffmpeg を含む）は使用しない。Python 自体を同梱しない。
+- `scripts/setup_ffmpeg_lgpl.py`: BtbN `lgpl` build を取得し、`--enable-gpl` / GPL 系ライブラリの混入を検査する。
 
 Windows 同梱 FFmpeg の記録:
 - 取得元: `https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip`
@@ -180,42 +99,30 @@ Windows 同梱 FFmpeg の記録:
 - configure 行は `--enable-version3` を含むため LGPLv3 として扱う。`--enable-gpl` は含まず、`--disable-libx264` / `--disable-libx265` / `--disable-libxvid` を確認済み。
 
 検証観点:
-- `python -m pip show av imageio-ffmpeg` が見つからないこと。
-- `site-packages` に `av/`、`av.libs/`、`imageio_ffmpeg/` が残っていないこと。
-- `python_sidecar/transcribe_cli.py` が既定 `ffmpeg` backend で 3分・10分音声を完走すること。
-- `ffmpeg -version` に `--enable-gpl`、`--enable-libx264`、`--enable-libx265`、`--enable-libxvid` が含まれないこと。
-- 詳細手順: `docs/lgpl-pyav-build.md`。
+- `ffmpeg -version` に `--enable-gpl`、`--enable-nonfree`、`--enable-libx264`、`--enable-libx265`、`--enable-libxvid`、`--enable-libfdk-aac` が含まれないこと。
+- `LICENSE.txt` / `FFMPEG_BUILD_INFO.txt` が配布物に含まれること。
 
 ---
 
 ## 配布物への組み込み（推奨フロー）
 
 1. `LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` / `licenses/` を**インストーラーに同梱**（Tauri resources に追加済み）
-2. アプリの **About / 設定タブに「ライセンス表示」項目**を表示し、本ファイル（または各ライセンス本文）を参照できるようにする
-3. 各依存の**フルライセンス本文**を機械的に収集して結合（下記コマンド）
-   - Rust: `cargo install cargo-about && cargo about generate about.hbs > rust-licenses.html`
-   - Python: 各 `.venv*/Lib/site-packages/*.dist-info/LICENSE*` を結合（`pip-licenses` でも可）
-   - Node: `npx license-checker --production --out frontend-licenses.txt`
-4. F章の4項目を個別に確認・記載
-
-2026-06-12 時点の自動収集結果:
-- `scripts/collect_licenses.py --venv .venv312 --frontend frontend --tauri src-tauri --out licenses` を実行済み。
-- 生成物: `licenses/python-third-party.txt`、`licenses/rust-third-party.txt`、`licenses/node-third-party.txt`、`licenses/THIRD_PARTY_FULL.txt`。
-- 収集サマリ: Python 127 本文 / 0 不明、Rust 478 本文 / 2 不明、Node 19 本文 / 0 不明、手動補完 4 本文。
-- ✅ 手動補完は `licenses/manual/`（git 管理）に配置済み: `pywin32`、`sentencepiece`（Apache-2.0）、Rust `selectors` 0.24.0 / 0.36.1（MPL-2.0）、NVIDIA CUDA EULA。`collect_licenses.py` が `THIRD_PARTY_FULL.txt` へ自動結合する。
-- リリースビルド時は Windows release venv で再生成し、「不明」に新規項目が出ていないか確認する（`nvidia-*-cu12` 系の dist-info 外 LICENSE は RECORD フォールバックで自動収集される）。
+2. アプリの **セットアップ画面などからライセンス本文を参照**できるようにする（Nemotron の本文は `read_bundled_license` で表示）
+3. 各依存の**フルライセンス本文**を機械的に収集して結合（`scripts/setup-build-tools.bat` が自動実行）
+   - `python scripts/collect_licenses.py --no-python --frontend frontend --tauri src-tauri --out licenses`
+   - Rust: `cargo metadata` の依存グラフ＋crate ソースから収集（`cargo about` でも可）
+   - Node: `frontend/package.json` の production 依存クロージャから収集
+   - 手動補完: `licenses/manual/`（Nemotron OpenMDW-1.1、Silero VAD、sentencepiece、Rust `selectors` MPL-2.0）が `THIRD_PARTY_FULL.txt` 末尾へ自動結合される
+4. リリースビルド時に「不明」に新規項目が出ていないか確認する
 
 ---
 
 ## チェックリスト（配布前）
 
 - [x] アプリ本体の `LICENSE` を決定・追加（Apache-2.0 / 著作権=合同会社学幸社）
-- [x] pyannote community-1 の CC-BY 帰属を About に表示（F-1）
-- [x] Gemma の正確なライセンス／禁止用途ポリシーを確認（F-2: Gemma 4 = Apache-2.0、禁止用途ポリシー非適用）
-- [x] CUDA 再頒布 DLL が EULA の再頒布可能リストに含まれることを確認（F-3: Attachment A 収録。cuBLAS の第三者帰属が必要）
-- [x] CUDA EULA 本文＋ Attachment B（cuBLAS 第三者通知）を配布物に同梱（F-3: `licenses/manual/NVIDIA-CUDA-Toolkit-EULA-12.4.txt`）
-- [x] 同梱 ffmpeg を LGPL ビルドへ差し替え、`av` / `imageio-ffmpeg` 不在を確認（F-4: Windows / Linux配布経路）
-- [x] Linux AppImageのGStreamerをbase / good系に限定し、GPL系プラグインの混入検査を追加
-- [x] 各依存のフルライセンス本文を収集・同梱（自動収集＋ `licenses/manual/` で pywin32 / sentencepiece / selectors / CUDA EULA を補完）
-- [ ] リリースビルド時に Windows release venv で `collect_licenses.py` を再生成し、「不明」ゼロ（または manual/ でカバー済み）を確認
+- [x] 同梱 ffmpeg を LGPL ビルドとし、`LICENSE.txt` / `FFMPEG_BUILD_INFO.txt` を同梱
+- [x] Nemotron-3-Diarization（OpenMDW-1.1）・Silero VAD（MIT）の本文を `licenses/manual/` に配置
+- [x] whisper.cpp / NeMo-Speech.cpp / Vulkan Loader のライセンス文書をエンジンの隣に同梱
 - [x] 本ファイルと `licenses/` をインストーラー同梱物に追加（Tauri resources）
+- [ ] リリースビルド時に `collect_licenses.py --no-python` を再生成し、「不明」ゼロ（または manual/ でカバー済み）を確認
+- [ ] Linux ビルド（未検証）で、GStreamer 構成・`libgomp` と、ICD を同梱せず libvulkan がフォールバック用ローダー1ファイルだけであることを再確認し、`libgomp` のライセンス本文が配布物に含まれることを確認

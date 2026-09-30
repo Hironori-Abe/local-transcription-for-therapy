@@ -12,167 +12,87 @@
 ## 特徴
 
 - **完全ローカル実行** — 運用時はインターネット接続不要。会話・音声データを PC 外の API へ送信しません
-- **日本語の文字起こし** — faster-whisper（既定は Whisper turbo。高精度の large-v3 を後からダウンロードして選択可能）
-- **話者分離** — pyannote.audio による話者の自動識別（既定ラベル: Th / Cl / IP …）
-- **校正** — 話者分離後、CUDA / AMD版はGemma 4 E4B、Vulkan / CPU版はローカルルールで句読点を自動付与。氏名・地名など個人の特定につながりうる語も警告表示。全体校正はCUDA / AMD版のみで、E4Bまたは後からダウンロードする12Bを使用
-- **音声入力** — 編集画面の各行でマイク録音（最大15秒）すると、ローカルで文字起こしを行い候補を提示。Vulkan版はセットアップ済みのwhisper.cppモデルで最大2件、それ以外の対応版は設定タブの「音声入力パック」導入後に最大3件
+- **日本語の文字起こし** — whisper.cpp（Whisper large-v3-turbo + Silero VAD）。NVIDIA / AMD / Intel の GPU を Vulkan で使い、GPU が無い PC では CPU で動作します。必要に応じて文字起こし前の音声調整（低域ノイズ除去・ノイズ除去・音量の正規化）を選べます（良質な録音では、かえって精度が下がることがあります）
+- **話者分離** — NeMo-Speech.cpp + Nemotron-3-Diarization による話者の自動識別（既定ラベル: Th / Cl / IP …）
+- **校正** — ローカルルールによる句読点の自動付与。氏名・地名など個人の特定につながりうる語も警告表示。AI（LLM）による校正・全体校正はありません
+- **音声入力** — 編集画面の各行でマイク録音（最大15秒）すると、ローカルの whisper.cpp で文字起こしを行い候補を1件提示（Full 版は GPU があれば GPU、無ければ CPU。Editor 版は常に CPU）
 - セグメント表の編集・句点での分割・セグメント単位の音声再生
 - Word（.docx）/ Excel（.xlsx）/ SRT字幕 / JSON形式での保存。SRTは任意のパスワードでAES-256暗号化ZIPとしても保存可能
 - システム設定に追従するライト / ダークテーマと、編集・再生・音声入力を操作するキーボードショートカット
 
+## 旧バージョンをお使いの方へ
+
+CUDA 版・AMD (ROCm) 版・CPU 版と、Gemma 4 などによる AI 校正・全体校正（LM Studio / Ollama 連携を含む）は廃止しました。現在の配布は下記の2エディションです（Windows と Linux。Linux 版は実機での動作確認が未実施の試験的な配布です）。旧版が残したデータは、Full 版の設定タブから一覧を確認して削除できます。
+
 ## プライバシーとオフライン方針
 
 - 文字起こし・話者分離・校正の実行時にインターネット上の API を呼びません。
-- インターネット接続が必要なのは、初回セットアップ（依存パッケージ・モデル取得）のみです。
-- LLM 校正の「OpenAI 互換 API」対応はプロトコル互換を意味するだけで、接続先は localhost / loopback に限定しています。クラウド推論エンドポイントには接続できない設計です。
-- 本アプリ自身は通常運用時に外部へ通信しません。Windows 版では WebView2 のクラッシュダンプが Microsoft へ自動送信されないよう設定しています。ただし、OS・WebView ランタイム（WebView2 / WebKitGTK）・GPU ドライバなどのシステム側コンポーネントが行う必須診断・更新確認等の通信までは、本アプリから完全には制御できません。組織として完全なオフライン運用を求める場合は、OS やファイアウォール側の設定（ネットワーク遮断、プロキシ制限など）を併用してください。
+- インターネット接続が必要なのは、初回セットアップ（モデル取得）のみです。
+- AI（LLM）による推論機能は持たないため、会話データを推論サーバーへ渡す経路はありません。
+- 本アプリ自身は通常運用時に外部へ通信しません。Windows 版では WebView2 のクラッシュダンプが Microsoft へ自動送信されないよう設定しています。ただし、OS・WebView ランタイム（WebView2）・GPU ドライバなどのシステム側コンポーネントが行う必須診断・更新確認等の通信までは、本アプリから完全には制御できません。組織として完全なオフライン運用を求める場合は、OS やファイアウォール側の設定（ネットワーク遮断、プロキシ制限など）を併用してください。
 - 技術者でない方向けの説明は [プライバシー説明（非エンジニア向け）](docs/privacy-guide.md)、利用者自身で送信がないことを確かめる手順は [オフライン動作の確認手順](docs/offline-verification.md) を参照してください。
-
-### ローカルAIアプリ（LM Studio / Ollama）連携について
-
-- 公式配布のインストーラーでは、同じ PC 上で動作するローカルAIアプリ（LM Studio / Ollama）との連携は **無効**です。インストール時の選択肢や、アプリ内で有効化するスイッチはありません。CUDA / AMD版は内蔵 AI（Gemma 4 E4B）で校正します。Vulkan版はLLMを含まず、全体校正を提供しません。
-- 連携が必要な場合は、ソースコードから Cargo feature `local-llm-apps` を付けて専用インストーラーをビルドしてください。手順は [Windows リリースビルド](docs/release-build-windows.md#ローカルaiアプリ連携を有効にした専用ビルド) を参照してください。
-- 連携を有効にした場合でも接続先は loopback に限定されますが、**接続先アプリ（LM Studio / Ollama）自体の挙動は本アプリの管理外**です。これらのアプリの設定によっては会話データが PC 外へ送信される可能性があります。通常運用では有効化しないことを推奨します。
 
 ## エディション
 
 | エディション | 内容 |
 | --- | --- |
-| **LoTT Full CUDA** | Windows / Linuxの主配布。NVIDIA RTX / CUDA 向け。文字起こし・話者分離後にGemma 4 E4Bで句読点を自動付与し、校正機能も利用可能 |
-| LoTT Vulkan（v0.9.9〜・試験的） | NVIDIA / AMD / Intel の GPU に1つのインストーラーで対応する版。文字起こしは whisper.cpp、話者分離は Nemotron-3-Diarization、句読点はローカルルール。LLM・Gemma・全体校正は含みません。マイク入力もwhisper.cppを使い、追加パックは不要。CUDA Toolkit・cuDNN・Hugging Face トークンは不要。GPU が無い PC では CPU で動作（時間がかかる） |
-| LoTT Full AMD (ROCm / Vulkan) | experimental / 自己ビルド向け。AMD GPU 向け。話者分離後にGemma 4 E4Bで句読点を自動付与（LLM は ROCm 優先・Vulkan フォールバック） |
-| LoTT CPU | お試し版。CPUで文字起こし・話者分離を行い、その後に単純な句読点を自動付与する。全体校正は非搭載。音声入力パックを導入すると音声入力を利用可能。処理時間の目安は音声時間の約1.5〜2.5倍 |
-| LoTT Editor | JSONの校正・編集に特化した軽量版。文字起こし・話者分離・自動句読点付与・LLM 校正ランタイムは非搭載。音声入力パック（任意ダウンロード）を導入すると CPU 版ローカル AI による音声入力を利用可能（メモリ 16GB 未満では非推奨） |
+| **LoTT Full** | 主配布。文字起こし（whisper.cpp）・話者分離（Nemotron-3-Diarization）・ローカルルールの句読点付与・音声入力を含む。NVIDIA / AMD / Intel の GPU に1つのインストーラーで対応（Vulkan）。GPU が無い PC では CPU で動作（時間がかかる）。CUDA Toolkit・cuDNN・Python・Hugging Face トークンは不要 |
+| LoTT Editor | JSONの校正・編集に特化した軽量版。文字起こし・話者分離は非搭載。音声入力パック（任意、Whisper large-v3-turbo + 無音検出モデル、約1.6GB）を導入すると、GPU不要の whisper.cpp（CPU実行）による音声入力を利用可能 |
 
-### Vulkan 版について
+Full 版の初回セットアップでダウンロードするのは、音声認識モデル（約1.6GB。whisper.cpp・VADを含む）と話者分離モデル Nemotron-3-Diarization（約0.1GB、NVIDIA の OpenMDW-1.1 ライセンス。セットアップ画面から本文を確認できます）だけで、合計約1.7GBです。固定 revision・SHA-256 検証・中断再開に対応し、Hugging Face のアカウントやトークンは不要です。
 
-Vulkan 版は、今後の主配布にする予定の試験的な版です（現在は Intel Arc などでの動作確認中）。
+GPU が複数ある PC では、内蔵 GPU 以外で VRAM が最大の GPU を音声エンジンに自動で使います。設定タブで変更できます。
 
-- 必要なのは GPU メーカーの最新ドライバーだけです。CUDA Toolkit・cuDNN の導入や、Python パッケージのセットアップはありません
-- 初回セットアップでダウンロードするのは、音声認識モデル（約1.6GB。whisper.cpp・VADを含む）と話者分離モデル Nemotron-3-Diarization（約0.1GB、NVIDIA の OpenMDW-1.1 ライセンス。セットアップ画面から本文を確認できます）です。合計約1.7GBで、Gemma / llama.cpp のダウンロードはありません。Hugging Face のアカウントやトークンは不要です
-- GPU が複数ある PC では、内蔵 GPU 以外で VRAM が最大の GPU を音声エンジンに自動で使います。設定タブで変更できます
-- Full CUDA 版に上書きインストールしても、LLMモデルはこの版では使いません。旧Gemma 4 12Bのモデルフォルダ、E4B本体・MTPドラフト・音声mmproj・モデル階層マーカーは設定タブから削除できます。バックグラウンド更新で残る旧同梱 llama-server も、設定タブから削除できます
+## 動作環境
 
-### AMD GPU版について
+- Windows 10 / 11 64bit、または Linux 64bit（x86_64。`.deb` / AppImage。試験的・未検証）
+- Linux では、CPU で動かすだけならホストの Vulkan ローダー（`libvulkan.so.1`。Ubuntu / Debian では `libvulkan1`）は必須ではありません（無い場合は同梱のフォールバックを使います。`.deb` は自動で導入します）。GPU を使うには、ホストのローダーと、Mesa または NVIDIA の Vulkan ドライバーも必要です（無い場合は CPU で処理します）
+- GPU 利用時: NVIDIA / AMD / Intel の GPU と、Vulkan に対応した最新のGPUドライバー（CUDA Toolkit・cuDNN は不要）
+- GPU ドライバーが入っていない・古い場合は、起動時のダイアログとバナーでドライバーの導入・更新を案内します（Windows のみ。Linux では表示しません）
+- モデルダウンロード分の空き容量（Full 版は約1.7GB、Editor 版の音声入力パックは約1.6GB）
 
-AMD GPU版は、GPU世代・OS・ROCm/ドライバーの組み合わせによる互換性差が大きく、現時点では一般向けインストーラーを配布しません。**AMD GPUで利用する場合は、ソースコードから使用するGPUに対応した環境を用意し、自身でビルドしてください。** experimental扱いであり、すべてのAMD GPUでの動作は保証していません。Windowsでの開発セットアップとビルド構成は [Windows リリースビルド](docs/release-build-windows.md) を参照してください。
+### GPU が無い PC で使う場合（CPU 実行）
 
-AMD GPU版の文字起こし・話者分離・内蔵AI処理はGPU実行を必須とし、GPU処理に失敗した場合はCPUへフォールバックせず、そのジョブを終了してダイアログで通知します。内蔵LLMのROCm経路だけは、ROCmで起動できない場合にVulkanへフォールバックします。
+Full 版は、Vulkan に対応した GPU が見つからない場合、自動的に CPU で処理します。**処理時間が長くなるため、日常的・継続的な常用には GPU（NVIDIA / AMD / Intel）を搭載した PC をお勧めします。** 少量の音声で動作や文字起こし品質を確認するお試し用途を想定しています。
 
-### 開発環境の分離
+| 項目 | 最低要件 |
+| --- | --- |
+| OS | Windows 10 / 11 64bit、または Linux 64bit |
+| CPU | AVX2 対応、4コア / 8スレッド以上 |
+| RAM | **16GB 以上** |
 
-開発環境はOSと演算バックエンドの組み合わせごとに分離しています。Windowsでは`.bat`、Ubuntu / CachyOS・Archを含むLinuxでは`.sh`を使い、それぞれ`nvidia` / `amd` / `cpu`専用入口を選択してください。共通の`setup-dev.*` / `run-dev.*`は内部実装であり、直接実行してもCUDAを暗黙に選択しません。
-
-```bat
-scripts\setup-dev-nvidia.bat
-scripts\run-dev-nvidia.bat
-scripts\setup-dev-amd.bat
-scripts\run-dev-amd.bat
-scripts\setup-dev-cpu.bat
-scripts\run-dev-cpu.bat
-```
-
-```sh
-bash scripts/setup-dev-nvidia.sh
-bash scripts/run-dev-nvidia.sh
-bash scripts/setup-dev-amd.sh
-bash scripts/run-dev-amd.sh
-bash scripts/setup-dev-cpu.sh
-bash scripts/run-dev-cpu.sh
-```
-
-Python環境は`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu`に分離されます。さらにLinuxでは、実行時設定も`.dev-linux-cuda.env` / `.dev-linux-rocm.env` / `.dev-linux-cpu.env`に分け、別バックエンドのライブラリや設定が混在しないようにしています。
-
-全エディションの組み合わせは [開発ガイド](docs/development.md#セットアップと開発起動) を参照してください。
-
-## 動作環境（Full CUDA 版）
-
-- Windows 10 / 11 64bit（Windows版）
-- Windows版: NVIDIA GPU（RTX 推奨）+ CUDA Toolkit 12.x（13以上は不可） + cuDNN 9.x
-- Linux版: NVIDIA GPU + 対応するNVIDIAドライバー（CUDA Toolkitは実行時不要）
-- **VRAM 8GB 以上（最低要件）**
-- インストーラー約 1GB 前後 + モデルダウンロード分の空き容量
-
-### Linux / CachyOS NVIDIA版
-
-Linux NVIDIA版は、汎用AppImage、Ubuntu系向け`.deb`、CachyOS / Arch向けパッケージを配布します。CachyOS向けには、AVX2 / BMI2対応CPU用のx86-64-v3 experimental版もあります。互換性を優先する場合は汎用x86-64版を使用してください。
-
-CachyOS / Arch向けのNVIDIA版は、ホストのNVIDIAドライバーとCUDAドライバーランタイムを使用します。
-`nvidia-utils`（`nvidia-smi`・NVIDIAユーザー空間ランタイム）を必須とし、使用中のカーネルに合う
-NVIDIAドライバーも別途導入してください。CUDA Toolkitは実行時には必要ありません。
-導入後、次でGPU名が表示されることを確認します。
-
-```sh
-nvidia-smi -L
-```
-
-Linux版の音声ファイル選択は、ホストのロケールと日本語の`xdg-user-dirs`を利用する
-XDG Desktop Portal経由です。AppImageを使う場合も、`xdg-desktop-portal`と対応する
-バックエンド（標準のGTK環境では`xdg-desktop-portal-gtk`）、および`zenity`をホストへ
-導入してください。CachyOS / Archパッケージではこれらが必須依存として導入されます。
-
-このLinux版の文字起こし・話者分離・LLM校正はCUDAで実行します。Linux用のCUDA `llama-server`は
-公式Linux CUDAアーカイブが存在しないため、配布ビルド時に公式のllama.cpp b10075ソースから再現ビルドし、
-CUDA再頒布ランタイムとともにパッケージへ同梱します。実行時に必要なのはNVIDIAドライバーだけで、
-Vulkanへのフォールバックは行いません。詳しい導入手順は
-[CachyOS / Arch向け配布README](packaging/arch/README.md)を参照してください。
-
-CachyOS / Arch版はX11を強制せず、Wayland / X11とGTK IMEに関する既存の環境設定を尊重します。一部のNVIDIA環境では、通常起動時に`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`を適用し、動作しないDMA-BUF経路を避けながらWebKitGTKの合成器を維持します。DMA-BUFのハードウェア経路を再検証するときだけ`LOTT_ENABLE_DMABUF_RENDERER=1 lott`を使用してください。旧設定の`WEBKIT_DISABLE_DMABUF_RENDERER=1`は合成器まで無効にしてスクロール性能を低下させるため、既定設定には使用しません。
-
-## CPU 版（お試し用）
-
-LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こしを試せるエディションです。文字起こしと話者分離の完了後、ローカルルールによる単純な句読点付与を自動的に行います。全体校正は搭載しません。音声入力パックを追加すると、CPU による音声入力を利用できます。
-
-**処理時間が長くなるため、日常的・継続的な常用は推奨しません。** 少量の音声で動作や文字起こし品質を確認するお試し用途、または対応 GPU を用意できない場合の補助的な利用を想定しています。
-
-| 項目 | 最低要件 | 推奨要件 |
-| --- | --- | --- |
-| OS | Windows 10 / 11 64bit | Windows 11 64bit |
-| CPU | AVX2 対応、4コア / 8スレッド | 6コア / 12スレッド以上 |
-| RAM | **16GB** | **24GB 以上** |
-| ディスク空き容量 | 約10GB | 約15GB以上 |
-| GPU | 不要 | 不要 |
-
-- RAM 16GB は文字起こし・話者分離・単純な句読点付与を行うための実用上の下限です。他のアプリを同時に多数起動すると、処理速度低下やメモリ不足が発生する可能性があります。
-- 音声入力では Gemma 4 E4B 本体と音声 mmproj も使用するため、RAM 24GB以上を推奨します。16GB環境では他のアプリを終了してから利用してください。
-- RAM 16GB未満はサポート対象外とします。スワップによる大幅な速度低下や、メモリ不足による失敗が想定されます。
-- CPU版は起動時に最低要件（RAM 16GB以上、AVX2、8論理スレッド以上）を確認します。満たさない場合は不足項目を表示して終了し、満たす場合もお試し用である旨と処理時間の注意を毎回表示します。
-- 処理時間の目安は音声時間の約1.5〜2.5倍ですが、CPU性能や音声内容によりさらに長くなる場合があります。開発機では、約12分の音声に対して約20分かかりました。
+- Full 版は起動時に、GPU が使えない場合だけ最低要件（RAM 16GB以上、AVX2、8論理スレッド以上）を確認します。満たさない場合は不足項目を表示して終了します。満たす場合も、CPU で処理する旨と処理時間の注意を毎回表示します。
+- 処理時間の目安は音声時間の約1.5〜2.5倍ですが、CPU性能や音声内容によりさらに長くなる場合があります。
+- RAM 16GB 未満はサポート対象外です。スワップによる大幅な速度低下や、メモリ不足による失敗が想定されます。
+- Editor 版の音声入力は常に CPU で動作し、GPU は不要です。
 
 ## インストールと初回セットアップ
 
-1. 使用するOS・GPU・用途に合うインストーラーまたはパッケージを導入します。WindowsではNSISインストーラー（`*_x64-setup.exe`）を実行します
-2. Full版またはCPU版では、アプリ起動後にセットアップタブから「Python パッケージをインストール」を実行します（要ネット接続）。配布物にはPython 3.12の基本ランタイムが含まれますが、文字起こし・話者分離用パッケージはこの手順で導入します
-3. 同じセットアップタブから必要なモデルをダウンロードします
-   - 文字起こしモデル（Whisper turbo。高精度の large-v3 は任意で後から追加可能）
-   - 話者分離モデル（`pyannote-speaker-diarization-community-1`、Hugging Face トークンが必要）
-   - CUDA / AMD版の校正用LLM: Gemma 4 E4B GGUF（Full版の初回セットアップ）
-   - CPU / Editor版の音声入力用E4B本体とmmproj（音声入力パックを導入する場合）
-   - 高精度校正用LLM: Gemma 4 12B QAT+MTP、約7GB（CUDA / AMD版で任意。Vulkan版には含まれない）
-   - 音声入力パック（Vulkan版を除く。マイク音声入力を使う場合）
+1. Windows 用 NSIS インストーラー（`*_x64-setup.exe`）、または Linux 用の `.deb` / AppImage（`LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.*`）で、Full 版または Editor 版を導入します
+2. Full 版: アプリ起動後にセットアップタブから、文字起こしモデル（Whisper large-v3-turbo・Silero VAD）と話者分離モデル（Nemotron-3-Diarization）をダウンロードします（要ネット接続）
+3. Editor 版: JSON の読込・編集・書き出しだけならモデルの導入は不要です。音声入力を使う場合は、設定タブから「音声入力パック」（Whisper large-v3-turbo・Silero VAD、約1.6GB）をダウンロードします
 
-大容量Pythonパッケージの取得が中断した場合は、セットアップを再実行すると可能な範囲で続きから取得します。CPU版はPythonパッケージの導入前でもJSONの読込・編集を利用できますが、文字起こしにはセットアップが必要です。Editor版はJSONの読込・編集・書き出しだけならPythonパッケージやAIモデルの導入は不要で、音声入力を使う場合だけ音声入力パックを追加します。
+ダウンロードが中断した場合は、セットアップを再実行すると続きから取得します。モデル取得の完了後、文字起こし・話者分離・校正はオフラインで運用できます。
 
-セットアップとモデル取得の完了後、文字起こし・話者分離・校正はオフラインで運用できます。Linux NVIDIA版でCUDA未検出の表示が残る場合は、`nvidia-smi -L`を確認してから設定画面の「GPUを再確認」を実行してください。
+旧エディションを導入していた PC では、Full 版の設定タブに旧版のデータ（旧 Gemma モデル、旧 Python 環境、旧校正エンジンのキャッシュなど）の削除リストが表示される場合があります。会話データではなく、不要になった実行資源です。
 
 ## 使い方
 
 1. 音声ファイルを選択して文字起こしを実行
 2. 音声ファイルを聞きながら、結果の会話内容・話者を編集（話者ラベル既定値: `SPEAKER_00 → Th`、`SPEAKER_01 → Cl` など）
-   - 編集中は、Vulkan版ではセットアップ済みwhisper.cppモデル、それ以外の対応版では音声入力パックを使って、マイク音声の候補を挿入できます
+   - 編集中は、セットアップ済み（Editor 版は音声入力パック導入済み）の whisper.cpp モデルで、マイク音声の候補を挿入できます
    - `Ctrl+Shift+Space`（連続再生 / 停止）、`Ctrl+Shift+A` / `D`（5秒戻す / 進める）、`Ctrl+Shift+E`（話者切替）、`Ctrl+Shift+M`（音声入力）を利用できます
-3. 必要に応じて全体校正を実行します（CUDA / AMD版のみ。Gemma 4 E4Bまたは後付けの12Bを使用）。Vulkan版は全体校正を搭載しません
-4. Word / Excel / SRT字幕 / JSON形式で保存
+3. Word / Excel / SRT字幕 / JSON形式で保存
 
 表示テーマはタブ行左端のボタンで「システムに合わせる」（初期値）/ ライト / ダークを切り替えられ、選択内容は次回起動時にも引き継がれます。
 
 ## 技術スタック
 
-- Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
-- ASR: faster-whisper（turbo 既定 / large-v3 高精度・後付けダウンロード） / Diarization: pyannote.audio / 音声デコード: LGPL 構成 ffmpeg CLI
-- Vulkan 版: 文字起こし whisper.cpp（large-v3-turbo・Silero VAD）/ 話者分離 NeMo-Speech.cpp + Nemotron-3-Diarization / 句読点付与はローカルルール（GPU が無い場合は音声エンジンが CPU で動作）。LLM と全体校正は含まない
-- 音声入力: Vulkan版はwhisper.cpp（フィラー例文付き・例文なしの2回の文字起こし、後者にはルールで句読点を付けて差があれば候補に追加。前後行の文脈は渡さない）。その他の対応版はGemma 4 E4B + 音声 mmproj（llama.cpp llama-server、OpenAI 互換 `input_audio`、loopback 限定）
-- LLM 校正: CUDA / AMD版はGemma 4 E4B（既定）/ Gemma 4 12B QAT+MTP（高精度・後付けダウンロード。NVIDIA=CUDA 直起動 / AMD=ROCm 優先・Vulkan バックエンドへフォールバック）。Vulkan版にLLM校正はありません。LLM搭載版は同梱/DL llama.cpp llama-server / ローカル OpenAI 互換 API（loopback 限定）を使用
+- Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material
+- 文字起こし: whisper.cpp（large-v3-turbo・Silero VAD、Vulkan ビルドを同梱） / 話者分離: NeMo-Speech.cpp + Nemotron-3-Diarization（Vulkan ビルドを同梱） / 音声デコード: LGPL 構成 ffmpeg CLI
+- 句読点付与: Rust のローカルルール。LLM は使用しません
+- 音声入力: whisper.cpp（フィラー例文付きで1回文字起こしし、候補1件。前後行の文脈は渡さない）
+- Python は同梱・使用しません
 
 ## ドキュメント
 
@@ -181,10 +101,10 @@ LoTT CPU は、対応 GPU がない PC でもローカル完結の文字起こ�
 - オフライン動作の確認手順: [docs/offline-verification.md](docs/offline-verification.md)
 - 倫理審査向け資料テンプレート: [docs/irb-template.md](docs/irb-template.md)
 - 開発環境セットアップ・内部仕様: [docs/development.md](docs/development.md)
-- Linux NVIDIA CUDA配布ビルド: [docs/release-build-linux.md](docs/release-build-linux.md)
-- トラブルシューティング（CUDA / AMD ROCm 含む）: [docs/troubleshooting.md](docs/troubleshooting.md)
+- ggml 音声エンジンの設計: [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
+- トラブルシューティング: [docs/troubleshooting.md](docs/troubleshooting.md)
 - 配布ビルド（Windows NSIS）: [docs/release-build-windows.md](docs/release-build-windows.md)
-- FFmpeg / PyAV ライセンス方針: [docs/lgpl-pyav-build.md](docs/lgpl-pyav-build.md)
+- 配布ビルド（Linux deb / AppImage・未検証）: [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## ライセンス
 

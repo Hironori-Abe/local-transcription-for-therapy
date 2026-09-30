@@ -1,39 +1,39 @@
 #!/usr/bin/env bash
 # setup-build-tools-linux.sh
-# Ubuntu 向け NSIS に相当するビルドスクリプト。
+# Windows の setup-build-tools.bat（NSIS）に相当する Linux 版ビルドスクリプト。
 # .deb / .AppImage パッケージを配布ライン別にビルドする。
-# 引数無しは NVIDIA、--amd / --cpu / --editor で各ラインを明示する。
+# 引数無しは Full（whisper.cpp + NeMo-Speech.cpp の Vulkan 版）、--editor は whisper.cpp のみの軽量 Editor。
+#
+# 手順: ggml 音声エンジン（Vulkan）のビルドと配置 -> LGPL ffmpeg（Full のみ）-> ライセンス収集
+#       -> tauri build（deb + appimage）-> AppImage の再パッケージ（EGL / GTK IME / GStreamer の補正と検証）
+#       -> 規約名への集約。Python はビルド用にだけ使い、アプリには同梱しない。
 #
 # glibc 互換のため、リリースビルドは古めの Ubuntu（例 24.04）コンテナ内で
-# 実行すること。詳細は scripts/run-dev-docker-ubuntu.sh を参照。
+# 実行すること（scripts/build-appimage-docker.sh）。
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT_DIR="$(pwd)"
 
-LICENSE_VENV_DIR="${LOTT_VENV_DIR:-}"
-
-CONFIG_NVIDIA="tauri.nvidia.linux.override.json"
-CONFIG_AMD="tauri.amd.linux.override.json"
-CONFIG_CPU="tauri.cpu.linux.override.json"
+# Full 版は src-tauri/tauri.conf.json（NSIS のみ）に Linux 用の上書き（deb + AppImage）を重ねる。
+CONFIG_FULL="tauri.linux.override.json"
 CONFIG_EDITOR="tauri.editor.linux.override.json"
-BUILD_CONFIG="$CONFIG_NVIDIA"
-BUILD_LINE="NVIDIA CUDA"
+BUILD_CONFIG="$CONFIG_FULL"
+BUILD_LINE="Full (Vulkan)"
 BUILD_OPTION=""
-BUILD_VARIANT="nvidia"
+BUILD_VARIANT="full"
 DRY_RUN=0
 
 usage() {
-  cat <<EOF
-Usage: $0 [--amd | --cpu | --editor] [--dry-run]
+  cat <<USAGE
+Usage: $0 [--editor] [--dry-run]
 
-  (デフォルト) NVIDIA CUDA 版 .deb / .AppImage をビルドします。
-  --amd        AMD ROCm 版をビルドします。
-  --cpu        CPU 版をビルドします。
-  --editor     軽量 Editor 版をビルドします。
+  (デフォルト) Full 版 .deb / .AppImage をビルドします（Vulkan: NVIDIA / AMD / Intel 共通、GPU が無ければ CPU）。
+  --editor     軽量 Editor 版をビルドします（whisper.cpp のみ同梱）。
+  --vulkan     Full 版の旧称です（デフォルトと同じ）。
   --dry-run    ビルドせず、選択した設定・AppDir 選別・規約名の生成予定だけを表示します。
   -h, --help   このヘルプを表示します。
-EOF
+USAGE
 }
 
 select_build_line() {
@@ -54,8 +54,7 @@ select_build_line() {
 # --- オプション解析 ---
 for arg in "$@"; do
   case "$arg" in
-    --amd) select_build_line "--amd" "AMD ROCm" "$CONFIG_AMD" "amd" ;;
-    --cpu) select_build_line "--cpu" "CPU" "$CONFIG_CPU" "cpu" ;;
+    --vulkan) select_build_line "--vulkan" "Full (Vulkan)" "$CONFIG_FULL" "full" ;;
     --editor) select_build_line "--editor" "Editor" "$CONFIG_EDITOR" "editor" ;;
     --dry-run) DRY_RUN=1 ;;
     --help|-h)
@@ -70,16 +69,8 @@ for arg in "$@"; do
   esac
 done
 
-if [[ -z "$LICENSE_VENV_DIR" ]]; then
-  case "$BUILD_VARIANT" in
-    nvidia) LICENSE_VENV_DIR=".venv312-nvidia" ;;
-    amd) LICENSE_VENV_DIR=".venv312-amd" ;;
-    cpu|editor) LICENSE_VENV_DIR=".venv312-cpu" ;;
-  esac
-fi
-
 if ! command -v python3 &>/dev/null; then
-  echo "[ERROR] python3 が見つかりません。" >&2
+  echo "[ERROR] python3 が見つかりません（ffmpeg 取得・ライセンス収集・成果物整理のビルド用に必要です）。" >&2
   exit 1
 fi
 
@@ -203,58 +194,98 @@ fi
 echo "[OK] $("${TAURI_CMD[@]}" -V)"
 echo ""
 
-# --- LGPL FFmpeg CLI のダウンロード ---
-echo "[INFO] LGPL FFmpeg CLI を確認中..."
-python3 scripts/setup_ffmpeg_lgpl.py --platform linux --variant lgpl
+# --- ggml 音声エンジン（Vulkan）のビルドと配置 ---
+# whisper.cpp / NeMo-Speech.cpp を固定 commit からビルドし、同梱先（src-tauri/resources/speech-engines）へ置く。
+# モデルは同梱しない（初回起動後にアプリのセットアップ画面から取得する）。
+# GPU ドライバー（ICD）は同梱せず、ホストのものを使う。Vulkan ローダー（libvulkan.so.1）はホストのものを優先し、
+# 無い PC 向けのフォールバックだけを専用ディレクトリ speech-engines/vulkan-loader/ へ同梱する（下記）。
+# エンジンは RUNPATH=$ORIGIN で隣の ggml ライブラリと libgomp を読む（setup-ggml-speech-linux.sh が設定・検査）。
+ENGINES_DIR="src-tauri/resources/speech-engines"
+ENGINE_ARGS=(--backend vulkan --engines-dir "$ENGINES_DIR" --skip-models)
+if [[ "$BUILD_VARIANT" == "editor" ]]; then
+  ENGINE_ARGS+=(--skip-nemo)
+fi
+echo "[INFO] ggml 音声エンジン（Vulkan）を準備中: bash scripts/setup-ggml-speech-linux.sh ${ENGINE_ARGS[*]}"
+# 別の配布ラインで置いたエンジンが残らないよう、同梱先は毎回作り直す（ビルドキャッシュは別ディレクトリ）
+rm -rf "$ENGINES_DIR"
+bash scripts/setup-ggml-speech-linux.sh "${ENGINE_ARGS[@]}"
+if [[ ! -x "$ENGINES_DIR/whisper/bin/whisper-cli" ]]; then
+  echo "[ERROR] whisper-cli が配置されていません: $ENGINES_DIR/whisper/bin/whisper-cli" >&2
+  exit 1
+fi
+if [[ "$BUILD_VARIANT" == "editor" ]]; then
+  if [[ -e "$ENGINES_DIR/nemo" ]]; then
+    echo "[ERROR] Editor 版に NeMo エンジンを含めてはいけません: $ENGINES_DIR/nemo" >&2
+    exit 1
+  fi
+elif [[ ! -x "$ENGINES_DIR/nemo/bin/nemo-speech" ]]; then
+  echo "[ERROR] nemo-speech が配置されていません: $ENGINES_DIR/nemo/bin/nemo-speech" >&2
+  exit 1
+fi
+# --- フォールバック用 Vulkan ローダー（Ubuntu の libvulkan1）---
+# ホストに libvulkan.so.1 が無い PC でも CPU 実行できるよう、ローダー本体だけを同梱する。
+# エンジンの隣（RUNPATH=$ORIGIN）へ置くとホストの新しいローダーを隠すため、専用ディレクトリに置き、
+# アプリが「ホストに無いときだけ」LD_LIBRARY_PATH へ足す（Rust: ensure_bundled_vulkan_loader_on_path）。
+# GPU ドライバー（ICD）は同梱しない。
+LOADER_SRC="$(readlink -f /usr/lib/x86_64-linux-gnu/libvulkan.so.1 2>/dev/null || true)"
+LOADER_COPYRIGHT="/usr/share/doc/libvulkan1/copyright"
+if [[ -z "$LOADER_SRC" || ! -f "$LOADER_SRC" ]]; then
+  echo "[ERROR] libvulkan.so.1 が見つかりません（libvulkan1 が必要です）: /usr/lib/x86_64-linux-gnu/libvulkan.so.1" >&2
+  exit 1
+fi
+if [[ ! -f "$LOADER_COPYRIGHT" ]]; then
+  echo "[ERROR] libvulkan1 のライセンス表示が見つかりません: $LOADER_COPYRIGHT" >&2
+  exit 1
+fi
+LOADER_VERSION="$(dpkg-query -W -f='${Version}' libvulkan1 2>/dev/null || true)"
+if [[ -z "$LOADER_VERSION" ]]; then
+  echo "[ERROR] dpkg-query で libvulkan1 のバージョンを取得できません。" >&2
+  exit 1
+fi
+LOADER_DIR="$ENGINES_DIR/vulkan-loader"
+mkdir -p "$LOADER_DIR"
+cp -L "$LOADER_SRC" "$LOADER_DIR/libvulkan.so.1"
+cp "$LOADER_COPYRIGHT" "$LOADER_DIR/LICENSE-Vulkan-Loader.txt"
+{
+  echo "Vulkan Loader (fallback for hosts without libvulkan.so.1)"
+  echo "Source: Ubuntu 24.04 package libvulkan1 $LOADER_VERSION"
+  echo "Original file: $LOADER_SRC"
+  echo "License: Apache-2.0 (see LICENSE-Vulkan-Loader.txt)"
+  echo "Source code: apt-get source libvulkan1 / https://github.com/KhronosGroup/Vulkan-Loader"
+} > "$LOADER_DIR/BUILD_INFO.txt"
+if [[ ! -s "$LOADER_DIR/libvulkan.so.1" ]]; then
+  echo "[ERROR] Vulkan ローダーの配置に失敗しました: $LOADER_DIR/libvulkan.so.1" >&2
+  exit 1
+fi
+echo "[OK] フォールバック用 Vulkan ローダーを配置しました: libvulkan1 $LOADER_VERSION"
+# GPL ライブラリ（libgomp は GCC Runtime Library Exception 付きの例外）以外の余計な同梱物が無いことを一覧する
+echo "[INFO] 同梱するエンジン一式:"
+find "$ENGINES_DIR" -type f -printf '  %P (%s bytes)\n' | sort
 echo ""
 
-# --- 第三者ライセンス全文の収集 ---
-echo "[INFO] 第三者ライセンス全文を収集中..."
-if [[ -d "$LICENSE_VENV_DIR/Lib/site-packages" || -d "$LICENSE_VENV_DIR/lib" ]]; then
-  python3 scripts/collect_licenses.py --venv "$LICENSE_VENV_DIR" --frontend frontend --tauri src-tauri --out licenses
-  echo "[OK] licenses/THIRD_PARTY_FULL.txt を更新しました"
-else
-  echo "[WARN] $LICENSE_VENV_DIR が見つかりません。Python 依存のライセンス再収集をスキップします。"
-  echo "[WARN] リリース前に配布相当の Python 環境を指定して scripts/collect_licenses.py を実行してください。"
+# --- LGPL FFmpeg CLI のダウンロード（Editor は ffmpeg を同梱しない）---
+if [[ "$BUILD_VARIANT" != "editor" ]]; then
+  echo "[INFO] LGPL FFmpeg CLI を確認中..."
+  python3 scripts/setup_ffmpeg_lgpl.py --platform linux --variant lgpl
+  echo ""
 fi
+
+# --- 第三者ライセンス全文の収集 ---
+# Python パッケージは同梱しないので、Rust / Node と手動補完だけを集める
+echo "[INFO] 第三者ライセンス全文を収集中..."
+python3 scripts/collect_licenses.py --no-python --frontend frontend --tauri src-tauri --out licenses
+echo "[OK] licenses/THIRD_PARTY_FULL.txt を更新しました"
 if [[ ! -f "licenses/THIRD_PARTY_FULL.txt" ]]; then
   echo "[WARN] licenses/THIRD_PARTY_FULL.txt が見つかりません。ライセンス resources が不完全になります。"
 fi
 echo ""
 
-if [[ "$BUILD_VARIANT" == "nvidia" ]]; then
-  # Linux CUDA has no official llama.cpp release archive.  The host-side
-  # build-appimage-docker.sh / build-arch-package.sh prepares this resource
-  # from the pinned b10075 source before entering this build step.
-  if ! bash scripts/build-llama-server-cuda-linux.sh --check; then
-    echo '[ERROR] Linux NVIDIA CUDA llama-serverがありません。' >&2
-    echo '        先に bash scripts/build-llama-server-cuda-linux.sh --ensure を実行してください。' >&2
-    exit 1
-  fi
+# --- フロントエンド依存 ---
+# tauri build の beforeBuildCommand（npm --prefix frontend run build）が使う。
+if [[ ! -d "frontend/node_modules" ]]; then
+  echo "[INFO] frontend/node_modules が無いため npm ci を実行します..."
+  npm --prefix frontend ci
 fi
-echo "[INFO] LLM校正: llama.cpp llama-serverを直接起動します（NVIDIA Linuxは同梱CUDA、AMDはROCm/Vulkan）。"
-echo ""
-
-# --- 同梱 Python から readline 拡張モジュールを外す ---
-# これを残すと linuxdeploy が依存の libreadline.so.8 を AppDir/usr/lib へ入れ、
-# AppRun の LD_LIBRARY_PATH 経由でホストの /bin/sh（Arch 系 bash 5.3 = readline 8.3）が
-# 古い 8.2 を掴んで `undefined symbol: rl_print_keybinding` で即死する。
-# サイドカーも pip も readline を使わないため、同梱しないのが最も安全。
-PY_DYNLOAD_DIR="src-tauri/resources/python312-linux/lib/python3.12/lib-dynload"
-PY_SITECUSTOMIZE="src-tauri/resources/python312-linux/lib/python3.12/sitecustomize.py"
-# Ubuntu の Python 配置をコピーすると、sitecustomize.py が
-# /etc/python3.12/sitecustomize.py への絶対 symlink のまま残ることがある。
-# CachyOS 等ではリンク先が無く、Tauri の resource 収集がビルド前に失敗する。
-# 埋め込み Python はホストの /etc 設定を取り込まないため、壊れたリンクだけ除去する。
-if [[ -L "$PY_SITECUSTOMIZE" && ! -e "$PY_SITECUSTOMIZE" ]]; then
-  rm -f "$PY_SITECUSTOMIZE"
-  echo "[OK] 同梱 Python の壊れた sitecustomize.py symlink を除外しました"
-fi
-if compgen -G "$PY_DYNLOAD_DIR/readline.cpython-*.so" >/dev/null 2>&1; then
-  rm -f "$PY_DYNLOAD_DIR"/readline.cpython-*.so
-  echo "[OK] 同梱 Python の readline 拡張モジュールを除外しました（ホスト /bin/sh 保護）"
-fi
-echo ""
 
 # --- AppImage ビルド用の環境（Docker/FUSE 無し対策）---
 # コンテナ内では FUSE が使えないことが多いため、linuxdeploy/appimagetool を
@@ -360,22 +391,52 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       [[ -n "$out" ]] || out="$APPIMAGE_DIR/${product}_${app_version}_amd64.AppImage"
       removed="$(find "$appdir" -iname 'libwayland-*' -print -delete 2>/dev/null | wc -l)"
 
-      # --- ホストの /bin/sh を壊す同梱 readline の除去 ---
+      # --- ホストの /bin/sh を壊す readline が AppDir に無いことの検査 ---
       # AppRun は $APPDIR/usr/lib を LD_LIBRARY_PATH 先頭へ入れ、それが子・孫プロセスまで
       # 継承される。Ubuntu 24.04 の libreadline.so.8（8.2）には Arch 系ホストの bash 5.3 が
       # 要求する rl_print_keybinding が無いため、AppImage から起動したホストの /bin/sh が
       #   /bin/sh: symbol lookup error: /bin/sh: undefined symbol: rl_print_keybinding
       # で即死し、#!/bin/sh スクリプトである xdg-open などが一切動かなくなる。
-      # AppDir 内で readline を必要とするのは同梱 Python の任意モジュールだけなので、
-      # 拡張モジュールごと外す（import readline は ImportError になるだけで、pip も
-      # サイドカーも readline を使わない）。
+      # 以前は同梱 Python の readline 拡張モジュールが linuxdeploy に libreadline.so.8 を引き込む
+      # 唯一の経路だった。Python を同梱しなくなったため通常は混入しないが、依存が変わって再発すると
+      # 原因が分かりにくいので、削除ではなく「残っていればビルドを落とす」検査として残す。
       # 実行時側の根本対策は Rust の apply_host_command_env（ホストコマンドへ AppDir 環境を渡さない）。
-      readline_removed="$(find "$appdir" \
-        \( -name 'libreadline.so*' -o -name 'libhistory.so*' -o -name 'readline.cpython-*.so' \) \
-        -print -delete 2>/dev/null | wc -l)"
-      echo "[INFO] $(basename "$out"): readline 関連 $readline_removed 件を除去（ホスト /bin/sh 保護）"
       if find "$appdir" \( -name 'libreadline.so*' -o -name 'libhistory.so*' \) | grep -q .; then
-        echo "[ERROR] AppDir に libreadline/libhistory が残っています。ホストの /bin/sh が壊れます。" >&2
+        echo "[ERROR] AppDir に libreadline/libhistory が入っています。ホストの /bin/sh が壊れます。" >&2
+        find "$appdir" \( -name 'libreadline.so*' -o -name 'libhistory.so*' \) >&2
+        exit 1
+      fi
+      echo "[INFO] $(basename "$out"): libreadline/libhistory は含まれていません（ホスト /bin/sh 保護）"
+
+      # --- ggml エンジンが AppDir に入っていることの検査 ---
+      if ! find "$appdir" -type f -name whisper-cli -perm -u+x | grep -q .; then
+        echo "[ERROR] AppDir に whisper-cli がありません。tauri の resources 設定を確認してください。" >&2
+        exit 1
+      fi
+      if [[ "$BUILD_VARIANT" == "editor" ]]; then
+        if find "$appdir" -type f -name nemo-speech | grep -q .; then
+          echo "[ERROR] Editor 版の AppDir に nemo-speech が入っています（Editor は whisper.cpp のみ）。" >&2
+          exit 1
+        fi
+      elif ! find "$appdir" -type f -name nemo-speech -perm -u+x | grep -q .; then
+        echo "[ERROR] Full 版の AppDir に nemo-speech がありません。" >&2
+        exit 1
+      fi
+
+      # --- Vulkan ローダー / ICD の同梱物の検査 ---
+      # GPU ドライバー（ICD）はホストのものを使う。同梱すると組み合わせが合わず GPU が見えなくなる。
+      # ローダーも原則ホストのものを使い、許可するのはフォールバック用の
+      # .../speech-engines/vulkan-loader/libvulkan.so.1 ただ1つだけ（エンジンの隣や usr/lib へ
+      # 置くとホストの新しいローダーを隠すため不可）。
+      unexpected_vulkan="$(find "$appdir" \( -name 'libvulkan.so*' -o -path '*/vulkan/icd.d/*' \) \
+        ! -path '*/speech-engines/vulkan-loader/libvulkan.so.1' | head -n 20)"
+      if [[ -n "$unexpected_vulkan" ]]; then
+        echo "[ERROR] AppDir に想定外の Vulkan ローダー/ICD が入っています（許可: speech-engines/vulkan-loader/libvulkan.so.1 のみ）。" >&2
+        echo "$unexpected_vulkan" >&2
+        exit 1
+      fi
+      if [[ "$(find "$appdir" -path '*/speech-engines/vulkan-loader/libvulkan.so.1' | wc -l)" -ne 1 ]]; then
+        echo "[ERROR] AppDir に フォールバック用 Vulkan ローダー（speech-engines/vulkan-loader/libvulkan.so.1）がありません。tauri の resources 設定を確認してください。" >&2
         exit 1
       fi
 
@@ -517,4 +578,5 @@ if ! python3 scripts/collect_release_artifacts.py \
   exit 1
 fi
 echo ""
-echo "[INFO] Python パッケージはインストール後にアプリのセットアップ UI からインストールしてください。"
+echo "[INFO] Whisper / Silero VAD / Nemotron のモデルは同梱していません。初回起動後にアプリのセットアップ画面から取得してください。"
+echo "[INFO] GPU 実行にはホスト側の Vulkan ドライバー（GPU 用 ICD）が必要です。無ければ CPU で動作します（libvulkan.so.1 がホストに無い場合は同梱のフォールバックを使います）。"

@@ -15,12 +15,9 @@ from typing import Iterable
 
 
 VARIANT_TOKENS = {
-    "nvidia": "cuda",
-    "amd": "rocm",
-    "cpu": "cpu",
+    # フル機能版（Vulkan。NVIDIA / AMD / Intel 共通、GPU が無ければ CPU）。設定は src-tauri/tauri.conf.json
+    "full": "vulkan",
     "editor": "editor",
-    # NVIDIA / AMD / Intel 共通の Vulkan 版（scripts/setup-build-tools.bat --vulkan）
-    "vulkan": "vulkan",
 }
 
 CHECKSUMS_NAME = "SHA256SUMS.txt"
@@ -225,9 +222,6 @@ def main() -> int:
     artifact_prefix = f"{product_name}_{version}"
     destination_dir = output_path(root, args.output_dir, version)
     names = canonical_names(args.platform, args.variant, version)
-
-    if args.variant == "amd":
-        print("[WARN] AMD 版は一般向け Release へ添付しない方針です（docs/release-build-windows.md）")
 
     if args.dry_run:
         print(f"[DRY-RUN] 規約名の生成予定（出力先: {destination_dir}）:")

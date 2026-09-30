@@ -19,32 +19,39 @@ The following attributions are highlighted here as required by their
 respective licenses. This list is informational and does not modify the
 Apache License under which this product is released.
 
-* Speaker diarization model
-    pyannote "speaker-diarization-community-1"
-    by Hervé Bredin and the pyannote contributors.
-    Licensed under CC-BY-4.0 (attribution required; no modification made
-    to the model by this product).
-    https://huggingface.co/pyannote/speaker-diarization-community-1
+* Speech recognition engine
+    whisper.cpp and ggml (MIT), by ggml-org / Georgi Gerganov and
+    contributors. https://github.com/ggml-org/whisper.cpp
 
-* Speech recognition
-    OpenAI Whisper (MIT) via faster-whisper and CTranslate2
-    (MIT, SYSTRAN).
+* Speaker-diarization engine
+    NeMo-Speech.cpp (Apache-2.0), by NVIDIA, statically linked with
+    sentencepiece (Apache-2.0, Google). The upstream LICENSE, NOTICE, and
+    THIRD_PARTY_NOTICES.md are bundled with the engine.
+    https://github.com/NVIDIA/NeMo-Speech.cpp
 
-* Speaker-diarization toolkit and embeddings
-    pyannote.audio (MIT) and SpeechBrain (Apache-2.0).
+* Speech recognition model (downloaded at first setup)
+    OpenAI Whisper large-v3-turbo (MIT), ggml conversion distributed via
+    ggerganov/whisper.cpp.
 
-* LLM proofreading runtime
-    llama.cpp (MIT).
+* Voice activity detection model (downloaded at first setup)
+    Silero VAD v6.2.0 (MIT, Silero Team), ggml conversion distributed via
+    ggml-org/whisper-vad.
 
-* LLM proofreading models
-    Gemma 4 E4B and Gemma 4 12B by Google DeepMind, licensed under Apache-2.0
-    (Gemma 4 is not covered by the legacy Gemma Terms of Use or
-    Prohibited Use Policy). GGUF quantization and MTP draft models are
-    distributed by Unsloth under Apache-2.0.
+* Speaker-diarization model (downloaded at first setup; not bundled)
+    NVIDIA Nemotron-3-Diarization, licensed under OpenMDW-1.1. The license
+    text is provided in licenses/manual/ and can be viewed on the setup
+    screen. https://huggingface.co/nvidia/Nemotron-3-Diarization
+
+* Vulkan loader
+    vulkan-1.dll from the LunarG Vulkan Runtime (Windows) and libvulkan.so.1
+    from the Ubuntu 24.04 libvulkan1 package (Linux) (Apache-2.0, Khronos
+    Group / LunarG), bundled unmodified so that the speech engines can start
+    on PCs without a GPU driver or Vulkan loader. Version and source are
+    recorded in resources/speech-engines/vulkan-loader/BUILD_INFO.txt.
 
 * Audio decoding
     FFmpeg is used as a local command-line executable for audio decoding
-    and format conversion. Windows and Linux builds bundle a BtbN FFmpeg "lgpl"
+    and format conversion. Windows builds bundle a BtbN FFmpeg "lgpl"
     build and treat it as LGPLv3 because the build includes
     --enable-version3. The bundled build is checked to exclude
     --enable-gpl, --enable-nonfree, libx264, libx265, libxvid, and
@@ -52,33 +59,28 @@ Apache License under which this product is released.
     Build project: https://github.com/BtbN/FFmpeg-Builds
     FFmpeg source: https://github.com/FFmpeg/FFmpeg
     Build metadata and hashes are provided in resources/ffmpeg/
-    FFMPEG_BUILD_INFO.txt. LoTT distribution Python environments do not
-    include PyAV ("av") or imageio-ffmpeg; faster-whisper is installed
-    without dependency-resolving PyAV into the distribution environment.
+    FFMPEG_BUILD_INFO.txt. LoTT does not include PyAV ("av") or
+    imageio-ffmpeg.
 
-* Linux media playback
-    Linux AppImage builds bundle GStreamer core and base/good audio
-    plugins under the LGPL (with LGPL-compatible MIT/BSD components).
-    GPL plugin sets and gst-libav are not bundled.
+* C/C++ runtime (Linux builds)
+    libgomp, the GCC OpenMP runtime library (GPL-3.0-or-later WITH
+    GCC-exception-3.1, the GCC Runtime Library Exception), placed
+    unmodified next to the speech engine executables in Linux builds.
+    https://gcc.gnu.org/
 
-* GPU runtime (CUDA builds)
-    NVIDIA CUDA redistributable libraries (CUDA Runtime "cudart" and
-    cuBLAS "cublas" / "cublasLt") are distributed under the NVIDIA CUDA
-    Toolkit EULA (listed as redistributable in Attachment A). The cuBLAS
-    library includes third-party code requiring the following attribution,
-    among others:
-      Copyright (c) 2007-2009, Regents of the University of California.
-      All rights reserved. (code by/derived from Vasily Volkov)
-    Additional cuBLAS third-party notices (Davide Barbieri, University of
-    Tennessee, Jonathan Hogg / STFC, and others) are provided in the CUDA
-    Toolkit EULA, Attachment B. See THIRD_PARTY_LICENSES.md (F-3).
+* Linux media playback (AppImage only)
+    Linux AppImage builds bundle GStreamer core and base/good/ALSA/
+    PulseAudio plugins under the LGPL-2.1-or-later (with LGPL-compatible
+    MIT/BSD components). GPL plugin sets, gst-libav, and faad are not
+    bundled. https://gstreamer.freedesktop.org/
+
+* C/C++ runtime
+    Microsoft Visual C++ runtime libraries (Distributable Code), placed
+    unmodified next to the speech engine executables.
 
 * UI
     Angular and Angular Material (MIT), Tauri (MIT / Apache-2.0),
     Google Material Symbols font (Apache-2.0).
-
-* Python runtime
-    Python (PSF License Agreement).
 
 For the complete list and full license texts, see THIRD_PARTY_LICENSES.md
 and the accompanying collected license files in the distribution.

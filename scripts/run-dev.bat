@@ -2,14 +2,24 @@
 chcp 65001 > nul
 setlocal EnableExtensions
 set "HOLD_ON_EXIT=1"
+REM shift moves %0 too, so remember the script directory before parsing options.
+set "SCRIPT_DIR=%~dp0"
+REM Options (any order): --no-hold, --cpu (dev only: LOTT_DEV_FORCE_CPU=1 treats the GPU as absent)
+:parse_args
+if "%~1"=="" goto :args_done
 if /I "%~1"=="--no-hold" set "HOLD_ON_EXIT=0"
+if /I "%~1"=="--cpu" set "LOTT_DEV_FORCE_CPU=1"
+shift
+goto :parse_args
+:args_done
+if "%LOTT_DEV_FORCE_CPU%"=="1" echo [DEV] LOTT_DEV_FORCE_CPU=1: running speech engines on CPU only.
 
-REM Vulkan development launcher for NVIDIA, AMD, and Intel.
+REM Development launcher for the Full edition (Vulkan: NVIDIA, AMD, and Intel; CPU without a GPU).
 REM Speech engines: python_sidecar\speech-engines.
 REM Setup commands:
 REM   powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
-REM   powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines -SkipPython
-cd /d "%~dp0.."
+REM   python scripts\setup_ffmpeg_lgpl.py
+cd /d "%SCRIPT_DIR%.."
 
 if not exist "python_sidecar\speech-engines\whisper\bin\whisper-cli.exe" goto :err_engines
 if not exist "python_sidecar\speech-engines\nemo\bin\nemo-speech.exe" goto :err_engines
@@ -23,8 +33,8 @@ start /b cmd /c "npm.cmd --prefix frontend run start"
 echo Waiting 8 seconds for frontend startup...
 powershell -NoProfile -Command "Start-Sleep -Seconds 8"
 
-echo Starting Tauri dev (Vulkan)...
-call npm run tauri:dev -- --config tauri.vulkan.dev.windows.override.json --features vulkan
+echo Starting Tauri dev (Full edition)...
+call npm run tauri:dev -- --config tauri.dev.windows.override.json
 if errorlevel 1 goto :err_tauri
 goto :hold_success
 
@@ -34,7 +44,7 @@ echo         powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-
 goto :hold_error
 
 :err_npm
-echo [ERROR] npm was not found. Please run scripts\setup-dev-nvidia.bat first.
+echo [ERROR] npm was not found. Install Node.js (LTS), then run: npm install --prefix frontend
 goto :hold_error
 
 :err_tauri

@@ -5,7 +5,7 @@
 .DESCRIPTION
     scripts/setup-ggml-speech-linux.sh の Windows 版。
 
-      powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1 [-Backend vulkan|cuda|cpu] [-CudaArch 89] [-SkipBuild] [-SkipModels]
+      powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1 [-Backend vulkan|cuda|cpu] [-CudaArch 89] [-SkipBuild] [-SkipModels] [-SkipNemo]
 
     - 固定 commit からソースビルドし、python_sidecar\speech-engines\<engine>\ へ配置する
     - モデルは固定 revision から取得し、SHA-256 を検証して python_sidecar\models\ へ配置する
@@ -28,6 +28,7 @@ param(
     [string]$CudaArch = 'native',
     [switch]$SkipBuild,
     [switch]$SkipModels,
+    [switch]$SkipNemo,
     [int]$Jobs = 0,
     # 配置先（既定はアプリが読む python_sidecar\speech-engines）。バックエンドを並べて比較するときに変える
     [string]$EnginesDir
@@ -304,6 +305,7 @@ function Build-Nemo {
 function Get-Models {
     foreach ($entry in $Models) {
         $rel, $url, $sha = $entry -split '\|'
+        if ($SkipNemo -and $rel.StartsWith('nemotron-')) { continue }
         $path = Join-Path $ModelsDir $rel
         if ((Test-Path $path) -and ((Get-FileHash -Algorithm SHA256 $path).Hash -eq $sha.ToUpper())) {
             Log "取得済み: $rel"
@@ -342,12 +344,15 @@ if (-not $SkipBuild) {
     }
     Import-MsvcEnvironment
     Build-Whisper
-    Build-Nemo
+    if (-not $SkipNemo) { Build-Nemo }
 }
 if (-not $SkipModels) { Get-Models }
 
 Log '完了'
 Log "  whisper-cli : $EnginesDir\whisper\bin\whisper-cli.exe"
-Log "  nemo-speech : $EnginesDir\nemo\bin\nemo-speech.exe"
-Log "  models      : $ModelsDir\whisper-ggml\, $ModelsDir\nemotron-3-diarization\"
+if (-not $SkipNemo) { Log "  nemo-speech : $EnginesDir\nemo\bin\nemo-speech.exe" }
+if (-not $SkipModels) {
+    if ($SkipNemo) { Log "  models      : $ModelsDir\whisper-ggml\" }
+    else { Log "  models      : $ModelsDir\whisper-ggml\, $ModelsDir\nemotron-3-diarization\" }
+}
 Log "ビルドログ: $Logs"

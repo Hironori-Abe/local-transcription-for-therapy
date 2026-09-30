@@ -10,5 +10,20 @@
         "focus": false
       }
     ]
+  },
+  "build": {
+    "beforeDevCommand": "cmd /c echo Frontend is managed by scripts/run-dev.bat",
+    "devUrl": "http://127.0.0.1:4200",
+    "frontendDist": "../frontend"
+  },
+  "bundle": {
+    "resources": [
+      "../LICENSE",
+      "../NOTICE",
+      "../THIRD_PARTY_LICENSES.md",
+      "../licenses",
+      "resources/proofread/punctuation_rules",
+      "resources/ffmpeg"
+    ]
   }
 }

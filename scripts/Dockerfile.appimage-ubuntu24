@@ -1,3 +1,9 @@
+# LoTT の Linux 配布ビルド（Full / Editor）用イメージ。
+# - ggml 音声エンジン（whisper.cpp / NeMo-Speech.cpp）を Vulkan でビルドする:
+#   cmake / ninja / glslc / libvulkan-dev / spirv-headers。実行時のローダー（libvulkan.so.1）は
+#   ホストのものを優先し、無い環境向けのフォールバックとして libvulkan1 の実体を
+#   resources/speech-engines/vulkan-loader/ へ同梱する（エンジンの隣には置かない）。
+# - python3 はビルド用（ffmpeg 取得・ライセンス収集・成果物整理）。アプリには Python を同梱しない。
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -7,9 +13,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
+      cmake \
       curl \
       desktop-file-utils \
       file \
+      git \
+      glslc \
       gstreamer1.0-alsa \
       gstreamer1.0-plugins-base \
       gstreamer1.0-plugins-good \
@@ -18,14 +27,16 @@ RUN apt-get update \
       libfuse2 \
       libgtk-3-dev \
       libssl-dev \
+      libvulkan-dev \
+      libvulkan1 \
       libwebkit2gtk-4.1-dev \
       libxdo-dev \
       librsvg2-dev \
+      ninja-build \
       patchelf \
       pkg-config \
       python3 \
-      python3-pip \
-      python3-venv \
+      spirv-headers \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -48,26 +59,20 @@ RUN set -eu; \
     done; \
     echo "[OK] LGPL GStreamer プラグインを確認しました"
 
-# AppImage実行先のsystem Python（CachyOSでは3.14等）へ依存しない、再配置可能な
-# Python 3.12基本ランタイムを作る。Pythonパッケージ本体は初回セットアップ時に
-# app_local_data_dir配下へ導入するため、ここには標準ライブラリとpipだけを含める。
-# Ubuntuはsystem Pythonのensurepipを無効化しているので、aptのpipモジュールを
-# 同梱prefixへコピーし、実際の導入先は実行時のPIP_TARGETで分離する。
-RUN runtime=/opt/lott-python312 \
-    && mkdir -p "$runtime/bin" "$runtime/lib" \
-    && cp /usr/bin/python3.12 "$runtime/bin/python3.12" \
-    && cp -a /usr/lib/python3.12 "$runtime/lib/python3.12" \
-    && libpython="$(ldd /usr/bin/python3.12 | awk '/libpython3[.]12[.]so[.]1[.]0/ { print $3; exit }')" \
-    && if [ -n "$libpython" ]; then cp "$libpython" "$runtime/lib/libpython3.12.so.1.0"; fi \
-    && ln -s python3.12 "$runtime/bin/python3" \
-    && rm -f "$runtime/lib/python3.12/EXTERNALLY-MANAGED" \
-    && cp -a /usr/lib/python3/dist-packages/pip "$runtime/lib/python3.12/pip" \
-    && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
-       "$runtime/bin/python3.12" -c 'import encodings, pip; assert encodings.__file__' \
-    && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
-       "$runtime/bin/python3.12" -m pip install --no-cache-dir --upgrade "pip>=25.2,<26" \
-    && PYTHONHOME="$runtime" LD_LIBRARY_PATH="$runtime/lib" \
-       "$runtime/bin/python3.12" -m pip --version
+# 同梱するフォールバック用 Vulkan ローダー（Ubuntu の libvulkan1）と、AppImage が抱える
+# WebKitGTK のバージョンをビルドログへ残す（WEBKIT_DMABUF_RENDERER_FORCE_SHM 対応可否の確認用）。
+RUN set -eu; \
+    test -e /usr/lib/x86_64-linux-gnu/libvulkan.so.1; \
+    test -f /usr/share/doc/libvulkan1/copyright; \
+    echo "[INFO] libvulkan1 $(dpkg-query -W -f='${Version}' libvulkan1)"; \
+    echo "[INFO] libwebkit2gtk-4.1-0 $(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)"
+
+# Vulkan ビルド用ツールの存在確認（ggml-vulkan は glslc と Vulkan / SPIR-V ヘッダーを必要とする）
+RUN set -eu; \
+    glslc --version >/dev/null; \
+    test -f /usr/include/vulkan/vulkan.h; \
+    test -f /usr/include/spirv/unified1/spirv.hpp; \
+    echo "[OK] Vulkan ビルド依存を確認しました"
 
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       | tar -xJ -C /usr/local --strip-components=1 \

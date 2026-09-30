@@ -40,6 +40,8 @@ zip2 = { package = "zip", version = "2", default-features = false, features = ["
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
+    # GPU はあるのにドライバーが無い・古い場合の案内（gpu_driver.rs。表示装置の列挙）
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_System_JobObjects",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -52,6 +54,8 @@ windows-sys = { version = "0.59", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+# libvulkan.so.1 がホストにあるかの dlopen 判定用（Cargo.lock 既存の 0.2.x を共用）
+libc = "0.2"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tauri-plugin-dialog = "2"
@@ -59,12 +63,6 @@ tauri-plugin-dialog = "2"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-# 公式配布では有効にしない。LM Studio / Ollama 連携が必要な利用者が
-# ソースから専用インストーラーをビルドするときだけ指定する。
-local-llm-apps = []
-# Vulkan 統一版（NVIDIA / AMD / Intel 共通のインストーラー）。文字起こし・話者分離は同梱の
-# ggml エンジン、校正は同梱の Vulkan 版 llama-server を使う（scripts/setup-build-tools.bat --vulkan）。
-vulkan = []
 
 # WebView2 のクラッシュダンプが Microsoft へ自動送信されないよう、
 # EnvironmentOptions を設定する最小パッチを適用した Wry。

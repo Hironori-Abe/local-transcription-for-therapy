@@ -55,7 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebReq
 exit /b %ERRORLEVEL%
 
 :err_npm
-echo [ERROR] npm was not found. Please run scripts\setup-dev.bat first.
+echo [ERROR] npm was not found. Install Node.js (LTS), then run: npm install --prefix frontend
 goto :hold_error
 
 :err_cargo

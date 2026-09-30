@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Development launcher for the Editor edition (whisper.cpp voice input on CPU only).
+# Setup: bash scripts/setup-dev.sh   (or: bash scripts/setup-ggml-speech-linux.sh --skip-nemo)
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -90,20 +92,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -f "$ROOT_DIR/.dev-linux.env" ]]; then
-  # shellcheck disable=SC1091
-  source "$ROOT_DIR/.dev-linux.env"
-  info "Loaded Linux dev environment: .dev-linux.env"
-else
-  info ".dev-linux.env was not found. Using local fallbacks."
-fi
-
 sanitize_ld_library_path
 
 have npm || die "npm was not found. Please run scripts/setup-dev.sh first."
 have curl || die "curl was not found. Please install curl so the script can wait for the frontend."
 load_cargo_env
 have cargo || die "cargo was not found. Run scripts/setup-dev.sh first, or 'source \$HOME/.cargo/env'."
+
+WHISPER_BIN="${LOTT_WHISPER_CPP_BIN:-$ROOT_DIR/python_sidecar/speech-engines/whisper/bin/whisper-cli}"
+[[ -x "$WHISPER_BIN" ]] || die "whisper.cpp was not found: $WHISPER_BIN. Run: bash scripts/setup-dev.sh (or bash scripts/setup-ggml-speech-linux.sh --skip-nemo)"
 
 [[ -f "$EDITOR_TAURI_CONFIG" ]] || die "Editor Tauri override was not found: $EDITOR_TAURI_CONFIG"
 [[ -f "$EDITOR_TAURI_DEV_CONFIG" ]] || die "Editor Tauri dev override was not found: $EDITOR_TAURI_DEV_CONFIG"

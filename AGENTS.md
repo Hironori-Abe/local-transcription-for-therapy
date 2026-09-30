@@ -13,32 +13,35 @@
 2. 話者分離
 3. 文章校正
 
-上記を「実運用で使える品質」で継続改善することを開発方針とします。
+上記を「実運用で使える品質」で継続改善することを開発方針とします。文章校正はルールベース（句読点付与）と、氏名・地名などの注意喚起（Named Entity Warning）で構成し、LLM は使いません。
 
 ## Non-Negotiable Constraints
 
 - 通常運用時はインターネットに接続しない
 - PC外のAPIへ会話データ・音声データを送信しない
-- ネット接続を許可するのは、初回セットアップ・依存導入・モデル取得時のみ
+- ネット接続を許可するのは、初回セットアップ・モデル取得時のみ
 - 個人情報保護要件を、性能要件より優先する
+- 将来ローカルの推論エンドポイントを導入する場合も、接続先は loopback（`http://localhost:*` / `http://127.*:*` / `http://[::1]:*`）に限定する。クラウド推論、loopback以外のホスト、インターネット上のHTTPS推論エンドポイントへ会話データを送信する設計は採用しない。緩和する場合は必ず明示合意を取る
 
 ## Stack
 
 - App shell: Tauri 2 (Rust)
 - Frontend: Angular 21 + Angular Material
-- Sidecar: Python
-- ASR: faster-whisper（標準）/ whisper.cpp（ggml・試験的。設定タブで選択）
-- Diarization: pyannote.audio (`pyannote-speaker-diarization-community-1`)（標準）/ NeMo-Speech.cpp + Nemotron-3-Diarization（ggml・試験的）
-- LLM proofreading: CUDA / AMD 版の既存モデル・起動経路は維持する。LoTT Vulkan 版は LLM / llama.cpp / Gemma を含まず、句読点はローカルルールで付与し、全体校正は提供しない。NVIDIA=CUDA直起動 / AMD=ROCm優先・Vulkanフォールバック。エンジンは同梱/DL の llama.cpp llama-server 直起動 + local OpenAI-compatible API（loopback only）。外部のランタイム管理CLI/デーモンは配布しない
+- ASR: whisper.cpp（ggml。Whisper large-v3-turbo + Silero VAD。Vulkan ビルドを同梱）
+- Diarization: NeMo-Speech.cpp + Nemotron-3-Diarization（ggml。Vulkan ビルドを同梱）
+- GPU: NVIDIA / AMD / Intel を Vulkan で共通に扱う。Vulkan の GPU が無い場合は CPU で動かす
+- 校正: Rust のローカルルール（句読点付与）。LLM・llama.cpp・Gemma・Python は使わない・同梱しない
+- 音声デコード: 同梱または PATH 上の LGPL 構成 ffmpeg CLI
+
+CUDA 版・AMD (ROCm) 版・CPU 版、Python サイドカー、faster-whisper、pyannote.audio、AI（LLM）校正・全体校正、LM Studio / Ollama 連携は削除済み（2026-09-29）。
 
 ## Runtime Defaults
 
 - language: `ja`
-- ASR model: `turbo`
-- device: `cuda`（利用不可時は明示的に失敗/再試行情報を表示）
-- compute_type: `auto`
-- vad_filter: `true`（将来見直し候補）
-- word_timestamps: `false`
+- ASR model: `turbo`（Whisper large-v3-turbo）
+- device: 自動。Vulkan の GPU があれば GPU、無ければ CPU（起動時に CPU 要件を確認し、GPU ドライバーの問題があれば案内する）
+- VAD（Silero）: 有効
+- word_timestamps: 話者交代位置での分割に使う（設計は `docs/ggml-speech-engine-design.md`）
 - diarization: UI既定 `ON`
 
 話者表示の初期値:
@@ -53,10 +56,11 @@
 ## Repository Map
 
 - `frontend/`: Angular UI
-- `src-tauri/`: Tauri / Rust commands
-- `python_sidecar/`: transcription/diarization/proofread CLI
-- `python_sidecar/models/`: local model placement
+- `src-tauri/`: Tauri / Rust（`lib.rs` の Tauri commands、`ggml_speech.rs`、`gpu_select.rs`、`gpu_driver.rs`、`export_crypto.rs`）
+- `src-tauri/resources/`: 同梱資源（`speech-engines/`、`ffmpeg/`、`proofread/punctuation_rules/`）
+- `python_sidecar/speech-engines/`・`python_sidecar/models/`: 開発時の ggml エンジン・モデル配置先（Git 管理外。Python コードは無い。名前は履歴上の都合で残っている）
 - `scripts/`: setup/build/run scripts
+- `docs/`: ドキュメント
 
 ## README Localization Policy
 
@@ -76,88 +80,89 @@
 
 ## Setup and Run (Windows)
 
-推奨フロー:
+現行の対象 OS は Windows です。推奨フロー:
 
 ```bat
-scripts\setup-dev-nvidia.bat  & scripts\run-dev-nvidia.bat
-scripts\setup-dev-amd.bat     & scripts\run-dev-amd.bat
-scripts\setup-dev-cpu.bat     & scripts\run-dev-cpu.bat
+rem 1. ggml 音声エンジン（whisper.cpp / NeMo-Speech.cpp）のビルドとモデル取得（固定 commit・SHA-256 検証）
+powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
+
+rem 2. LGPL ffmpeg の取得（音声デコード用）
+python scripts\setup_ffmpeg_lgpl.py
+
+rem 3. 開発起動
+scripts\run-dev.bat          rem Full 版
+scripts\run-dev-editor.bat   rem Editor 版
 ```
 
 前提環境:
 
 - Node.js (LTS)
-- Python for Windows
 - Rustup / Cargo
-- Microsoft C++ Build Tools
-- NVIDIA Driver, CUDA 12.x, cuDNN 9.x（GPU利用時）
+- Microsoft C++ Build Tools（Visual Studio 2022 Build Tools。エンジンのビルドに同梱の CMake / Ninja を使う）
+- Git、LunarG Vulkan SDK（エンジンのビルド時のみ）
+- GPU 利用時は GPU メーカーの最新ドライバー（Vulkan 対応）。CUDA Toolkit・cuDNN・Python は不要
 
-話者分離モデルは UI セットアップタブから配置する。
+補足:
 
-ggml 音声エンジン（whisper.cpp / Nemotron-3-Diarization）の開発用ビルドとモデル取得（固定 commit・SHA-256 検証。詳細は `docs/ggml-speech-engine-design.md`）:
-
-```bat
-powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
-```
-
-Vulkan 版（NVIDIA / AMD / Intel 共通。Rust の feature `vulkan`）の開発起動とインストーラー作成:
-
-```bat
-powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 -SkipEngines
-scripts\run-dev-vulkan.bat
-scripts\setup-build-tools.bat --vulkan
-```
-
-- Vulkan 版は identifier `net.gakkousya.lott` を CUDA 版から引き継ぐ。機能差は Rust の feature `vulkan` で見分ける（`is_vulkan_build` / フロントは `buildVariant === 'vulkan'`）。この版に LLM はなく、句読点付与は Rust のローカルルール、全体校正は非搭載
-- 同梱物: `resources/speech-engines`（ggml 音声エンジン）。必要な VC++ ランタイムは同梱する。**Python と llama-server は同梱しない**。暗号化保存・ルールベース校正・モデル取得は Rust。ビルド時の ffmpeg 取得・ライセンス収集には `%LOCALAPPDATA%\lott-ggml-speech-build` のビルド用 Python を使う
-- Vulkan 版の初回セットアップは whisper.cpp モデル・VAD・Nemotron のみ（Rust で固定 revision・SHA-256 検証・中断再開。トークン不要）。Gemma / LLM のダウンロードや Python の pip セットアップは無い
-- リリース版の Vulkan 設定タブにある旧データ削除リストでは、Gemma 4 12B の `gemma-4-12b-it` ディレクトリ全体（本体 GGUF・MTP ドラフト・内部 `.cache` を含む）、旧 E4B 本体 GGUF・MTP ドラフト・`mmproj-BF16.gguf`、`proofread-model-tier.txt`、旧同梱 `resources/llama-server-vulkan` を削除対象にできる。NSIS のバックグラウンド更新（`/UPDATE`）は旧版アンインストールを省略するため、削除済み資源が残る場合がある。開発ビルドはモデルを削除対象にしない。whisper.cpp / Nemotron のモデルは削除対象にしない
+- エンジンの配置先（dev）は `python_sidecar/speech-engines/{whisper,nemo}/`、モデルは `python_sidecar/models/`。詳細は `docs/ggml-speech-engine-design.md`
+- 開発用 Angular dev server は `127.0.0.1` にだけ bind する
+- Full 版（identifier `net.gakkousya.lott`）と Editor 版（`net.gakkousya.lott-editor`）はフロントの `buildVariant`（`'vulkan'` = Full、`'editor'`）と Rust の `is_vulkan_build` / `is_editor_build`（identifier に `editor` を含むか）で見分ける。Cargo feature による切り替えは無い
+- 同梱物（Full）: `resources/speech-engines`（whisper.cpp / NeMo-Speech.cpp / Vulkan ローダー）、`resources/ffmpeg`、必要な VC++ ランタイム。**Python と llama-server は同梱しない**。暗号化保存・ルールベース校正・モデル取得は Rust
+- 初回セットアップは whisper.cpp モデル・VAD・Nemotron のみ（Rust で固定 revision・SHA-256 検証・中断再開。トークン不要）
+- 開発用の環境変数（デバッグビルドのみ有効）: `LOTT_DEV_CPU_STARTUP_SCENARIO`（`memory|avx2|threads|all|notice`。CPU 実行時の起動ダイアログの再現）、`LOTT_DEV_GPU_DRIVER_SCENARIO`（`missing|old`。GPU ドライバー案内の再現）
 
 ## Setup and Run (Ubuntu / Linux)
+
+Linux は Full 版・Editor 版とも deb + AppImage で配布する。**Linux 実機でのビルド・起動は未検証**（Linux 環境が無いため。検証できた項目から本書を更新する）。Python・LLM は使わない。
 
 推奨フロー:
 
 ```sh
-bash scripts/setup-dev-nvidia.sh  # または setup-dev-amd.sh / setup-dev-cpu.sh
-bash scripts/run-dev-nvidia.sh    # または run-dev-amd.sh / run-dev-cpu.sh
+bash scripts/setup-dev.sh              # Editor 版だけなら --editor
+bash scripts/run-dev.sh                # Full 版（Angular 127.0.0.1:4200 + tauri.dev.linux.override.json）
+bash scripts/run-dev-editor.sh         # Editor 版（127.0.0.1:4203）
 ```
 
-補足:
+- `setup-dev.sh` のオプション: `-y --skip-apt --skip-rust --only-rust --skip-engines --skip-models --editor`。システムパッケージ（Tauri / WebKitGTK / GStreamer / Vulkan ヘッダー・`glslc` / ビルドツール）、npm、Rustup、ggml 音声エンジンとモデル、LGPL ffmpeg（Full のみ）を用意する。`python3` は ffmpeg 取得スクリプトを動かすためだけに使い、venv / pip は使わない
+- 音声エンジンは `scripts/setup-ggml-speech-linux.sh`（`--backend vulkan|cpu`、`--engines-dir`、`--skip-nemo`、`--skip-models`）が固定 commit から Vulkan でビルドし、dev は `python_sidecar/speech-engines/{whisper,nemo}/`、モデルは `python_sidecar/models/` に置く。詳細は `docs/ggml-speech-engine-design.md`
+- 配布ビルド: `bash scripts/build-appimage-docker.sh`（引数なし = Full、`--editor` = Editor、`--vulkan` は Full の旧称）。Ubuntu 24.04 の Docker イメージ（`scripts/Dockerfile.appimage-ubuntu24`）内で `scripts/setup-build-tools-linux.sh` を実行し、規約名の成果物 `LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.{AppImage,deb}` を `dist/v{version}/` へ集約する。詳細は `docs/release-build-linux.md`
+- Linux の環境ファイル・venv は無い。バックエンド別の `setup-dev-*.sh` / `run-dev-*.sh` 入口も存在しない（旧 CUDA / AMD / CPU 版とともに廃止）
 
-- 共通の `setup-dev.sh` / `run-dev.sh` は内部実装であり、直接実行時はバックエンドを暗黙選択しない。OSに対応する `*-nvidia` / `*-amd` / `*-cpu` 専用入口を使う
-- Linux の Python venv と環境ファイルはバックエンド別（`.venv312-nvidia` / `.venv312-amd` / `.venv312-cpu`、`.dev-linux-cuda.env` / `.dev-linux-rocm.env` / `.dev-linux-cpu.env`）に分離する
+### Linux Vulkan の方針
+
+- **GPU ドライバー（ICD）は AppImage / deb に同梱しない**。ホストのものを使う。Vulkan ローダー（`libvulkan.so.1`）もホストのものを優先し、無い PC 向けのフォールバックとして Ubuntu 24.04 の `libvulkan1` の実体を `resources/speech-engines/vulkan-loader/libvulkan.so.1`（+ `LICENSE-Vulkan-Loader.txt` / `BUILD_INFO.txt`）へ同梱する（`setup-build-tools-linux.sh`。Full / Editor 共通）。**エンジンの隣や `usr/lib` には置かない**（`RUNPATH=$ORIGIN` でホストの新しいローダーを隠すため）。アプリは起動時（`ensure_bundled_vulkan_loader_on_path`）に `dlopen("libvulkan.so.1")` でホストのローダーを確認し、無い場合だけこのディレクトリを `LD_LIBRARY_PATH` の先頭へ足す。AppImage では `apply_host_command_env` が AppDir 配下を落とすため、このディレクトリだけ `BUNDLED_VULKAN_LOADER_DIR` に登録して除外する。`setup-build-tools-linux.sh` は AppDir に `libvulkan*` / `vulkan/icd.d/*` が上記の1ファイル以外に無いこと（ICD は0件）を検査し、違反や欠落があればビルドを落とす
+- deb は `libvulkan1` に依存する（`tauri.linux.override.json`）。AppImage はホストにローダーが無くても同梱フォールバックで CPU 実行できる。GPU を使うにはホストの ICD（Mesa / NVIDIA ドライバー）が必要で、ICD が無い、または GPU が見えない場合は CPU で処理する。それでもエンジンが起動に失敗した場合のエラー文言は、原因と次の行動（`libvulkan1` などの導入）を示す
+- エンジンの実行ファイルは `RUNPATH=$ORIGIN`（patchelf）で隣の ggml ライブラリを読む。OpenMP ランタイム `libgomp` は実行ファイルの隣へ同梱する（Windows の VC++ ランタイムと同じ考え方。libgomp が無い最小構成のホスト対策。GPL-3.0-or-later WITH GCC-exception-3.1 のため `NOTICE` / `THIRD_PARTY_LICENSES.md` に記載）。`whisper-cli` / `nemo-speech` の存在と、Editor に `nemo` が無いことはビルド時に検査する
+- エンジンは `run_ggml_engine_process` から `apply_host_command_env` を通して起動し、AppImage の `LD_LIBRARY_PATH` などを持ち込まない
+- Linux でも CPU 起動確認（RAM は `/proc/meminfo`、AVX2、論理スレッド数）は動く。GPU ドライバー案内（`gpu_driver.rs`）は Windows のみで、Linux では表示しない
+
 - Ubuntu / Linux では Chrome / Chromium の Snap 版が WebKit / glibc と衝突することがあるため、deb 版ブラウザまたは通常のシステムライブラリ経路を優先する
-- Linux NVIDIA版の実行時はCUDA Toolkitではなく、ホストNVIDIAドライバーと`nvidia-utils`を使う。Linux CUDA llama-serverは配布ビルド時に専用CUDA develコンテナで生成する
-- ROCm / AMD 検証は experimental。gfx1150（Radeon 890M）では文字起こし・話者分離ともに GPU 動作確認済み（50 分音声も完走）
+- 以下の「Audio Decode」の Linux 節と「Linux AppImage」節は、Linux 版（deb + AppImage）の方針である
 
 ## Diarization Model Policy
 
-- `pyannote-speaker-diarization-community-1` をローカル配置した場合に有効化
-- モデル配置先（dev）: `python_sidecar/models/pyannote-speaker-diarization-community-1/`
-- モデル配置先（リリース）: `%LOCALAPPDATA%\{identifier}\models\pyannote-speaker-diarization-community-1\`（`app_local_data_dir()/models/`）。NSIS アンインストーラーの `%LOCALAPPDATA%\{identifier}` 一括削除対象
-- 必要に応じて `DIARIZATION_MODEL_PATH` で上書き可能
-- モデル取得は UI セットアップタブで対応
-- インストール完了判定は `config.yaml` の有無だけでなく、それが参照する実体ファイル（`segmentation/` `embedding/` `plda/`）の存在・非空サイズと、DL 中断マーカー（`.cache/.../*.incomplete`）の不在まで確認する（`diarization_model_is_complete`）。途中で切れて一部だけ揃った状態は「未完了」と判定し、セットアップで補完ダウンロードを促す。この判定は**設定タブのステータス確認専用**で、アプリ起動初期化からは呼ばない（起動を巻き込まないため）／IO エラーで panic しない（未完了側へ倒す）
+- 話者分離は Nemotron-3-Diarization（`Nemotron-3-Diarization.q8_0.gguf`、OpenMDW-1.1）を NeMo-Speech.cpp（`nemo-speech diarize`）で動かす。モデルは初回セットアップで取得する
+- モデル配置先（dev）: `python_sidecar/models/nemotron-3-diarization/`
+- モデル配置先（リリース）: `%LOCALAPPDATA%\{identifier}\models\nemotron-3-diarization\`（`app_local_data_dir()/models/`）。NSIS アンインストーラーの `%LOCALAPPDATA%\{identifier}` 一括削除対象
+- 取得は固定 revision・SHA-256 検証・`.part` からの再開（`ggml_speech::GGML_MODEL_FILES`）。トークンは不要
+- ライセンス本文（`licenses/manual/Nemotron-3-Diarization-OpenMDW-1.1.txt`）はセットアップ画面から表示できる（`read_bundled_license`）
+- Nemotron には話者数の指定が無い。UI の話者数の扱いと重なり発話の扱いは `docs/ggml-speech-engine-design.md` の 6 章を参照
 
 ## Audio Decode / FFmpeg License Policy
 
-- Apache-2.0 配布方針のため、配布用 Python 環境に `av`（PyAV）と `imageio-ffmpeg` を入れない
-- `faster-whisper` は `--no-deps` で先に導入し、PyAV を依存解決で入れない
-- `faster-whisper` のトップレベル `import av` は `python_sidecar/transcribe_cli.py` の最小 import stub で通す
-- 実際の音声デコードは同梱または PATH 上の **LGPL 構成 ffmpeg CLI** で行い、16kHz mono float32 numpy 配列として `WhisperModel.transcribe()` に渡す
-- 話者分離前の WAV 変換も同じ `FFMPEG_BIN` を使う
-- `imageio-ffmpeg` fallback は `ALLOW_GPL_FFMPEG=1` のときだけ開発用に許可する。Tauri 通常起動では `ALLOW_GPL_FFMPEG=0`
+- Apache-2.0 配布方針のため、GPL 構成の ffmpeg・PyAV・`imageio-ffmpeg` を配布物に含めない
+- 音声デコードは同梱または PATH 上の **LGPL 構成 ffmpeg CLI** で行い、16kHz mono WAV を一時ディレクトリへ作って whisper.cpp / NeMo-Speech.cpp へ渡す（`decode_audio_to_private_wav`）。`FFMPEG_BIN` 環境変数で上書きできる
+- 文字起こしタブの「音声調整」は、文字起こし（whisper.cpp）用の WAV を作るときだけ ffmpeg の `-af` を付ける（`audio_preprocess_filter`。low_noise=`highpass=f=80`、strong_noise=＋`afftdn=nr=12:nf=-40`、volume_boost=＋`dynaudnorm=f=250:g=15`、general_improvement=全部）。話者分離には元の音声を渡す。既定 none では従来と同一のコマンド。結果 JSON の settings に `audioPreprocess` を記録する
 - 同梱 ffmpeg は `--enable-gpl`、`--enable-nonfree`、`--enable-libx264`、`--enable-libx265`、`--enable-libxvid`、`--enable-libfdk-aac` を含まないこと
 - BtbN `lgpl` build は `--enable-version3` を含むため LGPLv3 として扱い、`LICENSE.txt` / `FFMPEG_BUILD_INFO.txt` / ソース入手手段を配布物に含める
-- 配布 override の Tauri resources には `../LICENSE` / `../NOTICE` / `../THIRD_PARTY_LICENSES.md` / `../licenses` も含める。override を変更する場合はこれらを落とさない
-- 検証用スクリプト: `scripts/verify_lgpl_ffmpeg_no_pyav.py`
-- 詳細記録: `docs/lgpl-pyav-build.md`
+- 配布用 Tauri resources には `../LICENSE` / `../NOTICE` / `../THIRD_PARTY_LICENSES.md` / `../licenses` も含める。設定を変更する場合はこれらを落とさない
+- ffmpeg の取得・検査: `scripts/setup_ffmpeg_lgpl.py`
 
 ### Linux 再生バックエンド（GStreamer）と AAC 変換
 
 Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStreamer** に委譲する。AppImage は自己完結が前提のため、プラグインを同梱しないとホスト側（Ubuntu 以外、例 CachyOS）でデコーダがゼロになり、音声ファイルを開いた時点で固まる。
 
-- AppImage には GStreamer プラグインを同梱する。`tauri.*.linux.override.json` の `bundle.linux.appimage.bundleMediaFramework: true` で `linuxdeploy-plugin-gstreamer` が動く。この設定を外さない
+- AppImage には GStreamer プラグインを同梱する。Linux の override の `bundle.linux.appimage.bundleMediaFramework: true` で `linuxdeploy-plugin-gstreamer` が動く。この設定を外さない
 - 同梱するのは **LGPL のみ**（`gstreamer1.0-plugins-base` / `-good` / `-alsa` / `-pulseaudio`）。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` / `faad` は入れない。`GSTREAMER_INCLUDE_BAD_PLUGINS=0` を維持する
 - 検証は二重にかける。`scripts/Dockerfile.appimage-ubuntu24` がビルドホストのプラグイン構成を、`scripts/setup-build-tools-linux.sh` が再パッケージ前に AppDir を検査し、GPL プラグイン混入・プラグイン欠落があればビルドを落とす
 - LGPL だけで再生できる形式: wav / mp3 / flac / ogg(vorbis, opus) / webm。いずれも seek 可能なことを確認済み
@@ -176,7 +181,7 @@ linuxdeploy が生成する `apprun-hooks/linuxdeploy-plugin-gtk.sh` は、ビ�
 - Wayland では `GTK_IM_MODULE` が未設定、または AppDir cache に存在しない場合に、cache にある `im-wayland` へ救済する。cache に存在する指定は尊重する。X11 の未設定・不明な指定は `XMODIFIERS` がある場合だけ `im-xim` へ救済する。`GTK_IM_MODULE_FILE` は AppDir 同梱 GTK 用 cache を使い、ホスト GTK module との ABI 混在を避ける
 - 従来の X11 経路を試す場合は `LOTT_GDK_BACKEND=x11 /path/to/Local\ Transcription\ for\ Therapy.AppImage` とする。ユーザーが明示した `GDK_BACKEND` / `GTK_IM_MODULE` / `XMODIFIERS` は通常の起動では上書きしない
 - テキスト欄クリックで固まる場合は、まず `pgrep -af lott` で PID を確認し、`tr '\0' '\n' < /proc/<pid>/environ | rg 'GDK_BACKEND|GTK_IM_MODULE|GTK_IM_MODULE_FILE|XMODIFIERS'` で実効値を記録する。Wayland と X11 の両方を `LOTT_GDK_BACKEND` で比較し、`journalctl --user` の `webkit` / `gtk` / `ime` / `wayland` 関連ログを採取する。合成クリック・キー注入を検証手順に使わず、物理操作で再現した場合だけ必要に応じてメインプロセスと WebKit 子プロセスを gdb attach する
-- AppImageとは異なり、CachyOS / ArchのホストGTK/WebKitGTKパッケージは `GDK_BACKEND` / `GTK_IM_MODULE` をランチャーから既定設定せずOSの表示バックエンドを使う。ただしCachyOS / NVIDIA実機ではDMA-BUF renderer有効時に起動できないため、`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` だけは通常起動で設定する。X11は強制しない。DMA-BUFのハードウェア経路を再検証するときだけ `LOTT_ENABLE_DMABUF_RENDERER=1 lott` を使う
+- CachyOS / Arch 向けのホスト側パッケージ（`packaging/arch`）は削除した。CachyOS / NVIDIA 実機（RTX 2070 SUPER）ではDMA-BUF renderer有効時に起動できなかった記録があるため、**アプリ自身が `run()` の冒頭（GTK / WebKit 初期化前。`configure_webkit_dmabuf_workaround`）で、NVIDIA プロプライエタリカーネルドライバー（`/proc/driver/nvidia/version` が存在）を検出した場合に `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定する**（AppImage / deb 共通）。ユーザーが `WEBKIT_DMABUF_RENDERER_FORCE_SHM` / `WEBKIT_DISABLE_DMABUF_RENDERER` を設定済みなら尊重し、`LOTT_ENABLE_DMABUF_RENDERER=1` ならなにもしない（DMA-BUFのハードウェア経路の再検証用）。X11は強制しない。判定は純粋関数 `should_force_webkit_shm`。同梱 WebKitGTK（Ubuntu 24.04 の `libwebkit2gtk-4.1`）が FORCE_SHM に対応するかは未確認で、版はビルドログ（Dockerfile が `dpkg-query` で出力）で確認する
 - **`WEBKIT_DISABLE_DMABUF_RENDERER=1` を既定に戻さないこと。** この変数はtransport modeを空にするため、DMA-BUFだけでなく `AcceleratedBackingStore`（合成器）ごと無効化し、非アクセラレーション経路へ落ちてスクロールが目に見えてカクつく。`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` はDMA-BUFだけを避けて合成器を維持するため、起動不能なGBM経路を通らずに描画性能を保てる（2026-08-28にRTX 2070 SUPER実機で確認）。非アクセラレーション経路では `WEBKIT_SKIA_CPU_PAINTING_THREADS` / `WEBKIT_FORCE_VBLANK_TIMER` / `WEBKIT_SHOW_DAMAGE` が軒並み無効になるため、これらが無反応でも仮説の否定と読まないこと。`WEBKIT_SHOW_DAMAGE=1` で赤い矩形が出るかどうかが合成器の生存確認になる
 
 ### AppImage とホストコマンドの分離（LD_LIBRARY_PATH 漏れ）
@@ -189,112 +194,17 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 で即死する。`/usr/bin/xdg-open` は `#!/bin/sh` スクリプトなので、外部リンク・フォルダを開く操作が丸ごと失敗する（0.9.8 の AppImage で確認）。
 
-- **ホスト側コマンド（`xdg-open` / `nvidia-smi` / `rocm-smi` / `rocminfo` / `kill` / `curl` / `wget` / `tar` / PATH 上の ffmpeg）を起動するときは `apply_host_command_env` を必ず呼ぶ**。`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` / `G*_MODULE*` / `PYTHONHOME` 等を子プロセス環境から取り除く（AppImage 以外では no-op）。ライブラリ単位のもぐら叩きにせず、この境界で塞ぐ
-- **同梱バイナリ（同梱 Python・同梱 llama-server・同梱 ffmpeg）には適用しない**。AppDir 内のライブラリ（`libssl` / `libffi` など）が必要で、剥がすと動かなくなる
-- 同梱 Python の `readline` 拡張モジュールはビルド時に除外する（`setup-build-tools-linux.sh`）。これが linuxdeploy に `libreadline.so.8` を AppDir へ引き込む唯一の経路で、pip もサイドカーも readline を使わない。再パッケージ前に AppDir へ残っていればビルドを落とす
+- **ホスト側コマンド（`xdg-open` / `curl` / `tar` / `kill` / PATH 上の ffmpeg など）を起動するときは `apply_host_command_env` を必ず呼ぶ**。`$APPDIR` 配下を指す `LD_LIBRARY_PATH` / `PATH` / `GST_*` / `G*_MODULE*` / `PYTHONHOME` 等を子プロセス環境から取り除く（AppImage 以外では no-op）。ライブラリ単位のもぐら叩きにせず、この境界で塞ぐ
+- **同梱バイナリ（同梱 ffmpeg・ggml 音声エンジン）には適用しない**。AppDir 内のライブラリが必要で、剥がすと動かなくなる
+- 過去の 0.9.8 では同梱 Python の `readline` 拡張モジュールが `libreadline.so.8` を AppDir へ引き込んでいた。Python を同梱しなくなったため通常は混入しない。`setup-build-tools-linux.sh` の `libreadline.so.8` チェックは、もう除外処理ではなく**検出のための検査**（残っていればビルドを落とす）
 - `spawn()` して待たない子プロセス（`xdg-open`）は `reap_detached_child` で回収する。放置するとゾンビが積もり、別の不具合の切り分けを濁す
 
 ## Proofreading Policy
 
-- ルールベース校正は Tauri/Rust 側で完結する
-- **whisper.cpp（ggml）で文字起こしした場合、句読点付与は LLM を使わずルールだけで行う**（文字起こし直後・話者分離のやり直し後とも `runProofread(..., 'punct')`）。カウンセリング会話のフィラー・相づちは常に保持する。whisper.cpp には句読点入りの例文（`ggml_speech::FILLER_PROMPT`）を毎回渡しており、Whisper がその書き方をまねて句読点を付けるため（実測で99%以上の行が句読点で終わる。faster-whisper はほぼ付けない）。ルールがするのは、日本語の直後の半角「?」「!」の全角化（`normalize_ja_symbol_width`。文字起こし結果と LLM の校正結果の両方にかける）と、句読点で終わらない行の末尾の補完だけ。「まあ」「ので」などの後に読点を足す規則（`force_comma_after`）は、句読点を含む行には適用しない
-- LLM による句読点付与（E4B）は faster-whisper を使う CUDA 版・AMD 版の経路だけに残る
+- 校正はルールベースで、Tauri/Rust 側で完結する。LLM による校正・全体校正は無い
+- 句読点付与は LLM を使わずルールだけで行う（文字起こし直後・話者分離のやり直し後とも `runProofread(..., 'punct')`）。カウンセリング会話のフィラー・相づちは常に保持する。whisper.cpp には句読点入りの例文（`ggml_speech::FILLER_PROMPT`）を毎回渡しており、Whisper がその書き方をまねて句読点を付けるため（実測で99%以上の行が句読点で終わる）。ルールがするのは、日本語の直後の半角「?」「!」の全角化（`normalize_ja_symbol_width`）と、句読点で終わらない行の末尾の補完だけ。「まあ」「ので」などの後に読点を足す規則（`force_comma_after`）は、句読点を含む行には適用しない
 - ルールベース校正定義: `src-tauri/resources/proofread/punctuation_rules/`
-- LLM を搭載する版の校正は Rust（`llm_proofread.rs` / `llm_overall_proofread.rs`。直接 Python backend の `llama_cpp` 全体校正だけは Python sidecar）からローカルバックエンド（同梱/DL の llama.cpp llama-server / local OpenAI-compatible API）を利用し、PC外の推論APIは利用しない。Vulkan 版には LLM 校正機能を搭載しない
-- `OpenAI-compatible API` という名称はプロトコル互換を意味するだけで、接続先は `http://localhost:*` / `http://127.*:*` / `http://[::1]:*` のような loopback に限定する
-- クラウド OpenAI API、loopback以外のホスト、インターネット上のHTTPS推論エンドポイントへ会話データを送信する設計は採用しない
-- CUDA / AMD 版の既定である Gemma 4 E4B（同梱/DL llama.cpp llama-server 直起動）経路は、互換APIプロファイルの追加後も従来どおりに扱う。Vulkan 版に Gemma / llama-server / 全体校正はない
-- 校正システムプロンプトは設定単位で保存する。既定 Gemma 4 向けのプロンプトに、ローカル互換API用の変更を波及させない
-
-### 校正エンジンのライフサイクル（VRAM解放）
-
-LoTT Vulkan 版には LLM 校正・全体校正がなく、whisper.cpp の文字起こしに対する句読点付与は Rust のルールだけで行う。マイク音声入力も Gemma / llama-server を使わず、セットアップ済み whisper.cpp を使う。以下の llama-server の NVIDIA=CUDA / AMD=ROCm・Vulkan の記述は、Vulkan 版ではなく CUDA 版・AMD 版の現行実装の説明。
-
-基本方針: **校正用に起動した llama-server はジョブ完了時に解放し、CUDA / AMD / CPU / Editor 版の Gemma 音声入力用サーバーは次のマイク音声入力に備えて保持する**。保持中の音声入力用サーバーは、校正・文字起こし・話者分離の開始時とアプリ終了時（強制終了含む）に解放する。実装は **Rust 側に集約**しており、フロントから二重に停止しない。Gemma を使う Full 版音声入力は NVIDIA=CUDA / AMD=ROCm 優先・Vulkan フォールバックで「llama-server 直起動」、CPU / Editor 版は CPU llama-server 直起動とする。これは LoTT Vulkan 版に LLM を搭載することを意味しない。現行の校正経路に外部のランタイム管理デーモンやCLIはなく、状態管理構造体は `LlmServer` とする。キャッシュの正式名称は `llm-engine` とし、既存ユーザーのために旧 `lemonade` キャッシュを移行期間中だけフォールバックとして読み取る。
-
-- **per-job 解放（Rust）**: `proofread_transcription_llm` / `run_overall_proofread` はサイドカー終了後（成功・中止・失敗すべて）に、内蔵 llama-server 経路なら次を行う。
-  - 同梱/DL llama-server（`LlmServer.mode == 1`）: `try_stop_cuda_llama_server` が自前起動した llama-server（NVIDIA=CUDA / AMD=ROCm・Vulkan のいずれも）を kill して VRAM を解放。次回校正で `start_llm_server` が再起動・再ロードする。
-  - ローカルAIアプリ（LM Studio / Ollama）は `try_unload_openai_model` でアンロード。
-- **アプリ終了時解放**:
-  - グレースフル終了: ウィンドウ `CloseRequested` / `Destroyed` ハンドラ（`lib.rs` setup 内）が `state.child` を `kill_process_tree_by_pid` + `child.kill` し、`try_unload_openai_model` も呼ぶ。CUDA / ROCm / Vulkan いずれの llama-server child も kill 対象。
-  - 強制終了・クラッシュ（ハンドラが走らない）: 自前起動した llama-server（CUDA / ROCm / Vulkan）に `assign_to_kill_on_close_job`（Windows Job Object `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）を spawn 時に付与済み（`try_start_llama_server_cuda` / `try_start_llama_server_rocm` / `try_start_llama_server_vulkan`）。アプリプロセスが死ねば OS が job を閉じ、エンジンを確実に終了させる。
-- **遅延起動（pre-warm 廃止）**: フロントはアプリ起動時・バックエンド/GPUモード変更時に校正エンジンを**起動しない**（`refreshLlmUiState` は状態確認のみ）。校正用エンジンが起動するのは**実際に校正を実行したとき**（`runLlmProofread` / `runOverallProofread` 内の `startLlm`）だけ。校正後は per-job 解放する。音声入力用エンジンは最初の音声処理時に遅延起動し、その後は別のGPU処理またはアプリ終了まで保持する。
-
-### 内蔵校正AIモデルの階層選択（標準 / 高精度）
-
-LLM 校正を搭載する版では、設定タブ「校正用AIモデル」の「AI校正バックエンド」セレクタから内蔵モデルを選ぶ。CUDA / AMD 版では E4B（標準）と 12B（高精度）が同じ内蔵モデル経路（`backendMode = local_gguf`）の別項目として並ぶ。Vulkan 版にはこの設定項目も LLM 校正もない。`local-llm-apps` feature が有効なビルドでは LM Studio / Ollama も同じセレクタに並ぶ。専用の「校正AIモデル」セレクタは廃止し、バックエンド選択へ統合した。
-
-| 階層 | モデル | 既定 | 対象 | 取得方法 |
-| --- | --- | --- | --- | --- |
-| 標準 | Gemma 4 E4B QAT（+MTP） | ✅（従来どおり） | CUDA / AMD | Rust で固定 revision から取得（AMD は MTP を取得しない） |
-| 高精度 | Gemma 4 12B QAT + MTP | —（LoTT Vulkan 対象外） | CUDA / AMD | Rust で固定 revision から後からダウンロード（約7GB） |
-
-- Vulkan 版は LLM / Gemma / llama-server を含まず、全体校正を提供しない。`get_proofread_model_tier` / `set_proofread_model_tier` / `download_gemma_12b` などのLLMコマンドは Vulkan 版では拒否し、旧データ削除対象にする。
-- **全体校正は、校正の前に会話のテーマを要約して添える**（LLM 全体校正を搭載する版の Rust `llm_overall_proofread.rs`、`Options.theme_summary`。Python の `llama_cpp` 経路は従来どおり）。全文を約4000字ずつ要約し、複数ならまとめ直して、システムプロンプトの末尾に「会話のテーマ（参考…）」として付ける。要約に失敗しても校正は続ける。要約には人名・呼び名・地名を書かせない（書かせると、校正で名前を要約中の表記へ書き換えた。10分の音声で確認）。10分の音声で約17秒延びる。LoTT Vulkan 版には全体校正がないため適用されない。
-- **CUDA / AMD 版の既定は E4B（標準）**。12B は「上位モデル」としてのオプトインで、選択しなければ従来どおり E4B 経路（デフォルトプロンプト・実行条件とも不変）。
-- 12B は `unsloth/gemma-4-12B-it-qat-GGUF`（本体 `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` + ドラフト `mtp-gemma-4-12B-it.gguf`）を Tauri command `download_gemma_12b` から Rust で取得する。ファイルの URL は commit 固定、`.part` から再開し、配置直前にサイズと SHA-256 を検証する。配置先は E4B と並ぶ `python_sidecar/models/llm/gemma-4-12b-it/`（リリースは `app_local_data_dir()/models/llm/gemma-4-12b-it/`）。この経路は CUDA / AMD 版で使い、LoTT Vulkan 版では取得しない。
-- **12B は CUDA / AMD 版で「llama-server 直起動」で動かす**。LoTT Vulkan 版には llama-server / 12B / 全体校正はない。
-  - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda`、`-ngl 99` + MTP）。WindowsとLinuxで同じCUDA直起動経路を使う（Linux版はb10075ソースから配布ビルド時に生成）。
-  - **AMD**: **ROCm 優先 → 失敗時 Vulkan フォールバック**（`amd_12b_launch_plan` → `start_amd_12b_blocking`）。どちらも `-ngl` 無し `--fit on`/auto-fit + MTP、ctx は `AMD_12B_CTX_SIZE`(=8192)。
-    - **ROCm（高速・優先）**: Rust 側の `install_llm_backend` で取得した ROCm ビルド llama-server（`bin/llamacpp/rocm-stable/`、`find_llm_rocm_llama_server` / `try_start_llama_server_rocm`）。`gemma4-assistant`（MTPドラフト arch）対応の **b9585+** が条件で旧 b9247 は弾く。**rocBLAS は LD_LIBRARY_PATH に同梱 therock を載せず、システム ROCm（/opt/rocm。対象 GPU arch の Tensile を含む）から解決**する（DL ビルドに同梱されることのある therock は iGPU 専用 arch のことがあり dGPU で推論時に落ちるため）。warmup は無効化せず起動時 forward で arch 不整合を表面化させ Vulkan へ退避する。実測 RX 7600M XT(gfx1102,8GB)・ctx 8192・**約35〜37 tok/s**（Vulkan比 約25%高速、draft採択 0.7前後）。
-    - **Vulkan（フォールバック）**: Rust 側の `install_llm_backend` で取得した Vulkan ビルド（`bin/llamacpp/vulkan/`、`find_llm_vulkan_llama_server` / `try_start_llama_server_vulkan`、b9585+）。ROCm 不可（旧ビルド / 対象 arch の system rocBLAS 無し / 起動失敗）のとき使う。約28〜29 tok/s。
-  - どちらも `mode=1`（per-job 停止・kill-on-close の対象）。E4B も AMD では ROCm 直起動（`amd_e4b_rocm_launch` → 失敗時 `amd_e4b_vulkan_launch`）、NVIDIA では同梱 CUDA llama-server。
-- 選択の単一の真実は CUDA / AMD 版の `app_local_data_dir()/proofread-model-tier.txt`（内容 `e4b` / `12b`、既定 `e4b`）。LoTT Vulkan 版はこの値を使わず、旧マーカーを削除対象にする。CUDA / AMD では実際に 12B を使えるか `resolve_effective_proofread_tier`（本体 GGUF の有無）と `amd_12b_launch_plan`（ROCm/Vulkan バイナリ・arch の有無）で判定する。NSIS の `%LOCALAPPDATA%\{id}` 一括削除対象。
-- **フェイルセーフ**: CUDA / AMD では12B選択でも本体GGUF未取得なら `resolve_effective_proofread_tier` がE4Bへフォールバックする。AMD は `amd_12b_launch_plan` が **ROCm（`amd_rocm_12b_launch`）→ Vulkan（`amd_vulkan_12b_launch`）** の順に試し、どちらも不可なら E4B 経路（AMD は ROCm→Vulkan 直起動）へフォールバックする。ROCm は build≥9585 ∧ system ROCm に対象 GPU arch の rocBLAS Tensile がある場合のみ採用（`system_rocm_tensile_has_arch`）。起動後も warmup/即死/rocBLAS エラーを検出したら `start_amd_12b_blocking` が Vulkan へ退避する。これらは AMD 版のバックエンドであり LoTT Vulkan 版の LLM 機能ではない。
-- **既知の制約 / フォローアップ**: v1 の ROCm 高速経路は「system ROCm（対象 GPU arch の rocBLAS Tensile を含む）」が前提（DL ビルド同梱の therock は iGPU arch のことがあり dGPU で使えない）。system ROCm が無い AMD 機は Vulkan に安全フォールバック。therock ベースの自己完結 ROCm 化（system ROCm 不要）は別タスク。
-- 関連: `get_default_llm_model_path` / `resolve_gemma_mtp_path_for_tier`（実効階層を解決）、`check_gemma_12b_installed`、`download_gemma_12b`。AMD 直起動: `amd_12b_launch_plan` / `start_amd_12b_blocking`（ROCm優先・Vulkanフォールバック制御）、`amd_rocm_12b_launch` / `find_llm_rocm_llama_server` / `rocm_build_supports_gemma4_assistant` / `amd_gpu_priority_list` / `system_rocm_tensile_has_arch` / `try_start_llama_server_rocm`（ROCm）、`amd_vulkan_12b_launch` / `find_llm_vulkan_llama_server` / `try_start_llama_server_vulkan`（Vulkan）。AMD E4B 直起動: `amd_e4b_rocm_launch` / `amd_e4b_vulkan_launch`。バックエンドバイナリ取得: Rust 側の `install_llm_backend`（Tauri command）。
-
-### LLM バックエンドバイナリの保存場所
-
-AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の CPU ビルドは、本体アプリとは別に Rust 側の `install_llm_backend` が**上流リリースから直接ダウンロード**する（`ggml-org/llama.cpp` の Releases）。AMD は `LLAMA_CPP_AMD_BUILD = b9631`、CPU は `LLAMA_CPP_CPU_BUILD = b10075`。NVIDIAのCUDA llama-serverはWindowsでは公式CUDA 12.4 **b10075**を同梱し、Linuxでは公式Linux CUDA archiveがないため、`scripts/build-llama-server-cuda-linux.sh`がb10075固定commit（`76f46ad29d61fd8c1401e8221842934bf62a6064`）から`resources/llama-server/cuda/`へ再現ビルドして同梱する。CPU と NVIDIA は b10075、AMD の ROCm / Vulkan は b9631 として更新系統を分離する。すべての配布ラインで、モデル管理デーモンやCLIを介さず llama-server を直接起動する。
-
-| パス | 内容 |
-| --- | --- |
-| `resources/llama-server/cuda/llama-server` | Linux配布用にb10075ソースからビルドしたNVIDIA CUDA版（CUDA再頒布ランタイムを同梱、`libcuda.so.1`はホストドライバー） |
-| `~/.cache/{app-id}/llm-engine/bin/llamacpp/rocm-stable/llama-server` | DL した AMD ROCm ビルド（`--backend rocm` → `llama-{b}-bin-ubuntu-rocm-7.2-x64`） |
-| `~/.cache/{app-id}/llm-engine/bin/llamacpp/vulkan/llama-server` | DL した Vulkan ビルド（`--backend vulkan`） |
-| `~/.cache/{app-id}/llm-engine/bin/llamacpp/cpu/llama-server` | DL した CPU ビルド（`--backend cpu`） |
-| `~/.cache/{app-id}/llm-engine/config.json` | アプリが書く実行時設定（現状 `port` のみ） |
-
-`{app-id}` は Tauri の `identifier`（CUDA 版: `net.gakkousya.lott`、AMD 版: `net.gakkousya.lott-amd`、CPU版: `net.gakkousya.lott-cpu`、Editor版: `net.gakkousya.lott-editor`）。Windows では `%LOCALAPPDATA%\{app-id}\llm-engine\`。旧版からの移行時だけ `%LOCALAPPDATA%\{app-id}\lemonade\` をフォールバックとして確認する。
-
-- **キャッシュ dir 名は `llm-engine` を正式名称とする**。既存の `lemonade` cache は移行完了まで読み取り対象として残し、ダウンロード先や新規作成先には使わない。
-- 取得はAMD/Editor/CPU用だけUIセットアップタブから Rust 側の `install_llm_backend` Tauri command を呼ぶ。`llamacpp:rocm`→`rocm-stable`、`llamacpp:vulkan`→`vulkan`、`llamacpp:cpu`→`cpu` のサブディレクトリへ、一時展開と検証を経て差し替える。Linux NVIDIAのCUDA版はUIダウンロードではなく配布物へ同梱する。進捗は `llm-backend-install-progress` イベントで通知。`find_llm_rocm_llama_server` / `find_llm_vulkan_llama_server` が起動時に解決する。
-- バックエンドバイナリは一度ダウンロードすれば以降はオフラインで動作する。
-- AMD GPU では `rocm` を優先取得する（Vulkan より高速なことが多い）。`gemma4-assistant`（MTPドラフト arch）対応の **b9585+** が必須（旧 b9247 は非対応）。ROCm ビルドは system ROCm（/opt/rocm）の rocBLAS を参照する。
-- `config.json` は `ensure_llm_server_port_config` が `port` のみ書き込む。旧ランタイム用の `ctx_size` / `no_broadcast` / `prefer_system` などは使わない。
-- **プライバシー**: 初回セットアップのモデル・AMD/CPUバックエンド取得元はGitHub Releases、Linux CUDA版の配布ビルドは固定commitの公式ソースと公式NVIDIA CUDA devel imageを使う。LAN ビーコンやクラウド offload の経路は持たず、会話/音声データを PC 外へ送信することは一切ない。
-- NVIDIA同梱b10075とEditor版・CPU版のCPU b10075は、起動時に `--host 127.0.0.1 --cors-origins localhost` を指定する。Rust/Pythonからのloopback API呼び出しは維持しつつ、任意の外部Webページoriginからのアクセスを許可しない。AMDのb9631はこの更新対象外。
-
-### MTP（投機的デコード）の適用範囲
-
-- MTP ドラフト（E4B: `mtp-gemma-4-E4B-it.gguf`、約60MB）は CUDA / AMD 版の setup で Gemma 本体と一緒に**無条件でダウンロード**する。Vulkan 版は E4B を取得しない。高精度階層の 12B ドラフト（`mtp-gemma-4-12B-it.gguf`、約242MB）は 12B とまとめて後からダウンロードする（[内蔵校正AIモデルの階層選択](#内蔵校正aiモデルの階層選択標準--高精度)参照）
-- MTP を使うのは **GPU 直起動経路**。CUDA / AMD 版の E4B と 12B で `--spec-type draft-mtp` / `--spec-draft-model` / `--spec-draft-n-max 3` を渡す。LoTT Vulkan 版に LLM はない。**NVIDIA同梱b10075（Windows公式 / Linux固定commit source build）はMTP併用時もFlashAttentionを`on`**にする。b9571で発生したCUDA FlashAttentionカーネル（`ggml-cuda/fattn.cu:110`）のクラッシュはupstream #25148で修正され、RTX 4060 Laptop 8GBでE4B・12Bとも実機完走を確認済み。AMDのダウンロード型ROCm/Vulkan版はb9631のままなので、従来どおりMTP配線時`off`・MTP非併用時`on`を維持する。
-  - **NVIDIA**: 同梱 CUDA llama-server（`try_start_llama_server_cuda` / 制御は `start_cuda_llama_blocking`）。階層で起動方式を分ける（`autofit` 引数 = `resolve_effective_proofread_tier == B12`）。
-    - **E4B**: `-ngl 99`（本体全 GPU）+ `--spec-draft-ngl 99`（ドラフトも GPU）。ctx/np は `choose_llm_parallelism` の自動値。b10075 + FlashAttention onのRTX 4060 Laptop長文実測では、b9571 + off比で総時間約32%短縮。
-    - **12B**: **auto-fit 起動**（`--fit on`、`-ngl` も `--spec-draft-ngl` も指定しない）。本体・MTP ドラフトの GPU/CPU 配置を llama.cpp の auto-fit に委ね、VRAM に収まる分だけ GPU、残りは CPU へ自動配置する。AMD 経路と同方式。ctx/np は **AMD 12B と同じ単一スロット・`AMD_12B_CTX_SIZE`(=8192)** に固定する。b10075 + FlashAttention onのRTX 4060 Laptop 8GB・4101入力token/64生成token実測は、b9571 + off比で総時間9.57→6.00秒（約37%短縮）、生成36.7→41.2 tok/s、VRAM 6711→6491MiB。実アプリ形式の校正を3回連続実行して同一出力・正常完走も確認済み。
-      - 背景: **`-ngl` 明示（auto-fit 無効）下で 12B の `gemma4-assistant` ドラフトを GPU レイヤーへオフロードすると、Windows CUDA 公式ビルド（b9571 / b9630 / b9754 すべてで確認）が `invalid vector subscript` → `failed to load draft model` でサーバごとクラッシュする**。クラッシュ条件は「auto-fit 無効 + ドラフト GPU」であり、**auto-fit 有効なら同じドラフトを GPU に載せても正常に動く**（`gpu_layers=-1`・draft 採択 ~0.66 実測）。そのため 12B は auto-fit に統一した（旧バージョンの GPU/CPU プローブ＋`cuda-12b-draft-placement.txt` キャッシュは廃止）。VRAM に余裕がある GPU ではドラフトも本体も GPU に載って高速化し、8GB クラスでは auto-fit が本体の一部を CPU へ逃がして収める。
-  - **AMD**: **ROCm 優先（`try_start_llama_server_rocm`）→ 失敗時 Vulkan（`try_start_llama_server_vulkan`）**。どちらも `-ngl` も `--spec-draft-ngl` も指定せず **auto-fit**（8GB クラスで本体+ドラフトを収めるため）。**古いビルド（例 b9247）はドラフト arch `gemma4-assistant` を `unknown model architecture` で拒否する**ため、新ビルド（b9585+、`gemma4-assistant` 対応。10.8.0 の `llamacpp:rocm` は b9630 を配る）を使う。ROCm の rocBLAS は therock 非経由で system ROCm から解決（therock は iGPU arch 専用のことがある）。実測 RX 7600M XT(gfx1102,8GB)・ctx 8192: **ROCm+MTP 約35〜37 tok/s**、Vulkan+MTP 約28〜29 tok/s、VRAM 約8.0/8.5GB。
-### 音声入力（編集画面のマイク入力候補生成）
-
-編集画面の各行の編集欄右側（matSuffix）にあるマイクボタンで最大15秒録音し、編集欄へ挿入する候補を作る。
-
-- **Vulkan 版**: セットアップ済みの文字起こし用 whisper.cpp（`VOICE_INPUT_WHISPER_MODEL = turbo`）で録音を処理する。追加パックは不要で、文字起こしモデルが未準備ならセットアップ完了を案内する。`generate_whisper_voice_input_candidates_blocking` はフィラー例文付きの書き起こしを候補1にする。例文なしの2回目の書き起こしにはルールで句読点を付け、句読点・空白を除いた本文が候補1と異なる場合だけ候補2にする（`ggml_speech::voice_input_candidates`）。前後行などの文脈はプロンプトに渡さない。話していない語が混ざるため。
-- **CUDA / AMD / CPU / Editor 版**: Gemma 4 E4B + 音声 mmproj で最大3件の候補を生成する（2026-07 に Editor 専用から Full 版へ展開）。以下の既存の llama-server / 音声入力パックの説明はこれらのビルドに適用する。
-
-- **Vulkan 以外の方式は保持・再利用**: 最初のリクエストで `--mmproj` 付き llama-server を起動し、OpenAI 互換 `/v1/chat/completions` に `input_audio`（base64 WAV, 16kHz mono）を送る。応答後もサーバーを保持し、次のマイク音声入力で再利用する。校正と同じ `LlmServer` 状態（child/port/mode/parallel/purpose）を共有し、`purpose` で用途を識別、`LLM_PROOFREAD_ACTIVE` で校正と相互排他する。校正・通常の文字起こし・話者分離の開始時とアプリ終了時に解放する。
-- **Vulkan 以外のモデルは常に E4B + mmproj 固定**（校正AIモデル階層で 12B を選択中でも音声入力は E4B。`resolve_effective_proofread_tier` は参照しない）。MTP は使わない。ctx 8192 / np 1。FlashAttention はFull GPU版では `on`、Editor版・CPU版ではCPUバックエンドの `auto` を使う。
-- **起動経路の分岐**（`generate_editor_voice_input_candidates_blocking` が `editor_voice_input_allowed`＝Editor版またはCPU版かで分岐）:
-  - Editor版・CPU版: b10075のCPU llama.cppを直起動（`try_start_llama_server_cpu_audio`、`--device none -ngl 0 --no-mmproj-offload`）。導入済みバイナリがb10075以外なら音声入力パックを未完了と判定し、更新を促す。
-  - Full 版（CUDA / AMD）: **GPU 直起動のみ・CPU フォールバック無し**（`start_full_voice_input_server_blocking`）。NVIDIA=同梱 CUDA llama-server を **auto-fit**（`--fit on`、12B 校正と同方式。小 VRAM 機は本体の一部が CPU へ逃げる）／AMD=**ROCm 優先 → Vulkan フォールバック**（`voice_amd_rocm_launch` / `voice_amd_vulkan_launch`。ROCm は音声プロジェクタ `gemma4a` 対応の **b9585+ ゲート**あり）。mmproj は GPU オフロード（`--no-mmproj-offload` を付けない）。
-- **必要アセット（Vulkan 以外）**: E4B 本体 GGUF は校正用と同一ファイルを共有（追加DL不要）。新規に必要なのは `mmproj-BF16.gguf`（約992MB、`unsloth/gemma-4-E4B-it-qat-GGUF`、`clip.audio.projector_type=gemma4a`）のみで、設定タブ「音声入力パック」から**後付けDL**（E4B と同じモデルディレクトリへ配置）。Full 版のパック導入判定は本体+mmproj のみ（`cpu_backend_required=false`）。Editor版・CPU版ではCPUバックエンドに加え、音声入力パックから LGPL ffmpeg（約95MB）も引き続き導入する。これは区間聞き直し削除後も残す一時的な構成で、削除判断は別途行う。
-- **llama.cpp の音声対応根拠**: Gemma 4 audio conformer 対応は PR #21421（2026-04-12 マージ）+ 修正 #24091/#24118（06-04）で、NVIDIA同梱 CUDA **b10075** に含まれる。E4B + mmprojのロードをRTX 4060 Laptopで確認済み。AMD 実測（RX 7600M XT gfx1102・ctx 8192）: ROCm b9630 起動7.5s・リクエスト0.6〜1.4s／Vulkan b9632 起動6.7s・1.9〜2.0s、いずれもクラッシュなし。
-- プロンプト（Vulkan 以外）: `python_sidecar/prompt_templates/voice_input/gemma4_e4b_candidates_system.txt`（該当ビルドの resources に同梱済み）。
-- **Editor版・CPU版のメモリ警告**: Windows の物理搭載メモリを `GetPhysicallyInstalledSystemMemory` で取得する。16GiB未満では初期状態で編集画面の音声入力ボタンを隠し、設定タブには非推奨警告を表示する。パックのダウンロードまたは導入済みパックの有効化時に warn 色の確認を出し、明示的な同意をローカル保存した後はボタンを表示する。16GiB以上24GiB未満では使用時のメモリ不足警告と warn 色のダウンロードボタンを表示し、24GiB以上では警告しない。Full版にはこの制限を適用しない。
-
-### 区間聞き直し（削除済み）
-
-2026-09に削除。E4B による音声再文字起こしの精度が不十分だったため。必要になれば、将来 whisper.cpp を使う方式へ置き換える。
+- 校正・推論のために会話データを PC 外へ送る経路を作らない。将来ローカル推論を再導入する場合も、loopback限定バリデーションを必須とする（Non-Negotiable Constraints 参照）
 
 ### Named Entity Warning Priority
 
@@ -302,47 +212,43 @@ AMD 用 llama.cpp `llama-server`（ROCm / Vulkan）と Editor 版・CPU 版の C
 - `〜病院`、`〜学校`、`〜相談室`、`...さん` など、直前に特定可能な名称が来やすい語は正規表現や敬称ルールで拾う。これは二段目の注意喚起として扱い、UI では黄色系の警告表示を基本とする。
 - `personNames` は頻度だけで判断しない。統計上は多くなくても、地名候補・駅名候補・地域名候補のうち「名字や名前として聞いたことがある」「有名人にいそう」と判断できるものは、個人名優先で積極的に `personNames` へ移す。
 
-## AMD GPU 互換性調査（2026-05-23）
+## 音声入力（編集画面のマイク入力候補生成）
 
-### ctranslate2-rocm v4.7.2 ビルド収録 GFX ターゲット
+編集画面の各行の編集欄右側（matSuffix）にあるマイクボタンで最大15秒録音し、編集欄へ挿入する候補を作る。Full 版・Editor 版とも whisper.cpp を使い、Gemma / llama-server / mmproj は使わない。
 
-2026年2月に本家 OpenNMT/CTranslate2 へ ROCm 統合（v4.7.0）、最新は v4.7.2（2026-05-19）。
+- 実装: `generate_whisper_voice_input_candidates_blocking`（`src-tauri/src/lib.rs`）。モデルは `VOICE_INPUT_WHISPER_MODEL = turbo`（文字起こしの既定と同じ）
+- フィラー例文（`FILLER_PROMPT`）付きの**1回だけ**実行し、候補は**1件**。以前は例文なしの2回目も実行して候補2件にしていたが、待ち時間を優先して1回にした。前後行の文脈は渡さない（Whisper のプロンプトに入れると、話していない語が紛れ込むため）
+- **Full 版**: セットアップ済みの文字起こし用 whisper.cpp を使う。GPU（Vulkan）が選べれば GPU、無ければ `-ng` で CPU 実行する。文字起こしモデルが未準備ならセットアップ完了を案内する。追加パックは不要
+- **Editor 版**: 同じ whisper.cpp の Vulkan ビルドを `-ng` 付きで常に CPU 実行し、GPU 列挙や Vulkan ドライバーに依存しない。開発版では `python_sidecar/speech-engines/whisper/`、Windows リリース版では同梱 `resources/speech-engines/whisper/` を使う。設定タブの「音声入力パック」は Whisper large-v3-turbo と Silero VAD（約1.6GB）のみを固定 revision・SHA-256検証・中断再開で取得し、モデルは `app_local_data_dir()/models/` に置く。Editor 版に NeMo・Python・llama-server・ffmpeg は同梱しない
+- 音声入力は `WHISPER_VOICE_INPUT_ACTIVE` で同時実行を1つに制限する
 
-| GFX | 代表GPU | ホイール収録 | 文字起こし実績 |
-| --- | --- | --- | --- |
-| gfx1201 / gfx1200 | RX 9070 / 9060 系 | ✅ | AMD公式サポート（未検証） |
-| gfx1151 / gfx1150 | Radeon 8060S / 890M（Strix Point） | ✅ | gfx1150: GPU 動作確認済み（本プロジェクト）。gfx1151: ROCm 7.2.2 で HSA_OVERRIDE 不要で動作（nabe2030 氏報告） |
-| gfx1101 / gfx1100 | RX 7800/7700/7900 系 | ✅ | AMD公式サポート（未検証） |
-| gfx1102 | RX 7600 / 7600M XT | ✅ | **`CT2_CUDA_ALLOCATOR=cub_caching` のみで3分・10分ファイルともに完走確認済み**。v4.7.1 / v4.7.2ホイールにgfx1102をネイティブ収録。`HSA_OVERRIDE_GFX_VERSION` は通常使用しない |
-| gfx1103 | Radeon 780M / 旧890M（Phoenix APU） | **❌ 非収録** | v4.7.x ホイールに含まれない。`HSA_OVERRIDE_GFX_VERSION=11.0.0` で gfx1100 に偽装すれば動作する可能性あり（未検証）だが、認識品質を変える可能性があるため自動設定しない |
-| gfx1030 | RX 6800 / 6900 系 | ✅ | ROCm コミュニティで動作報告あり（未検証） |
+## 旧エディションのデータ削除（設定タブ）
 
-### gfx1102 クラッシュ原因と解決（確認済み 2026-05-23）
+リリース版の設定タブは、旧エディション（CUDA / AMD / CPU 版）が残したデータを一覧・削除できる（`legacy_cuda_data_items` / `list_legacy_cuda_data` / `delete_legacy_cuda_data`）。
 
-ctranslate2-rocm の gfx1102 クラッシュは、**デフォルトのメモリアロケータ（MallocAsync）が AMD GPU と非互換**であることが主因（OpenNMT/CTranslate2 issue #2012 より。gfx1032 で先行確認）。
+- Full 版の対象: 旧 pyannote モデル、旧 Gemma 4 E4B / 12B（`gemma-4-12b-it` ディレクトリ全体を含む）、faster-whisper の HF キャッシュ、旧 `resources/python312`・`resources/llama-server`・`resources/llama-server-vulkan`、旧 pip 作業キャッシュ、`proofread-model-tier.txt`、`python312-site-packages`、`llm-engine` / `lemonade` キャッシュ
+- Editor 版の対象: 旧 E4B 本体・MTP・mmproj、`llm-engine` 内の CPU llama.cpp と `downloads`、旧 `lemonade` キャッシュ、旧ダウンロード版 ffmpeg
+- whisper.cpp / Nemotron / Silero VAD のモデルは削除対象にしない。開発ビルドには一覧を表示しない
+- 削除はサーバー側（Rust）で対象を決め直し、画面から渡されたパスは使わない（任意のフォルダを消せる経路を作らない）
+- NSIS のバックグラウンド更新（`/UPDATE`）は旧版アンインストールを省略するため、削除済み資源が残る場合がある
 
-```bash
-export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング方式へ切替
-```
+## GPU の選択と CPU 要件
 
-`transcribe_cli.py` が `CT2_CUDA_ALLOCATOR` を ctranslate2 インポート前に自動設定する。gfx1102は公式ホイールのネイティブコードを使い、`HSA_OVERRIDE_GFX_VERSION=11.0.0` は自動設定しない。`demo_data/10minutes` を実CLI完全同条件（日本語固定プレフィックス・用語辞書を含む）で比較すると、overrideなしの方が既存JSONに近く、文字編集距離420→356（約15%減）、セグメント数257→271（既存JSONは273）となった。
-
-将来CTranslate2 / ROCm / GPUドライバー更新後にgfx1102でクラッシュ・著しい欠落・異常な認識が発生した場合は、**gfx1102ネイティブ経路の互換性を最初に疑う**。`HSA_OVERRIDE_GFX_VERSION=11.0.0` は同一音声で症状差を見る一時的な切り分けに限って使用し、恒久設定にはしない（詳細は `docs/troubleshooting.md`）。
-
----
+- 複数 GPU の機種では、iGPU 以外を優先し、その中で VRAM が最大の GPU を自動選択する。設定タブでユーザーが選べる形式を残す（`src-tauri/src/gpu_select.rs`。Vulkan の並び = `GGML_VK_VISIBLE_DEVICES` の番号を whisper.cpp / NeMo-Speech.cpp に渡し、設定は GPU の UUID で保存する）
+- Vulkan の GPU が無い場合は CPU で動かす。この場合だけ起動時（`cpu_startup_check`）に最低要件を確認する: RAM 16GB以上（`CPU_MINIMUM_MEMORY_BYTES`）、AVX2、論理スレッド8以上（`CPU_MINIMUM_LOGICAL_THREADS`）。満たさなければ不足項目を示して終了し、満たす場合も CPU 処理と処理時間（音声時間の約1.5〜2.5倍）の注意を毎回表示する
+- CPU 処理は利用者に必ず分かるようにする。文字起こし画面に「処理装置: GPU（名前）/ CPU（理由）」を常時表示し、処理中は状況表示に「（CPUで処理中）」を添え、話者分離が GPU 失敗で CPU に切り替わったときは結果画面に案内する（結果の `diarization.gpuFallback`）。開発ビルドでは `LOTT_DEV_FORCE_CPU=1`（`scripts/run-dev.bat --cpu` / `run-dev.sh --cpu`）で GPU を無いものとして扱い（`gpu_select::dev_force_cpu`。リリースビルドでは無視）、画面に「開発オプション: CPU強制」を表示する
+- GPU ドライバー案内（`src-tauri/src/gpu_driver.rs`）: Windows で NVIDIA / AMD / Intel の表示装置があるのにドライバーの問題（問題コード・Microsoft 基本ディスプレイ アダプター）がある、または Vulkan の GPU が見つからない場合に、ドライバーの導入・更新を案内する（起動ダイアログとバナー）。仮想マシンの表示装置は対象外
+- GPU ドライバーが無く System32 に `vulkan-1.dll` が無い PC でも CPU 実行できるよう、同梱の Vulkan ローダー（`resources/speech-engines/vulkan-loader`）を PATH 経由で使う（`ensure_bundled_vulkan_loader_on_path`）。エンジン exe の隣には置かない（新しいシステム側ローダーを隠さないため）
 
 ## Stable Areas / Avoid Touching Without Explicit Request
 
 できるだけ触れないところ:
 
-- 文字起こし実行部分: `python_sidecar/transcribe_cli.py` と、それを呼ぶ Tauri 側の既存フロー
-- PyAV 非依存の ffmpeg backend / import stub / `FFMPEG_BIN` 注入経路。Apache-2.0 配布の前提なので、PyAV や imageio-ffmpeg を戻さない
-- 話者分離実行部分: `python_sidecar/diarize_cli.py`、community-1 ローカル配置ポリシー、話者表示初期値
-- CUDA / AMD 版の既定 Gemma 4 E4B 校正経路（同梱/DL llama-server 直起動）。特にデフォルトプロンプトと実行条件は、互換API追加・12B階層追加の影響を受けないように保つ
-- CUDA / AMD 版では高精度階層（Gemma 4 12B）はオプトインの追加機能。E4B のデフォルトプロンプトと実行条件（ctx・MTP・FlashAttention 等）を 12B 追加の影響で変えないこと。LoTT Vulkan 版は LLM を搭載しない。GPU 方式（CUDA / ROCm / Vulkan）の変更は Distribution Strategy の現行方針に従って行う
-- 既存のローカルGGUFモデル探索・選択の挙動。ユーザー登録式への完全移行は、別タスクとして検討する
+- 文字起こし・話者分離の実行部分（Rust）: `execute_ggml_transcription` / `execute_ggml_diarization` / `run_ggml_engine_process` / `decode_audio_to_private_wav`（`src-tauri/src/lib.rs`）と `src-tauri/src/ggml_speech.rs`。whisper.cpp の引数（探索幅・VAD・フィラー例文）や NeMo の呼び出しは実測に基づく（`docs/ggml-speech-engine-design.md`）
+- LGPL 構成の ffmpeg CLI 経路・`FFMPEG_BIN` 注入。Apache-2.0 配布の前提なので、GPL ffmpeg・PyAV・imageio-ffmpeg を戻さない
+- 話者分離の Nemotron 配置ポリシー、話者表示初期値
 - 保存形式（JSON / DOCX / XLSX）と出力表カラム
-- loopback 限定バリデーション。プライバシー境界なので、緩和する場合は必ず明示合意を取る
+- loopback 限定の原則。プライバシー境界なので、緩和する場合は必ず明示合意を取る
 
 ## Output and Save Formats
 
@@ -358,71 +264,42 @@ export CT2_CUDA_ALLOCATOR=cub_caching   # MallocAsync → CUB キャッシング
 
 ## Distribution Strategy
 
-**現行方針（2026-09-28）: LoTT Vulkan 版は音声エンジンを Vulkan で動かす試験的な配布版で、llama.cpp / Gemma を含まず LLM 校正・全体校正を提供しない。** 2026-09-25 に検討した GPU 実行の Vulkan 統一案は、LLM も Vulkan に揃える内容を含めていたが、その部分は採用しない。Python / PyTorch の標準経路を残す間は、下記の配布ライン（CUDA / ROCm / CPU / Editor）が並存する。
+**現行方針（2026-09-29）: 配布は Full 版と Editor 版の2つ。Windows（NSIS）と Linux（deb + AppImage）を対象とする。Linux は Docker 経路でビルドする構成まで書き直したが、実機でのビルド・起動は未検証。** 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）で動かし、GPU が無い PC では CPU で動かす。LLM・Python は含めない。CUDA 版・AMD (ROCm) 版・CPU 版は削除した。
 
-- 複数 GPU の機種では、iGPU 以外を優先し、その中で VRAM が最大の GPU を自動選択する。設定タブでユーザーが選べる形式を残す（`src-tauri/src/gpu_select.rs`。Vulkan の並び = `GGML_VK_VISIBLE_DEVICES` の番号を whisper.cpp / NeMo-Speech.cpp に渡し、設定は GPU の UUID で保存する）
-- CUDA 版・ROCm 版の llama-server 同梱・ダウンロードと校正経路は現行実装として維持する。AMD 版での Vulkan は ROCm が使えない場合の llama.cpp バックエンドであり、LLM を含まない LoTT Vulkan 版とは別の配布経路
-
-現行の配布形態は次の系統です。
-
-1. Full CUDA version（**主配布**）
-   - 文字起こし〜話者分離〜校正をすべて含む
-   - NVIDIA RTX / CUDA 主軸の安定版
-   - **NSIS インストーラー配布**（`scripts/setup-build-tools.bat`）
-   - `faster-whisper` / `ctranslate2` CUDA、pyannote CUDA、AI校正は同梱 CUDA llama-server 直起動を想定（Windowsは公式CUDA archive、Linuxはb10075固定commitから配布ビルド時に生成）
-   - インストーラーに Python embeddable（`resources/python312/`）と `setup_venv_cli.py` を同梱。初回起動後にセットアップ UI からパッケージをインストールする（インターネット接続が必要）
-   - または `PYTHON_BIN` 環境変数でカスタム venv を指定してもよい
-
-1. Full ROCm / AMD version
-   - AMD dGPU / iGPU / NPU 検証版
-   - ROCm 向け Python venv / runtime / 必要コンポーネント同梱
-   - gfx1150（Radeon 890M）では文字起こし・話者分離・LLM 校正ともに GPU 動作確認済み
-   - LLM 校正は DL した llama.cpp ROCm / Vulkan llama-server 直起動を想定（Vulkan は AMD 版のフォールバック backend。LoTT Vulkan 版には LLM を搭載しない）
-
-1. Editor version
-   - LLM部分を含まない軽量構成（校正中心）
+1. Full version（**主配布**。旧称「Vulkan 版」）
+   - identifier `net.gakkousya.lott`。文字起こし（whisper.cpp）・話者分離（NeMo-Speech.cpp + Nemotron-3-Diarization）・ルールベース句読点付与・音声入力を含む
+   - NSIS インストーラー配布（`scripts/setup-build-tools.bat`。`--vulkan` は旧名として受け付ける）
+   - 同梱: `resources/speech-engines`（whisper.cpp / NeMo-Speech.cpp の Vulkan ビルドと Vulkan ローダー）、`resources/ffmpeg`（LGPL）、VC++ ランタイム、ルールベース校正定義
+   - 配布ファイル名のトークンは `vulkan`（`LoTT-vX.Y.Z-windows-x64-vulkan-setup.exe`）
+   - Linux: deb + AppImage（`scripts/build-appimage-docker.sh`。`LoTT-vX.Y.Z-linux-x64-vulkan.{AppImage,deb}`）。同梱物は whisper.cpp / NeMo-Speech.cpp（Vulkan）と LGPL ffmpeg。Vulkan ローダーはホストに無い場合だけ使うフォールバックとして専用ディレクトリに同梱し、ICD は同梱せずホストのものを使う
+2. Editor version
+   - identifier `net.gakkousya.lott-editor`。JSONの校正・編集向けの軽量構成。文字起こしタブは無い。マイク音声入力は whisper.cpp を常にCPU実行
+   - Windowsリリースには `resources/speech-engines/whisper/` のみを同梱する（NeMo・ffmpegは含めない）。WhisperモデルとSilero VAD（約1.6GB）は設定タブから取得する
+   - `scripts/setup-build-tools.bat --editor` が `prepare-vulkan-bundle-windows.ps1 -WhisperOnly` を呼ぶ
    - ビルド済みインストーラーをWeb配布
+   - Linux: deb + AppImage（`build-appimage-docker.sh --editor`。`LoTT-vX.Y.Z-linux-x64-editor.{AppImage,deb}`）。whisper.cpp のみ同梱し、NeMo・ffmpeg は含めない。音声入力は常にCPU実行
 
-補足:
+Tauri build 設定:
 
-- （Python の標準経路を残す間のみ）PyTorch は CUDA build と ROCm build を同一 venv に共存させず、配布ラインごとに venv を分ける。LoTT Vulkan 版は ggml 音声エンジンのみを同梱し、llama-server は含まないため、この制約を受けない
-- NSIS版は venv 非同梱のため、配布先でインストール先フォルダ直下に `.venv312\`（フォルダ全体）を配置するか、`PYTHON_BIN` 環境変数を設定する必要がある
-- pyannote-speaker-diarization-community-1 はインストール後ダウンロード。NSIS ビルド（`tauri.nvidia.windows.override.json`）には含めない。リリースの保存先は `%LOCALAPPDATA%\{identifier}\models\`（resource_dir ではない）
-- llama-server（`resources/llama-server/`）は現状 NSIS インストーラーに同梱（~1GB）。将来的にはセットアップ UI からのポストインストールダウンロードに切り替え予定
-
-Tauri build override 方針:
-
-- override ファイル名は `tauri.<variant>.<platform>.override.json`（リリース）/ `tauri.<variant>.dev.<platform>.override.json`（dev。全体 dev は variant 無しの `tauri.dev.<platform>`）で統一する。`variant` = `nvidia` / `amd` / `cpu` / `editor`、`platform` = `windows` / `linux`。旧 `tauri.build.*-ubuntu` 形式・`build.` 接頭辞・`ubuntu` トークンは廃止済み（`linux` は deb + AppImage 両対応で Ubuntu 限定ではない）
-- `tauri.nvidia.windows.override.json` は Full CUDA / Windows NSIS ビルド用（`scripts/setup-build-tools.bat` から使用）
-- `tauri.nvidia.linux.override.json` は Full CUDA / Linux（deb + AppImage）ビルド用。venv・`python312` embeddable を同梱せず、venv は初回起動後のセットアップで構築する（`scripts/setup-build-tools-linux.sh` から使用）。Linux用CUDA llama-serverは`resources/llama-server/cuda/`へb10075固定commitからビルドして同梱し、配布先のCUDA Toolkitは不要（ホストNVIDIAドライバーは必要）
-- `tauri.amd.windows.override.json` は AMD / Windows NSIS ビルド用（後日詳細調整予定）
-- `tauri.amd.linux.override.json` は AMD experimental として、product name / identifier / resources を ROCm / AMD 版に固定する。話者分離モデルは同梱せず、インストール後に `app_local_data_dir()/models/` へ取得する
-- `tauri.cpu.linux.override.json` は CPU / Linux（deb + AppImage）ビルド用で、`requirements-runtime.txt` を使う
-- `tauri.editor.windows.override.json` は軽量 Editor 版 / Windows NSIS ビルド用。`identifier` を `net.gakkousya.lott-editor` に分離し、LLM 校正ランタイム非搭載のため `installerHooks` を `nsis/editor-hooks.nsh` に差し替える（Full 版は `nsis/nvidia-hooks.nsh`）
-- `tauri.editor.linux.override.json` は軽量 Editor 版 / Linux（deb + AppImage）ビルド用（GPU runtime を持たないため OS 差のみ。NSIS フックは Linux では不要）
-- CUDA版・ROCm版・CPU版・Editor版は `identifier` を分け、同一PCに併存できるようにする（CUDA: `net.gakkousya.lott`、AMD: `net.gakkousya.lott-amd`、CPU: `net.gakkousya.lott-cpu`、Editor: `net.gakkousya.lott-editor`）
-- Linux の配布ビルドは Ubuntu 24.04 Docker 経路（`scripts/build-appimage-docker.sh`）を使う。引数無しは NVIDIA、`--amd` / `--cpu` / `--editor` で配布ラインを選び、選択値を `scripts/setup-build-tools-linux.sh` へそのまま渡す。両スクリプトは不明なオプションをエラー終了する
-- Linux / Windows とも、規約名の成果物は `dist/v{version}/` に揃う。
-- Linux NVIDIA CUDAバイナリのsource buildは `scripts/build-llama-server-cuda-linux.sh` で行う。公式Linux CUDA archiveは存在しないため、固定commitのsource tarball SHA-256を検証し、digest固定のlinux/amd64 CUDA devel image内でビルドする。公式コンテナ内のEULA/LICENSE候補を `NVIDIA-CUDA-RUNTIME-LICENSE.txt` として生成resourceへコピーし、見つからなければビルドを失敗させる。`LLAMA_CPP_LICENSE.txt` と `LLAMA_CPP_BUILD_INFO.txt`、CUDA Toolkit EULA（`licenses/manual/`）も配布物へ残す。`libcuda.so.1`はホストドライバーから解決し、toolkit stubは配布しない。
+- `src-tauri/tauri.conf.json` が Full 版 / Windows NSIS の配布設定（フック `nsis/full-hooks.nsh`）
+- リポジトリ直下の override: `tauri.dev.windows.override.json`（Full の dev）、`tauri.editor.windows.override.json`（Editor 配布。`nsis/editor-hooks.nsh`）、`tauri.editor.dev.windows.override.json`（Editor の dev）。Linux 用は `tauri.linux.override.json`（Full の deb + AppImage 配布。deb の依存に `libvulkan1` を含む）、`tauri.editor.linux.override.json`（Editor 配布）、`tauri.dev.linux.override.json`（Full の dev）、`tauri.editor.dev.linux.override.json`（Editor の dev）
+- Full と Editor は `identifier` を分け、同一PCに併存できるようにする
+- override の `nsis` ブロックは基底設定をシャロー上書きするため、`installerHooks` を明示する
+- Linux の配布ビルドは Ubuntu 24.04 Docker 経路（`scripts/build-appimage-docker.sh`。引数なし = Full、`--editor` = Editor）。両スクリプトは不明なオプションをエラー終了する。実機検証は未実施
+- Windows / Linux とも、規約名の成果物は `dist/v{version}/` に揃う（`scripts/collect_release_artifacts.py`）
 
 ### NSIS ビルド時の注意点
 
-- **ビルドは `scripts/setup-build-tools.bat` を実行するだけ**。前提確認・Python embeddable 取得・`cargo tauri build` を一括で行う。LLM校正は同梱 CUDA llama-serverを直接起動する。
-- **ビルド時にインターネット接続が必要**（Python embeddable zip と get-pip.py を自動ダウンロード）。取得済みの場合はスキップされる
-- **`--config tauri.nvidia.windows.override.json` を必ず使う**。`tauri.conf.json` の resources には `.venv312` や話者分離モデルが含まれており、NSIS ビルドで使うと venv やモデルをインストーラーに同梱してしまう
+- **ビルドは `scripts/setup-build-tools.bat` を実行するだけ**。前提確認・音声エンジンの準備・LGPL ffmpeg 取得・ライセンス収集・`cargo tauri build` を一括で行う
+- **ビルド時にインターネット接続が必要**（エンジンのソース取得、ビルド用 Python、ffmpeg）。取得済みの場合はスキップされる
+- ビルド用 Python（3.12 embeddable）は `%LOCALAPPDATA%\lott-ggml-speech-build\python-3.12.10-build\` に置く。アプリには同梱せず、`setup_ffmpeg_lgpl.py`・`collect_licenses.py --no-python`・`collect_release_artifacts.py` にだけ使う。`PYTHON_VERSION` は `scripts/prepare-vulkan-bundle-windows.ps1` で管理し、`setup-build-tools.bat` の参照パスと同時に直す
 - **バージョン番号は `src-tauri/tauri.conf.json` の `version` フィールドで管理**。ビルド出力ファイル名（`*_x64-setup.exe`）に反映されるためリリース前に更新する
-- **`PYTHON_VERSION` は `scripts/setup-build-tools.bat` 内で管理**。更新時はこのファイルの変数を書き換え、`src-tauri/resources/python312/` を削除してから再ビルドする
-- **インストーラーは llama-server 同梱で約 1GB 前後**。将来的にはポストインストールダウンロードに切り替え予定
-- **NSIS フックは `src-tauri/nsis/nvidia-hooks.nsh`**（Full 版）/ `editor-hooks.nsh`（Editor 版）。公式インストーラーでは外部のLLMランタイムやローカルAIアプリ（LM Studio / Ollama）の連携選択肢を表示せず、連携は常に無効。連携コードは残し、Cargo feature `local-llm-apps` 付きでソースからビルドした専用構成だけで有効にする。旧実行時ポリシーマーカーは廃止済み。フックを変更した場合は `tauri.nvidia.windows.override.json` / `tauri.amd.windows.override.json` 側の `nsis` ブロックにも `installerHooks` を明示して基底設定が上書きされないよう注意する
+- **NSIS フックは `src-tauri/nsis/full-hooks.nsh`**（Full 版）/ `editor-hooks.nsh`（Editor 版）。旧版が作った実行時ポリシーマーカーや旧実行ファイルは上書きインストール時に削除する。バックグラウンド更新（`/UPDATE`）ではアンインストール時のクリーンアップを省略する
 - 詳細は `docs/release-build-windows.md` を参照
 
 ## Hardware Policy
 
-- 現行安定 Full は RTX/CUDA 主軸。今後は音声エンジンを Vulkan（NVIDIA / AMD / Intel 共通）へ移行する（Distribution Strategy の方針）。LoTT Vulkan 版に LLM 校正は含めない
-- ROCm / AMD 版は当面 experimental とし、LLM 校正と pyannote / PyTorch ROCm から検証する
-- AMD iGPU / dGPU / NPU の並行処理は、DL した llama.cpp ROCm / Vulkan llama-server や `llama_cpp` HIPBLAS / Vulkan を優先して検証する
-- `faster-whisper` / `ctranslate2` の GPU ASR は CUDA 主軸。gfx1150（Radeon 890M）と gfx1102（RX 7600M XT）では GPU 動作確認済み。ROCmでは `CT2_CUDA_ALLOCATOR=cub_caching` を `transcribe_cli.py` が自動設定する。gfx1102はネイティブ実行し、`HSA_OVERRIDE_GFX_VERSION` は通常使用しない。gfx1103はv4.7.xホイール非収録だが、品質影響が未検証のためoverrideを自動設定しない
-- Linux AppImage の Python sidecar は、`app_local_data_dir()/python312-site-packages/nvidia/*/lib` を優先し、ユーザー導入 CUDA/cuDNN との混在を避ける。Windows 側の CUDA 探索順は変更しない。
+- 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）。GPU が無い場合は CPU（最低要件を満たすときのみ）
 - ハードウェア拡張時も、オフライン要件とデータ保護要件を維持する
 
 ## Engineering Priorities
@@ -430,7 +307,7 @@ Tauri build override 方針:
 1. Privacy and offline integrity
 2. Stable operation and recoverability
 3. Clinical workflow usability
-4. Performance optimization (GPU/iGPU/NPU parallelism)
+4. Performance optimization (GPU/CPU)
 
 ## Agent Working Rules
 
@@ -488,13 +365,12 @@ Tauri build override 方針:
 - Main UI: `frontend/src/app/app.component.ts`
 - Main template: `frontend/src/app/app.component.html`
 - Tauri commands: `src-tauri/src/lib.rs`
-- ASR CLI: `python_sidecar/transcribe_cli.py`
-- Diarization CLI: `python_sidecar/diarize_cli.py`
-- LLM proofreading (segment-by-segment): `src-tauri/src/llm_proofread.rs`（Python 版 `python_sidecar/proofread_llm_cli.py` は同等性テストの基準）
-- LLM proofreading (overall): `src-tauri/src/llm_overall_proofread.rs`（Python 版 `python_sidecar/overall_proofread_cli.py` は同等性テストの基準と `llama_cpp` backend 用）
+- ggml speech engines (transcription / diarization runner): `src-tauri/src/ggml_speech.rs`、`execute_ggml_transcription` / `execute_ggml_diarization`（`lib.rs`）
+- GPU selection: `src-tauri/src/gpu_select.rs`
+- GPU driver hint: `src-tauri/src/gpu_driver.rs`
 - Encrypted export (DOCX / XLSX / AES ZIP): `src-tauri/src/export_crypto.rs`
-- Post-install package setup: `python_sidecar/setup_venv_cli.py`
+- Punctuation rules: `src-tauri/resources/proofread/punctuation_rules/`
+- ggml speech engine design (measurements, decisions): `docs/ggml-speech-engine-design.md`
 - Build guide: `docs/release-build-windows.md`
-- Runtime emulation: `docs/dev-runtime-emulation.md`
 - Development guide (human-facing): `docs/development.md`
 - Troubleshooting (human-facing): `docs/troubleshooting.md`

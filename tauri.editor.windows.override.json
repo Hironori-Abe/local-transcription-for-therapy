@@ -24,8 +24,9 @@
       "../NOTICE",
       "../THIRD_PARTY_LICENSES.md",
       "../licenses",
-      "../python_sidecar/prompt_templates",
-      "resources/proofread/punctuation_rules"
+      "resources/proofread/punctuation_rules",
+      "resources/speech-engines/whisper",
+      "resources/speech-engines/vulkan-loader"
     ],
     "windows": {
       "nsis": {

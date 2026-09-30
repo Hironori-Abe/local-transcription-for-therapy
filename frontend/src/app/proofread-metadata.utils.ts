@@ -428,21 +428,6 @@ export function reconcileRetranscriptionStateValue(
   };
 }
 
-export function buildDiarizationEditedTextMapValue(
-  segments: ReadonlyArray<RetranscriptionSegmentInput>,
-  previousEditedTextBySegmentId: Readonly<Record<number, string>>
-): Record<number, string> {
-  return Object.fromEntries(
-    segments.map((segment) => {
-      const previousText = previousEditedTextBySegmentId[segment.id];
-      return [
-        segment.id,
-        typeof previousText === 'string' ? previousText : (segment.text ?? '')
-      ];
-    })
-  );
-}
-
 export function mergeSegmentTextValue(leftRaw: string, rightRaw: string): string {
   const left = (leftRaw ?? '').trim();
   const right = (rightRaw ?? '').trim();
@@ -721,56 +706,6 @@ export function isPunctuationOnlyProofreadReasonValue(reasonRaw: string): boolea
     || reason === 'sentence_final_period_added'
     || reason === 'punctuation_adjustment'
     || /^「[、。！？…・]」を追加$/.test(reason);
-}
-
-/**
- * LLM の自由記述ではなく実際の差分から、校正理由を生成する。
- * 句読点・空白以外も変化した場合は空文字を返し、呼び出し側の原文比較表示へ委ねる。
- */
-export function describeProofreadDiffReasonValue(previous: string, revised: string): string {
-  if (previous === revised) {
-    return '';
-  }
-  const punctuationMarks = ['、', '。', '！', '？', '!', '?', '…', '・'];
-  const punctuationSet = new Set(punctuationMarks);
-  const isStrippedCharacter = (character: string): boolean =>
-    punctuationSet.has(character)
-    || character === ' '
-    || character === '\t'
-    || character === '\r'
-    || character === '\n'
-    || character === '　';
-  const strip = (value: string): string =>
-    Array.from(value).filter((character) => !isStrippedCharacter(character)).join('');
-  if (strip(previous) !== strip(revised)) {
-    return '';
-  }
-
-  const countMarks = (value: string): Map<string, number> => {
-    const counts = new Map<string, number>();
-    for (const character of value) {
-      if (punctuationSet.has(character)) {
-        counts.set(character, (counts.get(character) ?? 0) + 1);
-      }
-    }
-    return counts;
-  };
-  const before = countMarks(previous);
-  const after = countMarks(revised);
-  const added: string[] = [];
-  let removedAny = false;
-  for (const mark of punctuationMarks) {
-    const delta = (after.get(mark) ?? 0) - (before.get(mark) ?? 0);
-    if (delta > 0) {
-      added.push(mark);
-    } else if (delta < 0) {
-      removedAny = true;
-    }
-  }
-  if (added.length > 0 && !removedAny) {
-    return `${added.join('')}を追加`;
-  }
-  return '句読点・記号の調整';
 }
 
 export function buildSensitiveEntityProofreadHintValue(

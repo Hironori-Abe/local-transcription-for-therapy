@@ -16,168 +16,87 @@ LoTT currently assumes Japanese-language use. The primary UI labels, screenshots
 ## Features
 
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
-- **Japanese transcription** - faster-whisper with the Whisper turbo model by default; the higher-accuracy large-v3 model can be downloaded and selected later
-- **Speaker diarization** - Automatic speaker identification with pyannote.audio, using default labels such as Th / Cl / IP
-- **Proofreading** - After diarization, CUDA / AMD editions automatically add punctuation with Gemma 4 E4B, while Vulkan / CPU editions use local rules. The app also highlights possible personal identifiers such as names and place names. Overall proofreading is available only on CUDA / AMD, using E4B or the optional 12B model
-- **Voice input** - Record up to 15 seconds from the microphone on any transcript row for local transcription. Vulkan uses the already-installed whisper.cpp model and suggests up to 2 candidates without an extra pack; other supported editions suggest up to 3 after installing the "voice input pack" from Settings
+- **Japanese transcription** - whisper.cpp (Whisper large-v3-turbo + Silero VAD). It uses NVIDIA / AMD / Intel GPUs through Vulkan and runs on the CPU on PCs without a GPU. Optional audio adjustment before transcription (low-frequency noise removal, noise reduction, loudness normalization) is available (it can lower accuracy on good-quality recordings)
+- **Speaker diarization** - Automatic speaker identification with NeMo-Speech.cpp + Nemotron-3-Diarization, using default labels such as Th / Cl / IP
+- **Proofreading** - Punctuation is added automatically with local rules. The app also highlights possible personal identifiers such as names and place names. There is no AI (LLM) proofreading or overall proofreading
+- **Voice input** - Record up to 15 seconds from the microphone on any transcript row; the local whisper.cpp transcribes it and suggests 1 candidate (the Full edition uses the GPU when available and the CPU otherwise; Editor always uses the CPU)
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
 - Save as Word (.docx), Excel (.xlsx), SRT subtitles, or JSON. SRT can optionally be stored in an AES-256 encrypted ZIP with a password
 - Light and dark themes with system-preference support, plus keyboard shortcuts for editing, playback, speaker changes, and voice input
 
+## For Users of Older Versions
+
+The CUDA, AMD (ROCm), and CPU editions, and AI proofreading / overall proofreading with Gemma 4 and similar models (including LM Studio / Ollama integration), have been discontinued. Two editions are now distributed, described below (Windows and Linux; the Linux editions are experimental and have not yet been verified on real hardware). Data left behind by older editions can be listed and deleted from the Settings tab of the Full edition.
+
 ## Privacy and Offline Policy
 
 - The app does not call internet-hosted APIs while running transcription, speaker diarization, or proofreading.
-- Internet access is needed only for the initial setup, including dependency and model downloads.
-- Support for an "OpenAI-compatible API" means protocol compatibility only. The connection target is restricted to localhost / loopback. The design does not allow cloud inference endpoints.
-- The app itself does not communicate with external servers during normal operation. On Windows, WebView2 is configured not to automatically send crash dumps to Microsoft. However, the app cannot completely control required diagnostics, update checks, or other communications performed by system-level components such as the OS, the WebView runtime (WebView2 / WebKitGTK), and GPU drivers. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
+- Internet access is needed only for the initial setup, that is, model downloads.
+- The app has no AI (LLM) inference feature, so there is no path that hands conversation data to an inference server.
+- The app itself does not communicate with external servers during normal operation. On Windows, WebView2 is configured not to automatically send crash dumps to Microsoft. However, the app cannot completely control required diagnostics, update checks, or other communications performed by system-level components such as the OS, the WebView runtime (WebView2), and GPU drivers. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
 - For non-engineers, see the [plain-language privacy guide](docs/privacy-guide.md) (Japanese). To verify for yourself that nothing is sent, see the [offline verification steps](docs/offline-verification.md) (Japanese).
-
-### Local AI Apps (LM Studio / Ollama)
-
-- Integration with local AI apps running on the same PC, such as LM Studio and Ollama, is **disabled in the official installers**. There is no installer prompt or in-app switch for enabling it. CUDA / AMD editions use the built-in Gemma 4 E4B model by default. Vulkan contains no LLM and does not provide overall proofreading.
-- If this integration is required, build a dedicated installer from source with the Cargo feature `local-llm-apps`. See the [Windows release build guide](docs/release-build-windows.md#ローカルaiアプリ連携を有効にした専用ビルド).
-- Even when integration is enabled, the connection target is restricted to loopback, but **the behavior of the connected app itself is outside LoTT's control**. Depending on the LM Studio or Ollama settings, conversation data could be sent outside the PC. Keeping this integration disabled is recommended for normal use.
 
 ## Editions
 
 | Edition | Description |
 | --- | --- |
-| **LoTT Full CUDA** | Main Windows and Linux distribution for NVIDIA RTX / CUDA. After transcription and diarization, punctuation is added automatically with Gemma 4 E4B; proofreading tools are also included |
-| LoTT Vulkan (v0.9.9+, experimental) | Edition that supports NVIDIA / AMD / Intel GPUs with a single installer. Transcription uses whisper.cpp, speaker diarization uses Nemotron-3-Diarization, and punctuation uses local rules. It includes no LLM, Gemma model, or overall proofreading. Microphone input also uses whisper.cpp and needs no extra pack. No CUDA Toolkit, cuDNN, or Hugging Face token is required. On PCs without a GPU it runs on the CPU (slower) |
-| LoTT Full AMD (ROCm / Vulkan) | Experimental / source-build only. After diarization, punctuation is added automatically with Gemma 4 E4B (the LLM prefers ROCm with Vulkan fallback) |
-| LoTT CPU | Trial edition. Runs transcription and speaker diarization on the CPU, then automatically applies simple rule-based punctuation. Overall proofreading is not included. Voice input becomes available after installing the voice input pack. Expected processing time is approximately 1.5–2.5 times the audio duration |
-| LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription, diarization, automatic punctuation, and the LLM proofreading runtime are not included. Installing the optional voice input pack enables voice input with a CPU-based local AI (not recommended on PCs with less than 16 GB RAM) |
+| **LoTT Full** | Main distribution. Includes transcription (whisper.cpp), speaker diarization (Nemotron-3-Diarization), rule-based punctuation, and voice input. A single installer supports NVIDIA / AMD / Intel GPUs (Vulkan). On PCs without a GPU it runs on the CPU (slower). No CUDA Toolkit, cuDNN, Python, or Hugging Face token is required |
+| LoTT Editor | Lightweight edition for editing and proofreading imported JSON. Transcription and diarization are not included. Installing the optional voice input pack (Whisper large-v3-turbo + VAD, about 1.6 GB) enables whisper.cpp voice input on the CPU; no GPU is required |
 
-### Vulkan Edition
+The Full edition's initial setup downloads only the speech recognition model (about 1.6 GB, including whisper.cpp and VAD) and the Nemotron-3-Diarization speaker diarization model (about 0.1 GB, NVIDIA OpenMDW-1.1 license; the full text can be viewed on the setup screen), about 1.7 GB in total. Downloads use pinned revisions, SHA-256 verification, and resume after interruption. No Hugging Face account or token is needed.
 
-The Vulkan edition is an experimental edition that is planned to become the main distribution (testing on Intel Arc and other GPUs is in progress).
+On PCs with multiple GPUs, the audio engines automatically use the GPU with the most VRAM other than the integrated GPU. You can change it in the Settings tab.
 
-- Only the latest driver from your GPU vendor is required. There is no CUDA Toolkit / cuDNN installation and no Python package setup
-- The initial setup downloads only the speech recognition model (about 1.6 GB, including whisper.cpp and VAD) and the Nemotron-3-Diarization speaker diarization model (about 0.1 GB, NVIDIA OpenMDW-1.1 license; the full text can be viewed on the setup screen). The total is about 1.7 GB; there is no Gemma or llama.cpp download. No Hugging Face account or token is needed
-- On PCs with multiple GPUs, the audio engines automatically use the GPU with the most VRAM other than the integrated GPU. You can change it in the Settings tab
-- When installed over the Full CUDA edition, LLM models are not used by this edition. The old Gemma 4 12B model directory, E4B model, MTP draft, audio mmproj, and tier marker can be removed from Settings. The old bundled llama-server can also be removed there if it remains after a background update
+## Requirements
 
-### AMD GPU Edition
+- Windows 10 / 11 64-bit, or 64-bit Linux (x86_64; `.deb` / AppImage; experimental and unverified)
+- On Linux, the host Vulkan loader (`libvulkan.so.1`; the `libvulkan1` package on Ubuntu / Debian) is no longer strictly required for CPU-only operation (a bundled fallback is used when it is missing; the `.deb` installs it automatically). To use a GPU you need the host loader plus a Mesa or NVIDIA Vulkan driver (without one, processing runs on the CPU)
+- To use a GPU: an NVIDIA / AMD / Intel GPU with an up-to-date GPU driver that supports Vulkan (no CUDA Toolkit or cuDNN is needed)
+- If the GPU driver is missing or outdated, a startup dialog and a banner tell you to install or update it (Windows only; not shown on Linux)
+- Free space for model downloads (about 1.7 GB for Full; about 1.6 GB for the Editor voice input pack)
 
-Compatibility varies substantially across GPU generations, operating systems, ROCm versions, and drivers, so an AMD installer is not currently distributed for general use. **To use LoTT with an AMD GPU, prepare an environment that supports the target GPU and build the AMD edition from source.** This edition remains experimental, and operation on every AMD GPU is not guaranteed. See the [Windows release build guide](docs/release-build-windows.md) for the Windows development setup and build configuration.
+### Using a PC Without a GPU (CPU Execution)
 
-The AMD GPU edition requires GPU execution for transcription, speaker diarization, and built-in AI processing. If GPU processing fails, the job stops and a dialog reports the failure; it does not fall back to CPU. The only permitted fallback is from ROCm to Vulkan for the built-in LLM when its ROCm path cannot start.
+When no Vulkan-capable GPU is found, the Full edition automatically processes on the CPU. **Because processing takes considerably longer, a PC with a GPU (NVIDIA / AMD / Intel) is recommended for regular, continuous use.** CPU execution is intended for trying LoTT with a small amount of audio.
 
-### Isolated Development Environments
+| Item | Minimum |
+| --- | --- |
+| OS | Windows 10 / 11 64-bit, or 64-bit Linux |
+| CPU | AVX2 support, 4 cores / 8 threads or more |
+| RAM | **16 GB or more** |
 
-Development environments are separated by both OS and compute backend. Use the `.bat` scripts on Windows and the `.sh` scripts on Linux, including Ubuntu and CachyOS/Arch, then select the dedicated `nvidia`, `amd`, or `cpu` entry point. The shared `setup-dev.*` and `run-dev.*` files are internal implementations and do not silently select CUDA when run directly.
-
-```bat
-scripts\setup-dev-nvidia.bat
-scripts\run-dev-nvidia.bat
-scripts\setup-dev-amd.bat
-scripts\run-dev-amd.bat
-scripts\setup-dev-cpu.bat
-scripts\run-dev-cpu.bat
-```
-
-```sh
-bash scripts/setup-dev-nvidia.sh
-bash scripts/run-dev-nvidia.sh
-bash scripts/setup-dev-amd.sh
-bash scripts/run-dev-amd.sh
-bash scripts/setup-dev-cpu.sh
-bash scripts/run-dev-cpu.sh
-```
-
-Python environments are isolated as `.venv312-nvidia`, `.venv312-amd`, and `.venv312-cpu`. On Linux, runtime settings are also separated into `.dev-linux-cuda.env`, `.dev-linux-rocm.env`, and `.dev-linux-cpu.env`, preventing libraries and settings from different backends from being mixed.
-
-See the [development guide](docs/development.md#セットアップと開発起動) for every edition/OS combination.
-
-## Requirements (Full CUDA Edition)
-
-- Windows 10 / 11 64-bit (Windows edition)
-- Windows edition: NVIDIA GPU, RTX recommended, with CUDA Toolkit 12.x (13 or later is not supported) and cuDNN 9.x
-- Linux edition: NVIDIA GPU with a compatible NVIDIA driver (CUDA Toolkit is not required at runtime)
-- **At least 8 GB VRAM**
-- About 1 GB for the installer, plus space for downloaded models
-
-### Linux / CachyOS NVIDIA Edition
-
-The Linux NVIDIA edition is distributed as a general AppImage, a `.deb` package for Ubuntu-family systems, and packages for CachyOS / Arch. An experimental x86-64-v3 package is also available for CachyOS systems with AVX2- and BMI2-capable CPUs. Use the general x86-64 package when compatibility is more important.
-
-The CachyOS / Arch NVIDIA package uses the host NVIDIA driver and CUDA driver runtime.
-It requires `nvidia-utils` (`nvidia-smi` and the NVIDIA user-space runtime); install the
-NVIDIA driver variant that matches the running kernel separately. CUDA Toolkit is not
-required at runtime. After installation, confirm that the GPU is listed:
-
-```sh
-nvidia-smi -L
-```
-
-On Linux, the audio-file picker uses the host locale and localized `xdg-user-dirs` through
-the XDG Desktop Portal. For an AppImage, install `xdg-desktop-portal` with a matching
-backend (for a standard GTK environment, `xdg-desktop-portal-gtk`) and `zenity` on the
-host. The CachyOS / Arch package declares these as required dependencies.
-
-On this Linux edition, transcription, speaker diarization, and LLM proofreading use CUDA.
-Because ggml-org does not publish a Linux CUDA `llama-server` archive, the distribution
-builds llama.cpp b10075 from its pinned official source and bundles the resulting server
-with the redistributable CUDA runtime libraries. The app does not fall back to Vulkan.
-See the
-[CachyOS / Arch distribution README](packaging/arch/README.md) for installation details.
-
-The CachyOS / Arch package does not force X11 and respects the existing Wayland / X11 and GTK IME environment. On affected NVIDIA systems, normal startup applies `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, avoiding a non-working DMA-BUF path while keeping the WebKitGTK compositor enabled. Use `LOTT_ENABLE_DMABUF_RENDERER=1 lott` only when retesting the hardware DMA-BUF path. The former `WEBKIT_DISABLE_DMABUF_RENDERER=1` setting is not used as a default because it also disables the compositor and degrades scrolling performance.
-
-## CPU Edition (Trial Use)
-
-LoTT CPU provides fully local transcription on PCs without a supported GPU. After transcription and speaker diarization finish, it automatically applies simple punctuation with local rules. Overall proofreading is not included. Installing the optional voice input pack also enables CPU-based voice input.
-
-**Because processing takes considerably longer, this edition is not recommended for regular, continuous use.** It is intended for trying LoTT with a small amount of audio or as a supplementary option when a supported GPU is unavailable.
-
-| Item | Minimum | Recommended |
-| --- | --- | --- |
-| OS | Windows 10 / 11 64-bit | Windows 11 64-bit |
-| CPU | AVX2 support, 4 cores / 8 threads | 6 cores / 12 threads or more |
-| RAM | **16 GB** | **24 GB or more** |
-| Free disk space | About 10 GB | About 15 GB or more |
-| GPU | Not required | Not required |
-
-- 16 GB RAM is the practical minimum for transcription, diarization, and simple punctuation. Running many other applications at the same time may cause slowdowns or out-of-memory failures.
-- Voice input also loads the Gemma 4 E4B model and audio mmproj, so 24 GB RAM or more is recommended. On a 16 GB system, close other applications before using it.
+- Only when no GPU can be used, the Full edition checks these minimum requirements at startup (at least 16 GB RAM, AVX2, and eight logical threads). If a requirement is not met, it identifies the shortage and exits. On supported systems, it still displays a notice about CPU processing and processing time at every launch.
+- Expected processing time is approximately 1.5-2.5 times the audio duration, but slower CPUs or difficult audio may take longer.
 - Systems with less than 16 GB RAM are unsupported because heavy swapping or out-of-memory failures are likely.
-- At startup, the CPU edition checks its minimum requirements (at least 16 GB RAM, AVX2, and eight logical threads). If a requirement is not met, it identifies the shortage and exits. On supported systems, it still displays the trial-use and processing-time notice at every launch.
-- Expected processing time is approximately 1.5–2.5 times the audio duration, but slower CPUs or difficult audio may take longer. On the development PC (Ryzen AI 9 HX 370, 12 cores / 24 threads), transcription with CPU `float32` plus diarization took about 19 minutes 16 seconds for 11 minutes 43 seconds of audio, or 1.64 times the audio duration.
+- Editor voice input always runs on the CPU and needs no GPU.
 
 ## Installation and Initial Setup
 
-1. Install the package that matches your OS, GPU, and intended use. On Windows, run the NSIS installer, `*_x64-setup.exe`
-2. In a Full or CPU edition, launch the app and run "Install Python packages" from the Setup tab. This requires an internet connection. The distribution includes the basic Python 3.12 runtime, but this step installs the packages used for transcription and diarization
-3. Download the required models from the same Setup tab
-   - Transcription model: Whisper turbo (the higher-accuracy large-v3 model can optionally be added later)
-   - Speaker diarization model: `pyannote-speaker-diarization-community-1`, which requires a Hugging Face token
-   - Proofreading LLM for CUDA / AMD editions: Gemma 4 E4B GGUF (initial setup for Full editions)
-   - E4B model and audio mmproj for voice input on CPU / Editor editions (when installing the voice input pack)
-   - Higher-accuracy proofreading LLM: Gemma 4 12B QAT+MTP, approximately 7 GB (optional on CUDA / AMD; Vulkan has no built-in LLM)
-   - Voice input pack (for microphone input on editions other than Vulkan)
+1. Run the Windows NSIS installer, `*_x64-setup.exe`, or install the Linux `.deb` / AppImage (`LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.*`), to install the Full or Editor edition
+2. Full edition: after launching the app, download the transcription models (Whisper large-v3-turbo and Silero VAD) and the speaker diarization model (Nemotron-3-Diarization) from the Setup tab. This requires an internet connection
+3. Editor edition: no models are needed for JSON import, editing, and export. To use voice input, download the "voice input pack" (Whisper large-v3-turbo and Silero VAD, about 1.6 GB) from Settings
 
-If a large Python-package download is interrupted, run setup again to resume as far as possible. The CPU edition can import and edit JSON before its Python packages are installed, but transcription requires setup. The Editor edition needs no Python packages or AI models for JSON import, editing, and export; install only the optional voice input pack if you want voice input.
+If a download is interrupted, run setup again to resume. After model downloads are complete, transcription, diarization, and proofreading can be used offline.
 
-After setup and model downloads are complete, transcription, diarization, and proofreading can be used offline. If the Linux NVIDIA edition still reports that CUDA is unavailable, confirm `nvidia-smi -L` works and then use "Check GPU again" in Settings.
+On a PC where an older edition was installed, the Settings tab of the Full edition may show a deletion list of leftover data from that edition (old Gemma models, the old Python environment, old proofreading-engine caches, and so on). These are unneeded runtime resources, not conversation data.
 
 ## Usage
 
 1. Select an audio file and run transcription
 2. Listen to the audio while editing the conversation text and speaker labels. Default speaker labels include `SPEAKER_00 -> Th` and `SPEAKER_01 -> Cl`
-   - While editing, Vulkan uses the already-installed whisper.cpp model for microphone input; other supported editions use the voice input pack
+   - While editing, you can insert microphone-input candidates produced by the installed whisper.cpp model (for Editor, after installing the voice input pack)
    - Shortcuts include `Ctrl+Shift+Space` (continuous playback / pause), `Ctrl+Shift+A` / `D` (seek back / forward 5 seconds), `Ctrl+Shift+E` (change speaker), and `Ctrl+Shift+M` (voice input)
-3. Run overall proofreading if needed (CUDA / AMD only, using Gemma 4 E4B or the optional 12B model). Vulkan does not include overall proofreading
-4. Save as Word, Excel, SRT subtitles, or JSON
+3. Save as Word, Excel, SRT subtitles, or JSON
 
 Use the button at the left of the tab row to cycle among System (default), Light, and Dark themes. The selection is preserved across launches.
 
 ## Technology Stack
 
-- Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material / Sidecar: Python
-- ASR: faster-whisper (turbo by default / optional higher-accuracy large-v3, downloaded later) / Diarization: pyannote.audio / Audio decoding: LGPL-configured ffmpeg CLI
-- Vulkan edition: transcription with whisper.cpp (large-v3-turbo, Silero VAD) / speaker diarization with NeMo-Speech.cpp + Nemotron-3-Diarization / local rule-based punctuation (audio engines use the CPU when no GPU is available). It includes no LLM or overall proofreading
-- Voice input: Vulkan uses whisper.cpp (two transcription passes: with a filler-example prompt, then without one; the second gets rule-based punctuation and is added only when different. Context from surrounding lines is not sent). Other supported editions use Gemma 4 E4B with an audio mmproj (llama.cpp llama-server, OpenAI-compatible `input_audio`, loopback only)
-- LLM proofreading: CUDA / AMD use Gemma 4 E4B by default or Gemma 4 12B QAT+MTP as the optional higher-accuracy model. Vulkan has no LLM proofreading. Windows and Linux NVIDIA use direct CUDA launch; AMD prefers ROCm with a Vulkan backend fallback. LLM editions use bundled or downloaded llama.cpp llama-server plus a local OpenAI-compatible API restricted to loopback
+- Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material
+- Transcription: whisper.cpp (large-v3-turbo, Silero VAD; Vulkan build bundled) / Speaker diarization: NeMo-Speech.cpp + Nemotron-3-Diarization (Vulkan build bundled) / Audio decoding: LGPL-configured ffmpeg CLI
+- Punctuation: local rules in Rust. No LLM is used
+- Voice input: whisper.cpp (one transcription pass with a filler-example prompt, giving 1 candidate; context from surrounding lines is not sent)
+- Python is neither bundled nor used
 
 ## Documentation
 
@@ -186,10 +105,10 @@ Use the button at the left of the tab row to cycle among System (default), Light
 - Offline verification steps (Japanese): [docs/offline-verification.md](docs/offline-verification.md)
 - Template for research ethics review (IRB) documents (Japanese): [docs/irb-template.md](docs/irb-template.md)
 - Development environment setup and internal notes: [docs/development.md](docs/development.md)
-- Linux NVIDIA CUDA distribution build: [docs/release-build-linux.md](docs/release-build-linux.md)
-- Troubleshooting, including CUDA and AMD ROCm: [docs/troubleshooting.md](docs/troubleshooting.md)
+- ggml speech engine design (Japanese): [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
+- Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Distribution builds, Windows NSIS: [docs/release-build-windows.md](docs/release-build-windows.md)
-- FFmpeg / PyAV licensing policy: [docs/lgpl-pyav-build.md](docs/lgpl-pyav-build.md)
+- Linux distribution build (deb / AppImage; unverified): [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## License
 

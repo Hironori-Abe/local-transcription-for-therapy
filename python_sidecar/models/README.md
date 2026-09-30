@@ -1,24 +1,29 @@
 ﻿# Models Directory
 
-このディレクトリには、話者分離で使うローカルモデルを配置します。
-実体モデルは大容量のため Git には含めません。
+このディレクトリ（と `python_sidecar/speech-engines/`）は、**開発時**に ggml 音声エンジンとモデルを置く場所です。
+Python のコードはありません（名前は履歴上の都合で残っています）。実体は大容量のため Git には含めません。
 
-## 対象パス
+## 配置されるもの
 
-- `python_sidecar/models/pyannote-speaker-diarization-community-1/`
+| パス | 内容 |
+| --- | --- |
+| `whisper-ggml/ggml-large-v3-turbo.bin` | 文字起こしモデル（Whisper large-v3-turbo） |
+| `whisper-ggml/ggml-silero-v6.2.0.bin` | 無音検出（Silero VAD） |
+| `nemotron-3-diarization/Nemotron-3-Diarization.q8_0.gguf` | 話者分離モデル（Nemotron-3-Diarization、OpenMDW-1.1） |
+| `../speech-engines/whisper/`、`../speech-engines/nemo/` | whisper.cpp / NeMo-Speech.cpp の実行ファイル |
 
-## 取得方法（概要）
+## 取得方法
 
-1. Hugging Face で以下モデルの利用規約に同意
-   - `pyannote/speaker-diarization-community-1`
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\setup-ggml-speech-windows.ps1
+```
 
-2. アプリ内セットアップからダウンロード
-
-3. `python_sidecar/models/pyannote-speaker-diarization-community-1/config.yaml` が存在することを確認
+- エンジンを固定 commit からビルドし、モデルを固定 revision から取得して SHA-256 を検証します。Hugging Face のトークンは不要です。
+- `-SkipModels` / `-SkipBuild` / `-SkipNemo` で工程を省略できます。
+- ネットワークを使うのはこのセットアップ時だけです。アプリの実行時は通信しません。
 
 ## 補足
 
-- このアプリは `DIARIZATION_MODEL_PATH` が未設定の場合、
-  `python_sidecar/models/pyannote-speaker-diarization-community-1` を優先して参照します。
-- インターネット不要運用にする場合は、事前にこのディレクトリへモデル一式を配置してください。
-- `community-1` は `pyannote.audio 4.x` が必要です。
+- 開発版のアプリは `python_sidecar/speech-engines` と `python_sidecar/models` を参照します（`resolve_ggml_speech_paths`）。
+- リリース版のモデルは `%LOCALAPPDATA%\{identifier}\models\`、エンジンは同梱の `resources/speech-engines` です。
+- モデルの取得元・revision・SHA-256 は `src-tauri/src/ggml_speech.rs` の `GGML_MODEL_FILES` が単一の基準です。

@@ -5,14 +5,14 @@
 .DESCRIPTION
     scripts\setup-build-tools.bat --vulkan から呼ばれる。単独でも実行できる。
 
-      powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 [-SkipEngines] [-SkipPython]
+      powershell -ExecutionPolicy Bypass -File scripts\prepare-vulkan-bundle-windows.ps1 [-SkipEngines] [-SkipPython] [-WhisperOnly]
 
     配置先（いずれも git 管理外）:
       src-tauri\resources\speech-engines\{whisper,nemo}\  whisper.cpp / NeMo-Speech.cpp の Vulkan 版（固定 commit からビルド）
       %LOCALAPPDATA%\lott-ggml-speech-build\python-<版>-build\  ビルド用の Python 3.12 embeddable（同梱しない）
 
-    - Vulkan 版は LLM / Python を同梱しない。句読点付与はローカルルールを使い、暗号化保存・モデル取得は Rust で行う。
-      ビルド用の Python は setup-build-tools.bat が ffmpeg 取得・ライセンス収集・成果物整理に使う（標準ライブラリのみ）
+    - Vulkan / Editor 版は LLM / Python を同梱しない。Editor は Whisper のみ、Vulkan は Whisper と NeMo を同梱する。
+      ビルド用の Python は setup-build-tools.bat がライセンス収集・成果物整理に使う（標準ライブラリのみ）
     - モデルは同梱しない（初回起動後にアプリのセットアップ画面から取得する）
     - VC++ ランタイム（MSVCP140 など）を各実行ファイルの隣へ置く。VC++ 再頒布パッケージが入っていない PC でも動かすため
     - ネットワークを使うのはこのビルド準備の時だけ
@@ -22,7 +22,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipEngines,
-    [switch]$SkipPython
+    [switch]$SkipPython,
+    [switch]$WhisperOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +39,13 @@ $PythonVersion = '3.12.10'
 $PythonZipUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
 # setup-build-tools.bat がこのパスを参照する。変えるときは両方を直す
 $BuildPythonDir = Join-Path $Work "python-$PythonVersion-build"
+
+# Vulkan ローダー（vulkan-1.dll）。GPU ドライバーが無い PC では System32 に無いため、
+# アプリが PATH 経由で同梱コピーを使う。エンジン exe の隣には置かない（新しいシステム側ローダーを隠すため）
+$VulkanRuntimeVersion = '1.4.357.0'
+$VulkanRuntimeSha256 = 'a14672efed15aafc7f5a16572d35cd3a3416eadf670aeee3cdf50ee32d5fbf83'
+$VulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$VulkanRuntimeVersion/windows/VulkanRT-X64-$VulkanRuntimeVersion-Components.zip"
+$VulkanLoaderDir = Join-Path $EnginesDir 'vulkan-loader'
 
 function Log([string]$Message) { Write-Host "[vulkan-bundle] $Message" }
 
@@ -68,14 +76,55 @@ function Copy-VcRuntime([string]$Dest) {
 
 # ---- 1. whisper.cpp / NeMo-Speech.cpp（Vulkan） ---------------------------------
 if (-not $SkipEngines) {
-    Log 'ggml エンジン（Vulkan）をビルドして同梱先へ配置'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'setup-ggml-speech-windows.ps1') `
-        -Backend vulkan -EnginesDir $EnginesDir -SkipModels
+    $engineLabel = if ($WhisperOnly) { 'whisper.cpp（Vulkan）' } else { 'whisper.cpp / NeMo-Speech.cpp（Vulkan）' }
+    Log "ggml エンジン $engineLabel をビルドして同梱先へ配置"
+    $buildArgs = @('-Backend', 'vulkan', '-EnginesDir', $EnginesDir, '-SkipModels')
+    if ($WhisperOnly) { $buildArgs += '-SkipNemo' }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'setup-ggml-speech-windows.ps1') @buildArgs
     if ($LASTEXITCODE -ne 0) { throw 'ggml エンジンのビルドに失敗しました。' }
-    foreach ($engine in 'whisper', 'nemo') {
+    $enginesToCopy = @('whisper', 'nemo')
+    if ($WhisperOnly) { $enginesToCopy = @('whisper') }
+    foreach ($engine in $enginesToCopy) {
         Copy-VcRuntime (Join-Path $EnginesDir "$engine\bin")
     }
 }
+
+# ---- 1b. Vulkan ローダー（LunarG 公式 Runtime。-SkipEngines でも配置する） ----------
+function Install-VulkanLoader {
+    New-Item -ItemType Directory -Force $Work | Out-Null
+    $zip = Join-Path $Work "VulkanRT-X64-$VulkanRuntimeVersion-Components.zip"
+    if (-not (Test-Path $zip)) {
+        Log "Vulkan Runtime $VulkanRuntimeVersion を取得: $VulkanRuntimeUrl"
+        Get-File $VulkanRuntimeUrl $zip
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+    if ($actual -ne $VulkanRuntimeSha256) {
+        Remove-Item -Force $zip
+        throw "Vulkan Runtime の SHA-256 が一致しません（期待 $VulkanRuntimeSha256 / 実際 $actual）。キャッシュを削除しました。"
+    }
+    $extract = Join-Path $Work "VulkanRT-$VulkanRuntimeVersion-extract"
+    if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+    Expand-Archive -Path $zip -DestinationPath $extract
+    $root = Join-Path $extract "VulkanRT-X64-$VulkanRuntimeVersion-Components"
+    $dll = Join-Path $root 'x64\vulkan-1.dll'
+    $license = Join-Path $root 'VulkanRT-License.txt'
+    if (-not (Test-Path $dll) -or -not (Test-Path $license)) { throw 'Vulkan Runtime zip に x64\vulkan-1.dll / VulkanRT-License.txt がありません。' }
+    if (Test-Path $VulkanLoaderDir) { Remove-Item -Recurse -Force $VulkanLoaderDir }
+    New-Item -ItemType Directory -Force $VulkanLoaderDir | Out-Null
+    Copy-Item $dll (Join-Path $VulkanLoaderDir 'vulkan-1.dll')
+    Copy-Item $license (Join-Path $VulkanLoaderDir 'LICENSE-Vulkan-Loader.txt')
+    $info = @(
+        'Vulkan Loader (vulkan-1.dll, x64) - LunarG Vulkan Runtime redistributable',
+        "Version: $VulkanRuntimeVersion",
+        "Source: $VulkanRuntimeUrl",
+        "SHA-256 (zip): $VulkanRuntimeSha256",
+        'License: Apache-2.0 (see LICENSE-Vulkan-Loader.txt)'
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $VulkanLoaderDir 'BUILD_INFO.txt'), $info + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+    Remove-Item -Recurse -Force $extract
+    Log "Vulkan ローダーを配置: $VulkanLoaderDir"
+}
+Install-VulkanLoader
 
 # ---- 2. ビルド用 Python（同梱しない。標準ライブラリのみ） ------------------------
 if (Test-Path $LegacyLlamaDir) {

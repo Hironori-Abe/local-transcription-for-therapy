@@ -56,11 +56,6 @@ export interface SegmentStructureResult<Word, Metadata> {
   createdIds: number[];
 }
 
-export interface ApplyTextUpdatesResult<T> {
-  rows: T[];
-  changed: boolean;
-}
-
 export function splitTextAtSentenceEndings(text: string, japanese: boolean): string[] {
   const tokens = text.split(japanese ? /(。|？|！)/ : /([.?!]+)(?=\s|$)/);
   const parts: string[] = [];
@@ -322,26 +317,6 @@ export function insertTextAtSelection(
     text: `${base.slice(0, start)}${insertedText}${base.slice(end)}`,
     caret: start + insertedText.length
   };
-}
-
-/** 指定された本文だけを不変更新し、変更されなかった行の参照を維持する。 */
-export function applyTextUpdates<T extends TextRow>(
-  rows: ReadonlyArray<T>,
-  textsById: Readonly<Record<number, string>>
-): ApplyTextUpdatesResult<T> {
-  let changed = false;
-  const updatedRows = rows.map((row) => {
-    if (!Object.prototype.hasOwnProperty.call(textsById, row.id)) {
-      return row;
-    }
-    const text = textsById[row.id];
-    if (typeof text !== 'string' || text === row.text) {
-      return row;
-    }
-    changed = true;
-    return { ...row, text };
-  });
-  return { rows: updatedRows, changed };
 }
 
 function clampSelectionIndex(value: number, length: number): number {

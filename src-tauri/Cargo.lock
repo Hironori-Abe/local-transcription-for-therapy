@@ -2034,6 +2034,7 @@ dependencies = [
  "encoding_rs",
  "getrandom 0.2.17",
  "hmac",
+ "libc",
  "regex",
  "serde",
  "serde_json",

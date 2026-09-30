@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ubuntu 24.04でLinux配布用の .deb / AppImage を再現可能にビルドする。
-# 引数無しは NVIDIA、--amd / --cpu / --editor で配布ラインを明示する。
+# 引数無しは Full 版（whisper.cpp + NeMo-Speech.cpp の Vulkan 版）、--editor で軽量 Editor 版。
 # Dockerデーモンへのアクセス権がない場合は、呼び出し側で sudo を付ける。
 set -euo pipefail
 
@@ -8,27 +8,24 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="lott-appimage-builder:ubuntu24"
 TARGET_DIR="$ROOT_DIR/src-tauri/target-ubuntu24"
 
-CONFIG_NVIDIA="tauri.nvidia.linux.override.json"
-CONFIG_AMD="tauri.amd.linux.override.json"
-CONFIG_CPU="tauri.cpu.linux.override.json"
+# Full 版は src-tauri/tauri.conf.json（NSIS のみ）に Linux 用の上書き（deb + AppImage）を重ねる。
+CONFIG_FULL="tauri.linux.override.json"
 CONFIG_EDITOR="tauri.editor.linux.override.json"
-BUILD_CONFIG="$CONFIG_NVIDIA"
-BUILD_LINE="NVIDIA CUDA"
+BUILD_CONFIG="$CONFIG_FULL"
+BUILD_LINE="Full (Vulkan)"
 BUILD_OPTION=""
-BUILD_VENV_DIR="/workspace/.venv312-nvidia"
 DRY_RUN=0
 
 usage() {
-  cat <<EOF
-Usage: $0 [--amd | --cpu | --editor] [--dry-run]
+  cat <<USAGE
+Usage: $0 [--editor] [--dry-run]
 
-  (デフォルト) NVIDIA CUDA 版 .deb / .AppImage をビルドします。
-  --amd        AMD ROCm 版をビルドします。
-  --cpu        CPU 版をビルドします。
+  (デフォルト) Full 版 .deb / .AppImage をビルドします（Vulkan: NVIDIA / AMD / Intel 共通、GPU が無ければ CPU）。
   --editor     軽量 Editor 版をビルドします。
+  --vulkan     Full 版の旧称です（デフォルトと同じ）。
   --dry-run    Docker を実行せず、選択内容と伝播する引数を表示します。
   -h, --help   このヘルプを表示します。
-EOF
+USAGE
 }
 
 select_build_line() {
@@ -42,16 +39,11 @@ select_build_line() {
   BUILD_OPTION="$option"
   BUILD_LINE="$line"
   BUILD_CONFIG="$config"
-  case "$option" in
-    --amd) BUILD_VENV_DIR="/workspace/.venv312-amd" ;;
-    --cpu|--editor) BUILD_VENV_DIR="/workspace/.venv312-cpu" ;;
-  esac
 }
 
 for arg in "$@"; do
   case "$arg" in
-    --amd) select_build_line "--amd" "AMD ROCm" "$CONFIG_AMD" ;;
-    --cpu) select_build_line "--cpu" "CPU" "$CONFIG_CPU" ;;
+    --vulkan) select_build_line "" "Full (Vulkan)" "$CONFIG_FULL" ;;
     --editor) select_build_line "--editor" "Editor" "$CONFIG_EDITOR" ;;
     --dry-run) DRY_RUN=1 ;;
     --help|-h)
@@ -103,7 +95,7 @@ echo ""
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[DRY-RUN] docker build は実行しません。"
-  echo "[DRY-RUN] docker run 内で setup-build-tools-linux.sh に渡す引数: ${BUILD_OPTION:-（引数無し / NVIDIA）}"
+  echo "[DRY-RUN] docker run 内で setup-build-tools-linux.sh に渡す引数: ${BUILD_OPTION:-（引数無し / Full）}"
   echo "[DRY-RUN] 伝播用環境変数: LOTT_BUILD_LINE_OPTION=${BUILD_OPTION}"
   exit 0
 fi
@@ -115,13 +107,6 @@ if [[ -z "$HOST_GID" ]]; then
 fi
 
 cd "$ROOT_DIR"
-
-if [[ "$BUILD_OPTION" == "" ]]; then
-  # ggml-org publishes CUDA llama-server archives for Windows, but not Linux.
-  # Prepare the pinned source build on the host before mounting the repository
-  # into the Ubuntu AppImage builder container.
-  bash scripts/build-llama-server-cuda-linux.sh --ensure
-fi
 
 echo "[INFO] Ubuntu 24.04 AppImageビルダーを準備します..."
 docker build \
@@ -135,9 +120,9 @@ docker run --rm \
   --volume lott-ubuntu-cargo-registry:/root/.cargo/registry \
   --volume lott-ubuntu-cargo-git:/root/.cargo/git \
   --volume lott-ubuntu-tauri-cache:/root/.cache/tauri \
+  --volume lott-ubuntu-ggml-speech-build:/root/.cache/lott-ggml-speech-build \
   --workdir /workspace \
   --env CARGO_TARGET_DIR=/workspace/src-tauri/target-ubuntu24 \
-  --env "LOTT_VENV_DIR=$BUILD_VENV_DIR" \
   --env "LOTT_BUILD_LINE_OPTION=$BUILD_OPTION" \
   --env HOST_UID="$HOST_UID" \
   --env HOST_GID="$HOST_GID" \
@@ -145,8 +130,6 @@ docker run --rm \
   bash -lc '
     set -euo pipefail
     build_status=0
-    mkdir -p /workspace/src-tauri/resources/python312-linux
-    cp -a /opt/lott-python312/. /workspace/src-tauri/resources/python312-linux/
     if [[ -n "${LOTT_BUILD_LINE_OPTION:-}" ]]; then
       bash scripts/setup-build-tools-linux.sh "$LOTT_BUILD_LINE_OPTION" || build_status=$?
     else
@@ -156,7 +139,8 @@ docker run --rm \
       /workspace/src-tauri/target-ubuntu24 \
       /workspace/frontend/dist \
       /workspace/licenses \
-      /workspace/src-tauri/resources/python312-linux \
+      /workspace/dist \
+      /workspace/src-tauri/resources/speech-engines \
       /workspace/src-tauri/resources/ffmpeg 2>/dev/null || true
     exit "$build_status"
   '

@@ -1,4 +1,3 @@
 export const environment = {
-  editorOnly: false,
-  cpuOnly: false
+  editorOnly: false
 };

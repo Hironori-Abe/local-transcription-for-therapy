@@ -1,50 +1,28 @@
 #!/usr/bin/env bash
+# Development launcher for the Full edition (Vulkan: NVIDIA, AMD, and Intel; CPU without a GPU).
+# Speech engines: python_sidecar/speech-engines (whisper.cpp / NeMo-Speech.cpp).
+# Setup: bash scripts/setup-dev.sh
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DEV_VARIANT="${LOTT_DEV_VARIANT:-}"
-case "$DEV_VARIANT" in
-  nvidia)
-    EXPECTED_TORCH_BACKEND="cuda"
-    DEFAULT_ENV_FILE="$ROOT_DIR/.dev-linux-cuda.env"
-    DEFAULT_VENV_DIR="$ROOT_DIR/.venv312-nvidia"
-    DEFAULT_TAURI_CONFIGS="tauri.nvidia.linux.override.json tauri.nvidia.dev.linux.override.json"
-    ;;
-  amd)
-    EXPECTED_TORCH_BACKEND="rocm"
-    DEFAULT_ENV_FILE="$ROOT_DIR/.dev-linux-rocm.env"
-    DEFAULT_VENV_DIR="$ROOT_DIR/.venv312-amd"
-    DEFAULT_TAURI_CONFIGS="tauri.amd.linux.override.json tauri.amd.dev.linux.override.json"
-    ;;
-  cpu)
-    EXPECTED_TORCH_BACKEND="cpu"
-    DEFAULT_ENV_FILE="$ROOT_DIR/.dev-linux-cpu.env"
-    DEFAULT_VENV_DIR="$ROOT_DIR/.venv312-cpu"
-    DEFAULT_TAURI_CONFIGS="tauri.cpu.linux.override.json tauri.cpu.dev.linux.override.json"
-    ;;
-  *)
-    printf '[ERROR] Linux development variant was not selected; refusing to default to NVIDIA/CUDA.\n' >&2
-    printf '        Use one of:\n' >&2
-    printf '          bash scripts/run-dev-nvidia.sh\n' >&2
-    printf '          bash scripts/run-dev-amd.sh\n' >&2
-    printf '          bash scripts/run-dev-cpu.sh\n' >&2
-    exit 2
-    ;;
-esac
-
+TAURI_CONFIGS_STRING="${LOTT_TAURI_CONFIGS:-tauri.dev.linux.override.json}"
 FRONTEND_PID=""
 FRONTEND_STARTED=0
 FRONTEND_HOST="${LOTT_FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${LOTT_FRONTEND_PORT:-4200}"
 FRONTEND_URL="${LOTT_FRONTEND_URL:-http://${FRONTEND_HOST}:${FRONTEND_PORT}}"
 FRONTEND_BUILD_TARGET="${LOTT_FRONTEND_BUILD_TARGET:-}"
-DEV_ENV_FILE="$DEFAULT_ENV_FILE"
-TAURI_CONFIGS_STRING="$DEFAULT_TAURI_CONFIGS"
-EMULATION_MODE="${LOTT_DEV_EMULATION_MODE:-${RUN_DEV_EMULATION_MODE:-none}}"
-EMULATION_STATE_FILE="$ROOT_DIR/.dev-runtime-emulation.env"
 export LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS="${LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS:-1800}"
+
+# Options: --cpu (dev only) sets LOTT_DEV_FORCE_CPU=1 so the app treats the GPU as absent.
+for arg in "$@"; do
+  case "$arg" in
+    --cpu) export LOTT_DEV_FORCE_CPU=1 ;;
+    *) printf '[ERROR] Unknown option: %s (supported: --cpu)\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 info() {
   printf '[INFO] %s\n' "$*"
@@ -69,7 +47,7 @@ have() {
 
 check_linux_audio_plugins() {
   if ! have gst-inspect-1.0; then
-    die "GStreamer tools were not found. Run scripts/setup-dev-${DEV_VARIANT}.sh to install the required LGPL GStreamer plugins."
+    die "GStreamer tools were not found. Run scripts/setup-dev.sh to install the required LGPL GStreamer plugins."
   fi
 
   # WebKitGTK delegates <audio> playback to GStreamer. In particular, MP3 files with
@@ -85,10 +63,7 @@ check_linux_audio_plugins() {
   done
   if [[ "${#missing_plugins[@]}" -gt 0 ]]; then
     warn "Required GStreamer plugins are missing: ${missing_plugins[*]}"
-    if have pacman; then
-      die "Run 'bash scripts/setup-dev-${DEV_VARIANT}.sh' and allow CachyOS/Arch system package installation. The setup must finish with the GStreamer verification [OK] before rerunning this script."
-    fi
-    die "Run 'bash scripts/setup-dev-${DEV_VARIANT}.sh' and allow Ubuntu system package installation. The setup must finish with the GStreamer verification [OK] before rerunning this script."
+    die "Run 'bash scripts/setup-dev.sh' and allow system package installation. The setup must finish with the GStreamer verification [OK] before rerunning this script."
   fi
 }
 
@@ -104,6 +79,7 @@ load_cargo_env() {
   fi
 }
 
+# Snap 版ブラウザなどが LD_LIBRARY_PATH へ足す Snap 側ライブラリは glibc/WebKit と衝突するため外す。
 sanitize_ld_library_path() {
   if [[ -z "${LD_LIBRARY_PATH:-}" ]]; then
     return
@@ -119,20 +95,6 @@ sanitize_ld_library_path() {
     case "$path_entry" in
       /snap/*|/var/lib/snapd/snap/*)
         removed+=("$path_entry")
-        ;;
-      */site-packages/nvidia/*|*/cuda|*/cuda/*|*/cuda-*|*/cuda-*/*)
-        if [[ "$DEV_VARIANT" != "nvidia" ]]; then
-          removed+=("$path_entry")
-        else
-          kept+=("$path_entry")
-        fi
-        ;;
-      /opt/rocm|/opt/rocm/*)
-        if [[ "$DEV_VARIANT" != "amd" ]]; then
-          removed+=("$path_entry")
-        else
-          kept+=("$path_entry")
-        fi
         ;;
       *)
         kept+=("$path_entry")
@@ -153,7 +115,7 @@ sanitize_ld_library_path() {
     unset LD_LIBRARY_PATH
   fi
 
-  warn "Removed library paths that do not belong to the $DEV_VARIANT development runtime."
+  warn "Removed Snap library paths from LD_LIBRARY_PATH to avoid glibc/libpthread conflicts."
 }
 
 cleanup() {
@@ -165,121 +127,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-case "$EMULATION_MODE" in
-  no_cuda|missing_community1|none)
-    ;;
-  *)
-    EMULATION_MODE="none"
-    ;;
-esac
-export LOTT_DEV_EMULATION_MODE="$EMULATION_MODE"
-
-cat > "$EMULATION_STATE_FILE" <<EOF
-# LoTT dev emulation flags
-LOTT_DEV_EMULATION_MODE=$EMULATION_MODE
-EOF
-
-if [[ -f "$DEV_ENV_FILE" ]]; then
-  # shellcheck disable=SC1091
-  source "$DEV_ENV_FILE"
-  info "Loaded $DEV_VARIANT dev environment: ${DEV_ENV_FILE#$ROOT_DIR/}"
-else
-  info "${DEV_ENV_FILE#$ROOT_DIR/} was not found. Using the $DEV_VARIANT local fallback."
-fi
-
-if [[ -n "${LOTT_TORCH_BACKEND:-}" && "$LOTT_TORCH_BACKEND" != "$EXPECTED_TORCH_BACKEND" ]]; then
-  die "Backend mismatch: $DEV_VARIANT launcher requires $EXPECTED_TORCH_BACKEND, but the environment selected $LOTT_TORCH_BACKEND."
-fi
-export LOTT_TORCH_BACKEND="$EXPECTED_TORCH_BACKEND"
-if [[ "$DEV_VARIANT" != "nvidia" ]]; then
-  unset CUDA_HOME CUDA_PATH LOTT_NVIDIA_LIB_PATHS
-fi
-if [[ "$DEV_VARIANT" != "amd" ]]; then
-  unset ROCM_PATH HIP_PATH LOTT_ROCM_LIB_PATHS
-fi
-
 sanitize_ld_library_path
 
-if [[ -z "${PYTHON_BIN:-}" ]]; then
-  if [[ -x "$DEFAULT_VENV_DIR/bin/python" ]]; then
-    PYTHON_BIN="$DEFAULT_VENV_DIR/bin/python"
-  else
-    PYTHON_BIN="python3"
-  fi
-  export PYTHON_BIN
-fi
-if [[ "$PYTHON_BIN" == "python3" ]]; then
-  die "The $DEV_VARIANT backend-specific Python environment was not found. Run bash scripts/setup-dev-${DEV_VARIANT}.sh first."
-fi
-
-if [[ -z "${DIARIZATION_PYTHON_BIN:-}" ]]; then
-  DIARIZATION_PYTHON_BIN="$PYTHON_BIN"
-  export DIARIZATION_PYTHON_BIN
-fi
-
-have npm || die "npm was not found. Please run scripts/setup-dev-${DEV_VARIANT}.sh first."
+have npm || die "npm was not found. Run scripts/setup-dev.sh first."
+have curl || die "curl was not found. Please install curl so the script can wait for the frontend."
 load_cargo_env
-have cargo || die "cargo was not found. Run scripts/setup-dev-${DEV_VARIANT}.sh first, or 'source \$HOME/.cargo/env'."
+have cargo || die "cargo was not found. Run scripts/setup-dev.sh first, or 'source \$HOME/.cargo/env'."
 check_linux_audio_plugins
-if [[ "$PYTHON_BIN" == */* && ! -x "$PYTHON_BIN" ]]; then
-  die "Python executable was not found or is not executable: $PYTHON_BIN"
-fi
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1 && [[ "$PYTHON_BIN" != */* ]]; then
-  die "Python command was not found: $PYTHON_BIN"
-fi
-if ! "$PYTHON_BIN" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)" >/dev/null 2>&1; then
-  die "The $DEV_VARIANT development runtime must use Python 3.12. Run bash scripts/setup-dev-${DEV_VARIANT}.sh to recreate its backend-specific venv."
-fi
 
-info "Python preflight:"
-"$PYTHON_BIN" -c "import sys; print('executable=', sys.executable); print('version=', sys.version)" \
-  || die "Python preflight failed."
-
-if [[ "$EMULATION_MODE" == "no_cuda" ]]; then
-  info "LOTT_DEV_EMULATION_MODE=no_cuda"
-  info "Emulating a machine without CUDA support."
-elif [[ "${LOTT_TORCH_BACKEND:-}" == "rocm" ]]; then
-  info "ROCm/PyTorch preflight:"
-  if ! "$PYTHON_BIN" -c "import torch; print('torch=', torch.__version__); print('torch_hip=', getattr(torch.version, 'hip', None)); print('torch_rocm_available=', torch.cuda.is_available()); print('torch_rocm_device_count=', torch.cuda.device_count())"; then
-    warn "ROCm PyTorch preflight failed. LLM-only development can still use the downloaded llama.cpp ROCm/Vulkan llama-server."
-  fi
-elif [[ "${LOTT_TORCH_BACKEND:-}" == "cpu" ]]; then
-  info "CPU PyTorch backend requested. Skipping CUDA preflight."
-else
-  info "ctranslate2 CUDA preflight:"
-  if ! "$PYTHON_BIN" -c "import ctranslate2 as ct; n=ct.get_cuda_device_count(); print('cuda_device_count=', n); raise SystemExit(0 if n > 0 else 2)"; then
-    warn "ctranslate2 CUDA preflight failed in this terminal."
-    warn "Transcription may be unavailable; Read/Edit and LLM proofreading development can continue."
-  fi
-fi
-
-if [[ "$EMULATION_MODE" == "missing_community1" ]]; then
-  info "LOTT_DEV_EMULATION_MODE=missing_community1"
-  info "Emulating missing diarization model: community-1."
-fi
-info "Emulation state saved: $EMULATION_STATE_FILE"
-
-if [[ "$LOTT_TORCH_BACKEND" == "rocm" ]]; then
-  info "LLM backend: downloaded llama.cpp ROCm/Vulkan llama-server direct launch."
-elif [[ "$LOTT_TORCH_BACKEND" == "cpu" ]]; then
-  info "LLM backend: downloaded llama.cpp CPU llama-server direct launch."
-else
-  info "LLM backend: bundled Linux CUDA llama-server direct launch."
-fi
-
-if [[ ! -d "$ROOT_DIR/python_sidecar/models/pyannote-speaker-diarization-community-1" ]]; then
-  info "Diarization model directory not found."
-  info "Creating placeholder directory so Tauri resource checks pass."
-  info "Speaker diarization will be unavailable at runtime."
-  mkdir -p "$ROOT_DIR/python_sidecar/models/pyannote-speaker-diarization-community-1"
+WHISPER_BIN="${LOTT_WHISPER_CPP_BIN:-$ROOT_DIR/python_sidecar/speech-engines/whisper/bin/whisper-cli}"
+NEMO_BIN="${LOTT_NEMO_SPEECH_BIN:-$ROOT_DIR/python_sidecar/speech-engines/nemo/bin/nemo-speech}"
+if [[ ! -x "$WHISPER_BIN" || ! -x "$NEMO_BIN" ]]; then
+  die "ggml speech engines were not found. Run: bash scripts/setup-dev.sh (or bash scripts/setup-ggml-speech-linux.sh)"
 fi
 
 frontend_ready() {
-  if have curl; then
-    curl -fsS "$FRONTEND_URL" >/dev/null 2>&1
-  else
-    return 1
-  fi
+  curl -fsS "$FRONTEND_URL" >/dev/null 2>&1
 }
 
 if frontend_ready; then
@@ -292,7 +155,7 @@ else
       --port "$FRONTEND_PORT" \
       --build-target "$FRONTEND_BUILD_TARGET" &
   else
-    npm --prefix frontend run start &
+    npm --prefix frontend run start -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" &
   fi
   FRONTEND_PID="$!"
   FRONTEND_STARTED=1
@@ -321,16 +184,11 @@ for config in "${TAURI_CONFIGS[@]}"; do
   TAURI_ARGS+=(--config "$config")
 done
 
-info "Starting Tauri dev ($DEV_VARIANT)..."
+info "Starting Tauri dev (Full edition)..."
 info "Tauri configs=${TAURI_CONFIGS[*]}"
-info "PYTHON_BIN=$PYTHON_BIN"
-info "DIARIZATION_PYTHON_BIN=$DIARIZATION_PYTHON_BIN"
 info "LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS=$LOTT_DEV_WINDOW_FOCUS_DEBOUNCE_MS"
-
-# WebKitGTK on Linux with ROCm: /opt/rocm/lib in LD_LIBRARY_PATH can cause WebKit's GPU
-# compositor to load ROCm's OpenGL/Vulkan instead of Mesa's display stack, causing a segfault.
-# Disabling compositing mode here avoids the crash without affecting the Python sidecar.
-# export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
-# info "WEBKIT_DISABLE_COMPOSITING_MODE=$WEBKIT_DISABLE_COMPOSITING_MODE"
+if [[ "${LOTT_DEV_FORCE_CPU:-}" == "1" ]]; then
+  info "LOTT_DEV_FORCE_CPU=1: speech engines run on CPU only (dev builds)."
+fi
 
 npm run tauri:dev -- "${TAURI_ARGS[@]}"

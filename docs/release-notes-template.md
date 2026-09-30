@@ -1,7 +1,7 @@
 # Local Transcription for Therapy (LoTT) vX.Y.Z
 
 <!-- このファイルを release-notes-vX.Y.Z.md としてコピーして記入し、GitHub Release 本文に貼り付ける。 -->
-<!-- アセット名・SHA256SUMS の手順は docs/release-build-windows.md「4. GitHub Release 公開手順」を参照。 -->
+<!-- アセット名・SHA256SUMS の手順は docs/release-build-windows.md「3. GitHub Release 公開手順」を参照。 -->
 
 臨床心理・カウンセリング会話のための、ローカル完結の日本語文字起こしデスクトップアプリです。
 文字起こし・話者分離・文章校正を、会話データを PC の外へ送ることなく実行できます。
@@ -10,16 +10,11 @@
 
 | ファイル | 対象 | 備考 |
 | --- | --- | --- |
-| `LoTT-vX.Y.Z-windows-x64-cuda-setup.exe` | NVIDIA GPU (CUDA 12.x) | 主配布・安定版 |
-| `LoTT-vX.Y.Z-windows-x64-cpu-setup.exe` | GPU 不要 | 動作確認・試用向け（常用非推奨） |
+| `LoTT-vX.Y.Z-windows-x64-vulkan-setup.exe` | Windows x64・NVIDIA / AMD / Intel GPU（GPU が無ければ CPU で動作） | Full 版・主配布 |
 | `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | 校正中心の軽量版（文字起こし・話者分離なし） |
-| `LoTT-vX.Y.Z-linux-x64-cuda.AppImage` | Linux x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
-| `LoTT-vX.Y.Z-linux-x64-cuda.deb` | Ubuntu系 x86-64・NVIDIA GPU | NVIDIAドライバーが必要。CUDA Toolkitは実行時不要 |
-| `LoTT-vX.Y.Z-linux-x64-cuda-cachyos.pkg.tar.zst` | CachyOS / Arch x86-64・NVIDIA GPU | 汎用x86-64版 |
-| `LoTT-vX.Y.Z-linux-x64-v3-cuda-cachyos-experimental.pkg.tar.zst` | CachyOS・x86-64-v3対応CPU・NVIDIA GPU | 実験版。添付する場合だけ掲載 |
 | `SHA256SUMS.txt` | — | 各配布ディレクトリ内のファイルに対応するSHA-256チェックサム |
 
-<!-- AMD GPU版はexperimentalかつ自己ビルド向け。一般向けReleaseにはインストーラーを添付しない。 -->
+<!-- Linux 版は Stage 3 で対応予定。対応後にアセット名を追記する。 -->
 
 ダウンロード後の検証（任意）:
 
@@ -43,28 +38,23 @@ sha256sum -c SHA256SUMS.txt
 
 ## 動作要件
 
-### Windows NVIDIA GPU版
+### Full 版
 
 - Windows 10 / 11 (x64)
-- NVIDIA GPU + CUDA 12.x + cuDNN 9.x
+- GPU 利用時: NVIDIA / AMD / Intel の GPU と、Vulkan 対応の最新ドライバー
+- GPU が無い場合（CPU 処理）: RAM 16GB 以上、AVX2 対応 CPU、8論理スレッド以上
 - ディスク空き容量: 約 XX GB（モデルダウンロード含む）
 
-### Linux NVIDIA GPU版
+### Editor 版
 
-- x86-64 Linux
-- 使用中のカーネルに対応するNVIDIAドライバーと`nvidia-utils`
-- CUDA Toolkitは実行時不要
-- AppImageでは`xdg-desktop-portal`、対応するportal backend、`zenity`が必要
-
-### CPU / Editor版
-
-- 対応OS・CPU・RAM・ディスク要件を記入
+- Windows 10 / 11 (x64)
+- 音声入力を使う場合は、音声入力パック（約1.6GB）の空き容量
 
 ## インストールと初回セットアップ
 
-1. 対応するインストーラーまたはパッケージを導入する
-2. アプリを起動し、セットアップタブから Python パッケージ・モデルをインストールする
-   - **初回セットアップ時のみインターネット接続が必要です**（依存パッケージ・モデルの取得）
+1. 対応するインストーラーを導入する
+2. アプリを起動し、セットアップタブからモデルをダウンロードする
+   - **初回セットアップ時のみインターネット接続が必要です**（モデルの取得）
 3. セットアップ完了後はオフラインで動作します
 
 > **SmartScreen について**: 本インストーラーはコード署名されていないため、初回実行時に
@@ -75,7 +65,7 @@ sha256sum -c SHA256SUMS.txt
 
 - 通常運用時はインターネットに接続しません
 - 会話データ・音声データを PC 外の API へ送信しません
-- LLM 校正を含むすべての推論はローカル（loopback）で完結します
+- 推論はすべて PC 内の whisper.cpp / NeMo-Speech.cpp で完結します（LLM は使用しません）
 
 ## 既知の問題
 

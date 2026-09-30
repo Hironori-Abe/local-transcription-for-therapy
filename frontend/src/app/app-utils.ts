@@ -1,69 +1,23 @@
 import type {
   AppSettingsV1,
-  CurrentLlmSelectionSettingsValue,
   GeneralAppSettingsOptions,
   GeneralAppSettingsValue,
-  LlmBackendMode,
-  LlmPromptType,
-  LlmStringSettingsField,
-  ResolvedLlmAppSettingsValue,
-  ResolveLlmAppSettingsOptions,
-  SpeechEngineOption,
   VulkanGpuDevice,
   VulkanGpuList
 } from './app-settings';
 
 export type NormalizedComputeType = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 export type ConcreteComputeType = Exclude<NormalizedComputeType, 'auto'>;
-export interface RuntimeBuildFlagsValue {
-  cpuOnlyBuild: boolean;
-  aiProofreadBuild: boolean;
-  cpuVoiceInputBuild: boolean;
-}
-
-/**
- * Resolve build capabilities from the packaged frontend flag and the Rust
- * runtime identifier.  The frontend is normally compiled with the matching
- * Angular configuration, but keeping the Rust result as a second source of
- * truth prevents a CPU package accidentally built with the default frontend
- * from enabling GPU/LLM-only flows.
- */
-export function resolveRuntimeBuildFlagsValue(
-  editorOnlyBuild: boolean,
-  compileTimeCpuOnlyBuild: boolean,
-  runtimeBuildVariant: string | null | undefined
-): RuntimeBuildFlagsValue {
-  const hasRuntimeVariant = runtimeBuildVariant === 'cuda'
-    || runtimeBuildVariant === 'rocm'
-    || runtimeBuildVariant === 'cpu'
-    || runtimeBuildVariant === 'vulkan';
-  const cpuOnlyBuild = hasRuntimeVariant
-    ? runtimeBuildVariant === 'cpu'
-    : compileTimeCpuOnlyBuild;
-  return {
-    cpuOnlyBuild,
-    aiProofreadBuild: !editorOnlyBuild && !cpuOnlyBuild && runtimeBuildVariant !== 'vulkan',
-    cpuVoiceInputBuild: editorOnlyBuild || cpuOnlyBuild
-  };
-}
-
-/**
- * 配布物の種類。vulkan は NVIDIA / AMD / Intel 共通の Vulkan 版（文字起こし・話者分離・句読点付与は
- * ggml エンジンとローカルルールを使い、AI校正モデルを含まない）。
- */
-export type BuildVariant = 'cuda' | 'rocm' | 'cpu' | 'vulkan';
+/** 'vulkan' = フル機能版（NVIDIA / AMD / Intel の Vulkan、GPU が無ければ CPU）、'editor' = Editor 版。 */
+export type BuildVariant = 'vulkan' | 'editor';
 
 export function isBuildVariantValue(value: unknown): value is BuildVariant {
-  return value === 'cuda' || value === 'rocm' || value === 'cpu' || value === 'vulkan';
+  return value === 'vulkan' || value === 'editor';
 }
 
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
 export type NormalizedTranscriptionDevice = 'cuda' | 'cpu';
-export type DevEmulationMode = 'none' | 'no_cuda' | 'missing_community1';
-export type AudioPreprocessPreset = 'none' | 'low_noise' | 'strong_noise' | 'volume_boost' | 'general_improvement' | 'manual';
-export type NoiseReductionMode = 'standard' | 'weak';
 export type PlaybackShortcutCode = 'Space' | 'KeyA' | 'KeyD' | 'KeyE';
-export type EditorVoiceInputMemoryTierValue = 'unknown' | 'low' | 'caution' | 'normal';
 export type LocationDetectionMode = 'commonOnly' | 'selectedRegions';
 export type LocationAreaCode =
   | 'hokkaidoTohoku'
@@ -102,6 +56,7 @@ export interface TranscriptionFallbackResultInput {
   fallbackUsed?: boolean;
   diarization?: {
     note?: string | null;
+    gpuFallback?: boolean | null;
   } | null;
 }
 
@@ -138,13 +93,6 @@ export interface SaveSrtRow {
   text: string;
 }
 
-export interface AudioPreprocessSettingsValue {
-  highpassFilter: boolean;
-  noiseReduction: boolean;
-  normalizeAudio: boolean;
-  noiseReductionMode: NoiseReductionMode;
-}
-
 export interface TimeInputValuesValue {
   startMm: string;
   startSs: string;
@@ -158,14 +106,6 @@ export interface ResolvedTimeRangeValue {
 }
 
 export type TimeInputFieldValue = 'startMm' | 'startSs' | 'endMm' | 'endSs';
-
-export interface GpuDeviceLabelValueInput {
-  index: number;
-  name: string;
-  totalVramMb: number;
-  isLikelyIgpu?: boolean;
-  gcnArchName?: string;
-}
 
 export interface EstimatedTimeMessageValueInput {
   estimating: boolean;
@@ -189,89 +129,22 @@ export interface ProcessingStatusTextValueInput {
   diarizationPhaseActive: boolean;
   diarizationStage: string;
   parallelDiarizationStatus: string;
-  llmProofreadRunning: boolean;
-  llmProofreadStatus: string;
   ruleProofreadRunning: boolean;
-  cpuOnlyBuild: boolean;
   ruleProofreadProgressText: string;
   ruleProofreadStatus: string;
-}
-
-export interface LlmDeviceMemoryValueInput {
-  index: number;
-  totalVramMb: number;
+  /** CPU で処理しているとき true（文字起こし・話者分離の表示に「CPUで処理中」を添える）。 */
+  cpuMode?: boolean;
 }
 
 export interface TranscriptionTabDisabledValueInput {
   transcriptionTabVisible: boolean;
   editorOnlyBuild: boolean;
   setupChecked: boolean;
-  devEmulationMode: DevEmulationMode;
-  cpuOnlyBuild: boolean;
   needsFullSetup: boolean;
-  pythonEnvReady: boolean;
   transcriptionRuntimeAvailable: boolean;
 }
 
 export type ConfirmDialogColorValue = 'primary' | 'accent' | 'warn' | null;
-
-export function resolveAudioPreprocessPresetValue(
-  settings: AudioPreprocessSettingsValue
-): AudioPreprocessPreset {
-  const { highpassFilter, noiseReduction, normalizeAudio, noiseReductionMode } = settings;
-  if (!highpassFilter && !noiseReduction && !normalizeAudio) {
-    return 'none';
-  }
-  if (highpassFilter && !noiseReduction && !normalizeAudio) {
-    return 'low_noise';
-  }
-  if (highpassFilter && noiseReduction && !normalizeAudio && noiseReductionMode === 'weak') {
-    return 'strong_noise';
-  }
-  if (highpassFilter && !noiseReduction && normalizeAudio) {
-    return 'volume_boost';
-  }
-  if (highpassFilter && noiseReduction && normalizeAudio && noiseReductionMode === 'weak') {
-    return 'general_improvement';
-  }
-  return 'manual';
-}
-
-export function getAudioPreprocessPresetHintValue(preset: AudioPreprocessPreset): string {
-  switch (preset) {
-    case 'none':
-      return '録音が良質な場合';
-    case 'low_noise':
-      return 'ハイパスフィルター。振動・空調ノイズを除去。';
-    case 'strong_noise':
-      return 'ハイパス＋ノイズ除去。背景ノイズを抑制。';
-    case 'volume_boost':
-      return 'ハイパス＋正規化。音量の統一と底上げ。';
-    case 'general_improvement':
-      return 'ハイパス＋ノイズ除去＋正規化（全処理）';
-    case 'manual':
-      return '';
-  }
-}
-
-export function getAudioPreprocessSettingsForPresetValue(
-  preset: AudioPreprocessPreset
-): AudioPreprocessSettingsValue | null {
-  switch (preset) {
-    case 'none':
-      return { highpassFilter: false, noiseReduction: false, normalizeAudio: false, noiseReductionMode: 'weak' };
-    case 'low_noise':
-      return { highpassFilter: true, noiseReduction: false, normalizeAudio: false, noiseReductionMode: 'weak' };
-    case 'strong_noise':
-      return { highpassFilter: true, noiseReduction: true, normalizeAudio: false, noiseReductionMode: 'weak' };
-    case 'volume_boost':
-      return { highpassFilter: true, noiseReduction: false, normalizeAudio: true, noiseReductionMode: 'weak' };
-    case 'general_improvement':
-      return { highpassFilter: true, noiseReduction: true, normalizeAudio: true, noiseReductionMode: 'weak' };
-    case 'manual':
-      return null;
-  }
-}
 
 export function normalizeSpeakerKeyValue(value: string | null | undefined): string {
   return (value ?? '').trim();
@@ -329,41 +202,6 @@ export function matchPlaybackShortcutCodeValue(
   }
 }
 
-export function validateHfTokenFormatValue(rawToken: string): string | null {
-  const token = (rawToken ?? '').trim();
-  if (!token) {
-    return null;
-  }
-  if (/\s/.test(token)) {
-    return (
-      'トークンに空白や改行が含まれています。\n' +
-      '● トークンの前後や途中に余分な空白・改行が入っていないか確認してください。\n' +
-      '● コピー＆ペーストで貼り付け直すと混入を防げます。'
-    );
-  }
-  if (!token.startsWith('hf_')) {
-    return (
-      'Hugging Face のアクセストークンは「hf_」で始まります。入力された値はその形式になっていません。\n' +
-      '● トークンをすべて選択してコピーし、貼り付け直してください（先頭が欠けていることがあります）。\n' +
-      '● ユーザー名や別の値を貼り付けていないか確認してください。'
-    );
-  }
-  if (token.length < 20) {
-    return (
-      'トークンが短すぎます。途中で切れている可能性があります。\n' +
-      '● トークン全体をコピーできているか確認し、貼り付け直してください。'
-    );
-  }
-  if (!/^hf_[A-Za-z0-9]+$/.test(token)) {
-    return (
-      'トークンに使用できない文字が含まれています（記号や全角文字が混入している可能性があります）。\n' +
-      '● 日本語入力（IME）がオンのまま入力していないか確認してください。\n' +
-      '● 「トークン作成ページを開く」から発行した値をコピー＆ペーストで貼り付けてください。'
-    );
-  }
-  return null;
-}
-
 export function resolveTimeInputRangeValue(values: TimeInputValuesValue): ResolvedTimeRangeValue | null {
   const startMm = parseInt(values.startMm, 10);
   const startSs = parseInt(values.startSs, 10);
@@ -397,26 +235,6 @@ export function selectedFileNameValue(fullPath: string): string {
   return index >= 0 ? normalized.slice(index + 1) : normalized;
 }
 
-export function gpuSetupHintValue(fallbackUsed: boolean, errorMessage: string): string {
-  if (fallbackUsed) {
-    return [
-      'GPU 実行が不安定だったため、GPU内フォールバックが発生しました。',
-      'Windows の「設定 > システム > ディスプレイ > グラフィック」で',
-      'lott.exe / python.exe / py.exe を',
-      '「高パフォーマンス (RTX)」に設定すると安定する場合があります。'
-    ].join('\n');
-  }
-  if (errorMessage.includes('GPU 文字起こしに失敗しました')) {
-    return [
-      'GPU 実行に失敗しています。',
-      'Windows のグラフィック設定および NVIDIA コントロールパネルで',
-      'lott.exe / python.exe / py.exe を',
-      'RTX 側へ固定してください。'
-    ].join('\n');
-  }
-  return '';
-}
-
 export function formatEstimatedMinutesValue(minutes: number | null): string {
   if (minutes === null || Number.isNaN(minutes)) {
     return '-';
@@ -439,30 +257,6 @@ export function getEstimatedTimeMessageValue(input: EstimatedTimeMessageValueInp
     return `まだ時間の推定には十分なデータが集まっていません。（${input.sampleCount}/${input.minimumSamples}件）`;
   }
   return `最低 ${formatEstimatedMinutesValue(input.minMinutes)} 分、概算 ${formatEstimatedMinutesValue(input.avgMinutes)} 分`;
-}
-
-export function computeEnvBackendLabelValue(backend: string | null | undefined): string {
-  if (backend === 'cuda') {
-    return 'CUDA (NVIDIA)';
-  }
-  if (backend === 'rocm') {
-    return 'ROCm (AMD)';
-  }
-  return 'GPU 未使用';
-}
-
-export function gpuDeviceLabelValue(
-  device: GpuDeviceLabelValueInput,
-  recommendedIndex: number,
-  backendType: string | null | undefined
-): string {
-  const gb = (device.totalVramMb / 1024).toFixed(0);
-  const recommended = device.index === recommendedIndex ? ' ★推奨' : '';
-  const integrated = device.isLikelyIgpu ? ' ※統合GPU' : '';
-  const warning = gpuAsrTierValue(backendType, device.gcnArchName) === 'caution'
-    ? ' ⚠ 動作未確認'
-    : '';
-  return `${device.name}（${gb}GB${integrated}${warning}${recommended}）`;
 }
 
 export function getImportCompletedMessageValue(canShowTranscriptionTab: boolean): string {
@@ -497,21 +291,6 @@ export function themeToggleIconValue(themeMode: NormalizedThemeMode): string {
     case 'system':
       return 'brightness_auto';
   }
-}
-
-/** Return the input type used by a secret/token field with an explicit reveal toggle. */
-export function secretInputTypeValue(visible: boolean): 'text' | 'password' {
-  return visible ? 'text' : 'password';
-}
-
-/** Return the Material Symbols name for the current reveal state. */
-export function secretVisibilityIconValue(visible: boolean): 'visibility' | 'visibility_off' {
-  return visible ? 'visibility_off' : 'visibility';
-}
-
-/** Keep the accessible name and tooltip in sync with the reveal state. */
-export function secretVisibilityLabelValue(visible: boolean): string {
-  return visible ? 'トークンを隠す' : 'トークンを表示';
 }
 
 export function selectedLocationPrefectureTotalCountValue(
@@ -568,24 +347,6 @@ export function buildUniqueSpeakersValue(
   return Array.from(names).sort();
 }
 
-export function levenshteinDistanceValue(left: string, right: string): number {
-  const leftLength = left.length;
-  const rightLength = right.length;
-  const distances: number[] = Array.from({ length: rightLength + 1 }, (_, index) => index);
-  for (let leftIndex = 1; leftIndex <= leftLength; leftIndex++) {
-    let previous = distances[0];
-    distances[0] = leftIndex;
-    for (let rightIndex = 1; rightIndex <= rightLength; rightIndex++) {
-      const saved = distances[rightIndex];
-      distances[rightIndex] = left[leftIndex - 1] === right[rightIndex - 1]
-        ? previous
-        : 1 + Math.min(previous, distances[rightIndex], distances[rightIndex - 1]);
-      previous = saved;
-    }
-  }
-  return distances[rightLength];
-}
-
 export function stepTimeInputValuesValue(
   values: TimeInputValuesValue,
   field: TimeInputFieldValue,
@@ -620,44 +381,6 @@ export function stepTimeInputValuesValue(
     ...values,
     [field]: isSeconds ? String(candidate).padStart(2, '0') : String(candidate)
   };
-}
-
-export function editorVoiceInputMemoryTierValue(
-  cpuVoiceInputBuild: boolean,
-  memoryChecked: boolean,
-  installedMemoryBytes: number | null,
-  minimumMemoryBytes: number,
-  recommendedMemoryBytes: number
-): EditorVoiceInputMemoryTierValue {
-  if (!cpuVoiceInputBuild || !memoryChecked || installedMemoryBytes === null) {
-    return 'unknown';
-  }
-  if (installedMemoryBytes < minimumMemoryBytes) {
-    return 'low';
-  }
-  if (installedMemoryBytes < recommendedMemoryBytes) {
-    return 'caution';
-  }
-  return 'normal';
-}
-
-export function editorVoiceInputMemoryWarningValue(
-  tier: EditorVoiceInputMemoryTierValue
-): string | null {
-  if (tier === 'low') {
-    return 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。';
-  }
-  if (tier === 'caution') {
-    return '音声入力を使用する際、他のアプリがメモリを多く使用していると、処理が失敗する可能性があります。';
-  }
-  return null;
-}
-
-export function editorVoiceInputDownloadButtonColorValue(
-  cpuVoiceInputBuild: boolean,
-  tier: EditorVoiceInputMemoryTierValue
-): 'primary' | 'warn' {
-  return cpuVoiceInputBuild && (tier === 'low' || tier === 'caution') ? 'warn' : 'primary';
 }
 
 export function editorVoiceInputUnavailableTooltipValue(packChecked: boolean, vulkanBuild = false): string {
@@ -696,16 +419,9 @@ export function isDiarizationModelMissingValue(
 
 export function transcriptionTabLabelValue(
   tabDisabled: boolean,
-  diarizationModelMissing: boolean,
-  cpuOnlyBuild: boolean
+  diarizationModelMissing: boolean
 ): string {
-  if (!tabDisabled && diarizationModelMissing) {
-    return '文字起こし（要設定）';
-  }
-  if (tabDisabled) {
-    return cpuOnlyBuild ? '文字起こし（要設定）' : '文字起こし（要GPU設定）';
-  }
-  return '文字起こし';
+  return tabDisabled || diarizationModelMissing ? '文字起こし（要設定）' : '文字起こし';
 }
 
 /**
@@ -719,34 +435,18 @@ export function transcriptionTabLabelValue(
  */
 export function transcriptionRuntimeReasonValue(
   available: boolean,
-  reason: string | null | undefined,
-  cpuOnlyBuild: boolean
+  reason: string | null | undefined
 ): string {
   if (available) return '';
 
-  const fallback = cpuOnlyBuild
-    ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
-    : 'GPU が確認できないため、文字起こし・話者分離は利用できません。';
+  const fallback = 'GPU が確認できないため、文字起こし・話者分離は利用できません。';
   const normalized = (reason ?? '').trim();
   if (!normalized) return fallback;
 
-  if (!cpuOnlyBuild && /CPU\s*モードで動作します/.test(normalized)) {
+  if (/CPU\s*モードで動作します/.test(normalized)) {
     return 'GPU が確認できませんでした。Full GPU版ではCPUへ切り替えず、文字起こし・話者分離は利用できません。GPUドライバーとランタイムを確認してください。';
   }
   return normalized;
-}
-
-/** Show a runtime warning only after the normal setup checks have completed. */
-export function cpuRuntimeSetupBannerVisibleValue(
-  cpuOnlyBuild: boolean,
-  transcriptionTabVisible: boolean,
-  transcriptionTabDisabled: boolean,
-  needsFullSetup: boolean
-): boolean {
-  return cpuOnlyBuild
-    && transcriptionTabVisible
-    && transcriptionTabDisabled
-    && !needsFullSetup;
 }
 
 export function processingStatusTextValue(input: ProcessingStatusTextValueInput): string {
@@ -765,137 +465,29 @@ export function processingStatusTextValue(input: ProcessingStatusTextValueInput)
         parts.push(`話者分離：${input.parallelDiarizationStatus}`);
       }
     }
-  }
-  if (input.llmProofreadRunning) {
-    const match = input.llmProofreadStatus.match(/^校正中:\s*(\d+)\s*\/\s*(\d+)\s*行/);
-    if (match) {
-      parts.push(`AI校正：${match[1]}/${match[2]}行`);
-    } else if (input.llmProofreadStatus) {
-      parts.push(`AI校正：${input.llmProofreadStatus}`);
-    } else {
-      parts.push('AI校正：起動中...');
+    if (input.cpuMode) {
+      parts.push('（CPUで処理中）');
     }
   }
-  if (input.ruleProofreadRunning && input.cpuOnlyBuild) {
+  if (input.ruleProofreadRunning) {
     const progress = input.ruleProofreadProgressText || input.ruleProofreadStatus;
-    parts.push(progress ? `単純句読点付与：${progress}` : '単純句読点付与：処理中...');
+    parts.push(progress ? `句読点付与：${progress}` : '句読点付与：処理中...');
   }
   return parts.length ? parts.join('　') : '処理中...';
-}
-
-export function filterOverallProofreadVisibleItemsValue<T extends { id: number; changed: boolean }>(
-  items: ReadonlyArray<T> | null | undefined,
-  dismissedIds: ReadonlySet<number>
-): T[] {
-  return (items ?? []).filter((item) => item.changed && !dismissedIds.has(item.id));
 }
 
 export function isJapaneseLanguageValue(language: string | null | undefined): boolean {
   return (language ?? 'ja').toLowerCase() === 'ja';
 }
 
-export function llmBackendModeHintValue(
-  backendMode: string,
-  proofreadModelTier: 'e4b' | '12b',
-  gemma12bInstalled: boolean | null
-): string {
-  if (backendMode === 'lmstudio') {
-    return '「localhost:1234」に接続します';
-  }
-  if (backendMode === 'ollama') {
-    return '「localhost:11434」に接続します';
-  }
-  if (proofreadModelTier === '12b') {
-    if (gemma12bInstalled === false) {
-      return '高精度モデル（Gemma4 12B）は約7GBの追加ダウンロードが必要です';
-    }
-    return '高精度モデル（Gemma4 12B）選択中。次回のAI校正から反映されます';
-  }
-  return '内蔵されたモデル（Gemma4 E4B）を使用します';
-}
-
-export function resolveLlmDeviceVramMibValue(
-  devices: ReadonlyArray<LlmDeviceMemoryValueInput>,
-  selectedDeviceIndex: number,
-  recommendedDeviceIndex: number | null | undefined
-): number | null {
-  if (devices.length === 0) {
-    return null;
-  }
-  const index = selectedDeviceIndex < 0 ? (recommendedDeviceIndex ?? -1) : selectedDeviceIndex;
-  const device = devices.find((candidate) => candidate.index === index) ?? devices[0];
-  return device ? device.totalVramMb : null;
-}
-
-export function llmParallelHintValue(
-  selectedParallel: number,
-  backendType: string | null | undefined,
-  vramMib: number | null
-): string {
-  if (selectedParallel >= 1 || backendType === 'rocm' || vramMib === null) {
-    return '';
-  }
-  const parallel = resolveAutoLlmParallelValue(vramMib);
-  return `現在: ${parallel}（VRAM 約${Math.round(vramMib / 1024)}GB）`;
-}
-
-export function llmNCtxHintValue(
-  selectedNCtx: number,
-  backendMode: string,
-  backendType: string | null | undefined,
-  vramMib: number | null
-): string {
-  if (selectedNCtx >= 4096 || backendMode !== 'local_gguf') {
-    return '';
-  }
-  if (backendType === 'rocm') {
-    return '現在: 16,384';
-  }
-  if (vramMib === null) {
-    return '';
-  }
-  const parallel = resolveAutoLlmParallelValue(vramMib);
-  const contextSize = Math.min(Math.max(parallel * 8192, 16384), 32768);
-  return `現在: ${contextSize.toLocaleString('en-US')}（VRAM 約${Math.round(vramMib / 1024)}GB）`;
-}
-
-export function selectedGpuAsrWarningValue(
-  backendType: string | null | undefined,
-  deviceFound: boolean,
-  gcnArchName: string | null | undefined
-): string {
-  if (backendType !== 'rocm' || !deviceFound || gpuAsrTierValue(backendType, gcnArchName) === 'ok') {
-    return '';
-  }
-  return (gcnArchName ?? '').toLowerCase() === 'gfx1103'
-    ? 'ctranslate2-rocm の対応外GPUです。互換設定を自動適用しますが、動作しない場合があります。'
-    : '動作未確認のGPUです。文字起こしが動作しない場合があります。';
-}
-
 export function transcriptionTabDisabledValue(input: TranscriptionTabDisabledValueInput): boolean {
   if (!input.transcriptionTabVisible || input.editorOnlyBuild || !input.setupChecked) {
     return false;
   }
-  if (input.devEmulationMode === 'no_cuda' && !input.cpuOnlyBuild) {
-    return true;
-  }
-  if (input.needsFullSetup || !input.pythonEnvReady) {
+  if (input.needsFullSetup) {
     return false;
   }
   return !input.transcriptionRuntimeAvailable;
-}
-
-export function setupNeedsHfTokenValue(
-  statusAvailable: boolean,
-  transcriptionTabVisible: boolean,
-  diarizationReady: boolean,
-  token: string
-): boolean {
-  return statusAvailable && transcriptionTabVisible && !diarizationReady && !token.trim();
-}
-
-export function parallelModeHintValue(mode: 'standard' | 'fast'): string {
-  return mode === 'fast' ? 'GPUスペックに余裕がある場合のみ' : '標準・安定';
 }
 
 export function buildConsecutiveSpeakerRunMapValue<T extends { id: number }>(
@@ -921,63 +513,6 @@ export function buildConsecutiveSpeakerRunMapValue<T extends { id: number }>(
     }
   }
   return map;
-}
-
-export function showProofreadSystemPromptEditorValue(
-  promptReadonly: boolean,
-  backendMode: string,
-  modelPath: string
-): boolean {
-  if (promptReadonly) {
-    return false;
-  }
-  if (backendMode !== 'local_gguf') {
-    return true;
-  }
-  return !!modelPath;
-}
-
-export function canSaveOverallProofreadSystemPromptValue(
-  promptReadonly: boolean,
-  backendMode: string,
-  activeOpenAiModel: string,
-  modelPath: string
-): boolean {
-  if (promptReadonly) {
-    return false;
-  }
-  if (backendMode !== 'local_gguf') {
-    return !!activeOpenAiModel.trim();
-  }
-  return !!modelPath && !isGemma4DefaultLlmModelPathValue(modelPath);
-}
-
-export function llmBackendSelectionValue(
-  backendMode: 'local_gguf' | 'lmstudio' | 'ollama',
-  proofreadModelTier: 'e4b' | '12b'
-): 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama' {
-  return backendMode === 'local_gguf' && proofreadModelTier === '12b'
-    ? 'local_gguf_12b'
-    : backendMode;
-}
-
-export function llmBackendModeOptionsValue(
-  aiProofreadBuild: boolean,
-  localLlmAppsEnabled: boolean,
-  vulkanBuild = false
-): ReadonlyArray<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> {
-  if (vulkanBuild) return [];
-  const options: Array<{ value: 'local_gguf' | 'local_gguf_12b' | 'lmstudio' | 'ollama'; label: string }> = [
-    { value: 'local_gguf', label: '内蔵モデル（Gemma4 E4B・高速・既定）' }
-  ];
-  if (aiProofreadBuild) {
-    options.push({ value: 'local_gguf_12b', label: '内蔵モデル（Gemma4 12B・高精度・要DL）' });
-  }
-  if (localLlmAppsEnabled) {
-    options.push({ value: 'lmstudio', label: 'LM Studio' });
-    options.push({ value: 'ollama', label: 'Ollama' });
-  }
-  return options;
 }
 
 export function formatAudioDurationValue(seconds: number | null): string {
@@ -1023,30 +558,11 @@ export function normalizeErrorMessageValue(error: unknown): string {
   }
 }
 
-export function buildFinalInitialPromptValue(baseRaw: string, extraRaw: string): string {
-  const base = baseRaw.trim();
-  const extra = extraRaw.trim();
-  if (!extra) {
-    return base;
-  }
-  return `${base}\n追加指示: ${extra}`;
-}
-
 export function secondsToEstimatedMinutesValue(seconds: number): number {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return 0;
   }
   return Math.max(1, Math.ceil(seconds / 60));
-}
-
-export function resolveEstimateComputeTypeValue(
-  transcriptionDevice: string,
-  selectedComputeType: NormalizedComputeType
-): ConcreteComputeType {
-  if (transcriptionDevice === 'cpu') {
-    return 'int8';
-  }
-  return selectedComputeType === 'auto' ? 'float16' : selectedComputeType;
 }
 
 /**
@@ -1068,10 +584,7 @@ export function pickRuntimeEstimateSamplesValue(
   );
 }
 
-export function parseRuntimeEstimateSamplesValue(
-  serialized: string | null,
-  cpuOnly: boolean
-): RuntimeEstimateSample[] {
+export function parseRuntimeEstimateSamplesValue(serialized: string | null): RuntimeEstimateSample[] {
   if (!serialized) {
     return [];
   }
@@ -1105,7 +618,7 @@ export function parseRuntimeEstimateSamplesValue(
       elapsedSeconds: Number(sample['elapsedSeconds']),
       diarization: sample['diarization'],
       device: typeof sample['device'] === 'string'
-        ? normalizeTranscriptionDeviceValue(sample['device'], cpuOnly)
+        ? normalizeTranscriptionDeviceValue(sample['device'])
         : 'cuda',
       computeType: sample['computeType'],
       createdAt: Number(sample['createdAt']),
@@ -1182,22 +695,6 @@ export function calculateRuntimeEstimateValue(
   };
 }
 
-export function countSubstringOccurrencesValue(text: string, needle: string): number {
-  if (!needle) {
-    return 0;
-  }
-  let count = 0;
-  let start = 0;
-  while (true) {
-    const index = text.indexOf(needle, start);
-    if (index < 0) {
-      return count;
-    }
-    count += 1;
-    start = index + needle.length;
-  }
-}
-
 export function themeModeLabelValue(mode: NormalizedThemeMode): string {
   switch (mode) {
     case 'light':
@@ -1216,12 +713,6 @@ export function shouldShowVoiceInputShortCandidateHintValue(
     .map((candidate) => String(candidate).trim())
     .filter((candidate) => candidate.length > 0);
   return items.length > 0 && items.every((candidate) => Array.from(candidate).length <= 4);
-}
-
-export function formatOverallProofreadProgressValue(current: number, total: number): string {
-  const safeTotal = Math.max(0, Math.floor(total));
-  const safeCurrent = Math.min(Math.max(0, Math.floor(current)), safeTotal);
-  return `校正中: ${safeCurrent} / ${safeTotal} 行`;
 }
 
 export function getProgressStageOrderValue(diarization: boolean): ReadonlyArray<string> {
@@ -1267,81 +758,6 @@ export function hasFallbackInTranscriptionResultValue(
     return true;
   }
   return !!result.diarization?.note && result.diarization.note.includes('フォールバック');
-}
-
-export function resolveAutoLlmParallelValue(vramMib: number): number {
-  if (vramMib >= 11000) {
-    return 4;
-  }
-  if (vramMib >= 7000) {
-    return 2;
-  }
-  return 1;
-}
-
-const knownOkGfxArchitectures = new Set([
-  'gfx1030', 'gfx1100', 'gfx1101', 'gfx1102',
-  'gfx1150', 'gfx1151', 'gfx1200', 'gfx1201'
-]);
-
-export function gpuAsrTierValue(
-  backendType: string | null | undefined,
-  gcnArchName: string | null | undefined
-): 'ok' | 'caution' {
-  if (backendType !== 'rocm') {
-    return 'ok';
-  }
-  const architecture = (gcnArchName ?? '').toLowerCase();
-  return knownOkGfxArchitectures.has(architecture) ? 'ok' : 'caution';
-}
-
-export function isVramOomErrorValue(message: string | null | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  const lower = message.toLowerCase();
-  if (lower.includes('[vram_oom]')) {
-    return true;
-  }
-  return [
-    'out of memory',
-    'failed to allocate',
-    'cudamalloc',
-    'cudaerrormemoryallocation',
-    'ggml_backend_cuda_buffer'
-  ].some((marker) => lower.includes(marker));
-}
-
-export function getLlmModelFileNameValue(modelPath: string): string {
-  const normalized = (modelPath ?? '').replace(/\\/g, '/').trim();
-  if (!normalized) {
-    return '';
-  }
-  const parts = normalized.split('/');
-  return parts[parts.length - 1] ?? '';
-}
-
-export function isGemma4DefaultLlmModelFileNameValue(fileName: string): boolean {
-  const normalized = fileName.trim().toLowerCase();
-  return normalized === 'gemma-4-e4b-it-qat-ud-q4_k_xl.gguf'
-    || normalized === 'gemma-4-e4b-it-qat-ud-q4_k_xl'
-    || normalized === 'gemma-4-e4b-it-q4_k_m.gguf'
-    || normalized === 'gemma-4-e4b-it-q4_k_m';
-}
-
-export function isGemma4DefaultLlmModelPathValue(modelPath: string): boolean {
-  return isGemma4DefaultLlmModelFileNameValue(getLlmModelFileNameValue(modelPath));
-}
-
-export function normalizeDevEmulationModeValue(value: unknown): DevEmulationMode {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'no_cuda') {
-    return 'no_cuda';
-  }
-  if (normalized === 'missing_community1') {
-    return 'missing_community1';
-  }
-  return 'none';
 }
 
 export function buildExportSpeakerLabelByRowIdValue(
@@ -1592,23 +1008,6 @@ export function normalizeThemeModeValue(value: unknown): NormalizedThemeMode {
   return value === 'light' || value === 'dark' ? value : 'system';
 }
 
-export function normalizeComputeTypeValue(valueRaw: string, cpuOnly: boolean): NormalizedComputeType {
-  const value = (valueRaw ?? '').trim().toLowerCase();
-  if (cpuOnly && value !== 'auto' && value !== 'int8' && value !== 'float32') {
-    return 'float32';
-  }
-  switch (value) {
-    case 'auto':
-    case 'float16':
-    case 'float32':
-    case 'int8_float16':
-    case 'int8':
-      return value;
-    default:
-      return cpuOnly ? 'float32' : 'auto';
-  }
-}
-
 export function normalizeTranscriptionLanguageValue(
   valueRaw: string,
   supportedOptions: ReadonlyArray<{ value: string }>
@@ -1617,18 +1016,10 @@ export function normalizeTranscriptionLanguageValue(
   return supportedOptions.some((option) => option.value === value) ? value : 'ja';
 }
 
-export function normalizeTranscriptionDeviceValue(
-  valueRaw: string,
-  cpuOnly: boolean
-): NormalizedTranscriptionDevice {
-  if (cpuOnly) {
-    return 'cpu';
-  }
+export function normalizeTranscriptionDeviceValue(valueRaw: string): NormalizedTranscriptionDevice {
   return (valueRaw ?? '').trim().toLowerCase() === 'cpu' ? 'cpu' : 'cuda';
 }
 
-/** 保存済み設定のうち、LLM起動経路に依存しない値を検証・正規化する。 */
-/** 未知の値は既定の standard に戻す（ggml は明示的に選んだときだけ使う）。 */
 /** ggml エンジンの GPU 選択欄の表示名（例: 「NVIDIA GeForce RTX 4060 Laptop GPU（8GB）」）。 */
 export function vulkanGpuLabelValue(device: VulkanGpuDevice): string {
   const gb = Math.round(device.vramMb / 1024);
@@ -1642,27 +1033,152 @@ export function vulkanGpuAutoLabelValue(list: VulkanGpuList | null): string {
   return auto ? `自動（${auto.name}）` : '自動';
 }
 
+/**
+ * 文字起こし画面に出す「処理装置」の1行。CPU で処理するときはその理由も添える。
+ * vulkanAvailable が null（未確認）の間は空文字（表示しない）。
+ */
+export function speechDeviceLineValue(input: {
+  vulkanAvailable: boolean | null;
+  gpuName: string;
+  devForceCpu: boolean;
+}): string {
+  if (input.vulkanAvailable === null) return '';
+  if (input.vulkanAvailable) {
+    const name = input.gpuName.trim();
+    return name ? `処理装置: GPU（${name}）` : '処理装置: GPU';
+  }
+  return input.devForceCpu
+    ? '処理装置: CPU（開発オプションでCPU強制）'
+    : '処理装置: CPU（GPUが見つからないため）';
+}
+
+/** 実際に使われる（設定で選ばれた、または自動選択の）GPU の名前。無ければ ''。 */
+export function activeVulkanGpuNameValue(
+  savedUuid: string,
+  list: VulkanGpuList | null,
+  fallbackName: string
+): string {
+  const uuid = effectiveVulkanGpuUuidValue(savedUuid, list) || list?.autoUuid || '';
+  const device = uuid ? list?.devices.find(d => d.uuid === uuid) : undefined;
+  return device?.name ?? fallbackName;
+}
+
+/** 話者分離が GPU から CPU へ切り替わっていたときの、画面に出すお知らせ（無ければ null）。 */
+export function diarizationGpuFallbackNoticeValue(
+  result: { diarization?: { gpuFallback?: boolean | null } | null }
+): string | null {
+  return result.diarization?.gpuFallback === true
+    ? 'GPUでの話者分離に失敗したため、話者分離だけCPUで処理しました。処理時間が長くなっています。GPUのドライバーを最新にすると改善することがあります。'
+    : null;
+}
+
 /** 保存済みの GPU が今も存在すればその UUID、無ければ ''（自動）を選択欄に表示する。 */
 export function effectiveVulkanGpuUuidValue(savedUuid: string, list: VulkanGpuList | null): string {
   return savedUuid && list?.devices.some(d => d.uuid === savedUuid) ? savedUuid : '';
 }
 
-export function normalizeSpeechEngineValue(valueRaw: unknown): SpeechEngineOption {
-  return valueRaw === 'ggml' ? 'ggml' : 'standard';
+/**
+ * 保存済み設定から、今の版で使う項目だけを残す。以前の版が保存した項目
+ * （LLM 校正・計算方式・エンジン選択・開発用エミュレーション・keepFillers など）は取り除き、
+ * 次に保存したときに消えるようにする。
+ */
+export type AudioPreprocessPreset =
+  | 'none'
+  | 'low_noise'
+  | 'strong_noise'
+  | 'volume_boost'
+  | 'general_improvement';
+
+export const AUDIO_PREPROCESS_PRESET_OPTIONS: ReadonlyArray<{
+  value: AudioPreprocessPreset;
+  label: string;
+}> = [
+  { value: 'none', label: '何もしない' },
+  { value: 'low_noise', label: '低域ノイズの処理' },
+  { value: 'strong_noise', label: '強いノイズの処理' },
+  { value: 'volume_boost', label: '音量拡大' },
+  { value: 'general_improvement', label: '全般的な改善' }
+];
+
+/** 音声調整プリセットを検証する。不明な値は 'none'。 */
+export function normalizeAudioPreprocessPresetValue(value: unknown): AudioPreprocessPreset {
+  return AUDIO_PREPROCESS_PRESET_OPTIONS.some((o) => o.value === value)
+    ? (value as AudioPreprocessPreset)
+    : 'none';
 }
 
-/** 旧版で保存された keepFillers は読み捨て、以後の設定保存にも含めない。 */
-export function stripLegacyKeepFillersSettingValue(settings: AppSettingsV1): AppSettingsV1 {
-  const transcription = settings.transcription as
-    (NonNullable<AppSettingsV1['transcription']> & { keepFillers?: unknown }) | undefined;
-  if (!transcription || !Object.prototype.hasOwnProperty.call(transcription, 'keepFillers')) {
-    return settings;
+/**
+ * 旧版が保存した個別設定（ハイパス・ノイズ低減・正規化）からプリセットを求める。
+ * 対応する組み合わせが無ければ 'none'。
+ */
+export function audioPreprocessPresetFromLegacyFlags(legacy: {
+  highpassFilter?: unknown;
+  noiseReduction?: unknown;
+  normalizeAudio?: unknown;
+}): AudioPreprocessPreset {
+  const hp = legacy.highpassFilter === true;
+  const nr = legacy.noiseReduction === true;
+  const norm = legacy.normalizeAudio === true;
+  if (hp && !nr && !norm) return 'low_noise';
+  if (hp && nr && !norm) return 'strong_noise';
+  if (hp && !nr && norm) return 'volume_boost';
+  if (hp && nr && norm) return 'general_improvement';
+  return 'none';
+}
+
+export function getAudioPreprocessPresetHintValue(preset: AudioPreprocessPreset): string {
+  switch (preset) {
+    case 'none':
+      return '録音が良質な場合';
+    case 'low_noise':
+      return 'ハイパスフィルター。振動・空調ノイズを除去。';
+    case 'strong_noise':
+      return 'ハイパス＋ノイズ除去。背景ノイズを抑制。';
+    case 'volume_boost':
+      return 'ハイパス＋正規化。音量の統一と底上げ。';
+    case 'general_improvement':
+      return 'ハイパス＋ノイズ除去＋正規化（全処理）';
   }
-  const cleanedTranscription = { ...transcription };
-  delete cleanedTranscription.keepFillers;
-  return { ...settings, transcription: cleanedTranscription };
 }
 
+export function stripRemovedSettingsValue(settings: unknown): AppSettingsV1 {
+  if (!settings || typeof settings !== 'object') {
+    return {};
+  }
+  const raw = settings as Record<string, any>;
+  const out: AppSettingsV1 = {};
+  const transcription = raw['transcription'];
+  if (transcription && typeof transcription === 'object') {
+    out.transcription = {};
+    if (transcription.device !== undefined) out.transcription.device = transcription.device;
+    if (transcription.language !== undefined) out.transcription.language = transcription.language;
+    if (transcription.ggmlGpuUuid !== undefined) out.transcription.ggmlGpuUuid = transcription.ggmlGpuUuid;
+    if (transcription.audioPreprocess !== undefined) {
+      out.transcription.audioPreprocess = normalizeAudioPreprocessPresetValue(transcription.audioPreprocess);
+    } else if (
+      transcription.highpassFilter !== undefined ||
+      transcription.noiseReduction !== undefined ||
+      transcription.normalizeAudio !== undefined
+    ) {
+      // 旧版の個別設定をプリセットへ変換する（対応しない組み合わせは none）。
+      out.transcription.audioPreprocess = audioPreprocessPresetFromLegacyFlags(transcription);
+    }
+  }
+  const diarization = raw['diarization'];
+  if (diarization && typeof diarization === 'object') {
+    out.diarization = {};
+    if (diarization.device !== undefined) out.diarization.device = diarization.device;
+    if (diarization.speakerCount !== undefined) out.diarization.speakerCount = diarization.speakerCount;
+  }
+  for (const key of ['proofread', 'playback', 'export', 'ui'] as const) {
+    if (raw[key] && typeof raw[key] === 'object') {
+      (out as Record<string, unknown>)[key] = raw[key];
+    }
+  }
+  return out;
+}
+
+/** 保存済み設定の値を検証・正規化する。 */
 export function resolveGeneralAppSettingsValue(
   settings: AppSettingsV1,
   options: GeneralAppSettingsOptions
@@ -1670,13 +1186,7 @@ export function resolveGeneralAppSettingsValue(
   const resolved: GeneralAppSettingsValue = {};
   const transcription = settings.transcription;
   if (transcription && typeof transcription.device === 'string') {
-    resolved.transcriptionDevice = normalizeTranscriptionDeviceValue(
-      transcription.device,
-      options.cpuOnlyBuild
-    );
-  }
-  if (transcription && typeof transcription.computeType === 'string') {
-    resolved.computeType = normalizeComputeTypeValue(transcription.computeType, options.cpuOnlyBuild);
+    resolved.transcriptionDevice = normalizeTranscriptionDeviceValue(transcription.device);
   }
   if (transcription && typeof transcription.language === 'string') {
     resolved.transcriptionLanguage = normalizeTranscriptionLanguageValue(
@@ -1684,14 +1194,11 @@ export function resolveGeneralAppSettingsValue(
       options.transcriptionLanguageOptions
     );
   }
-  if (transcription && Number.isInteger(transcription.hipDeviceIndex)) {
-    resolved.hipDeviceIndex = transcription.hipDeviceIndex;
-  }
-  if (transcription && typeof transcription.engine === 'string') {
-    resolved.transcriptionEngine = normalizeSpeechEngineValue(transcription.engine);
-  }
   if (transcription && typeof transcription.ggmlGpuUuid === 'string') {
     resolved.ggmlGpuUuid = transcription.ggmlGpuUuid.trim();
+  }
+  if (transcription && transcription.audioPreprocess !== undefined) {
+    resolved.audioPreprocess = normalizeAudioPreprocessPresetValue(transcription.audioPreprocess);
   }
 
   const playbackRate = Number(settings.playback?.rate);
@@ -1716,231 +1223,14 @@ export function resolveGeneralAppSettingsValue(
 
   const diarization = settings.diarization;
   if (diarization && typeof diarization.device === 'string') {
-    resolved.diarizationDevice = normalizeTranscriptionDeviceValue(
-      diarization.device,
-      options.cpuOnlyBuild
-    );
+    resolved.diarizationDevice = normalizeTranscriptionDeviceValue(diarization.device);
   }
   if (diarization && Number.isFinite(diarization.speakerCount)) {
     resolved.speakerCount = Math.max(1, Math.min(5, Math.floor(Number(diarization.speakerCount))));
-  }
-  if (diarization && typeof diarization.engine === 'string') {
-    resolved.diarizationEngine = normalizeSpeechEngineValue(diarization.engine);
   }
 
   if (typeof settings.export?.addUtteranceNumber === 'boolean') {
     resolved.addUtteranceNumber = settings.export.addUtteranceNumber;
   }
   return resolved;
-}
-
-export function resolvePersistedLlmBackendModeValue(
-  saved: unknown,
-  localLlmAppsEnabled: boolean
-): LlmBackendMode | undefined {
-  if (saved !== 'local_gguf' && saved !== 'lmstudio' && saved !== 'ollama') {
-    return undefined;
-  }
-  const usesLocalLlmApp = saved === 'lmstudio' || saved === 'ollama';
-  return usesLocalLlmApp && !localLlmAppsEnabled ? 'local_gguf' : saved;
-}
-
-/** 保存済みLLM設定を、旧値移行と現在の配布ポリシーを反映したUI値へ変換する。 */
-export function resolveLlmAppSettingsValue(
-  settings: AppSettingsV1,
-  options: ResolveLlmAppSettingsOptions
-): ResolvedLlmAppSettingsValue {
-  const llm = settings.llm;
-  const resolved: ResolvedLlmAppSettingsValue = {
-    proofreadModelTier: llm?.proofreadModelTier === '12b' && options.aiProofreadBuild
-      ? '12b'
-      : 'e4b'
-  };
-  if (!llm) {
-    return resolved;
-  }
-  if (typeof llm.modelPath === 'string' && llm.modelPath) {
-    resolved.modelPath = llm.modelPath;
-  }
-  resolved.backendMode = resolvePersistedLlmBackendModeValue(
-    llm.backendMode,
-    options.localLlmAppsEnabled
-  );
-  if (typeof llm.lmstudioModel === 'string' && llm.lmstudioModel) {
-    resolved.lmstudioModel = llm.lmstudioModel;
-  }
-  if (typeof llm.ollamaModel === 'string' && llm.ollamaModel) {
-    resolved.ollamaModel = llm.ollamaModel;
-  }
-  if (Number.isInteger(llm.llmHipDeviceIndex) && Number(llm.llmHipDeviceIndex) >= -1) {
-    resolved.llmHipDeviceIndex = Number(llm.llmHipDeviceIndex);
-  }
-  if (llm.llmPromptType === 'gemma4' || llm.llmPromptType === 'original') {
-    resolved.llmPromptType = llm.llmPromptType;
-  }
-  if (Number.isInteger(llm.llmParallel) && Number(llm.llmParallel) >= 0) {
-    resolved.llmParallel = normalizeLlmParallelValue(Number(llm.llmParallel));
-  }
-  return resolved;
-}
-
-export function normalizeLlmNCtxValue(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 0;
-  }
-  return Math.max(4096, Math.min(131072, Math.round(value / 512) * 512));
-}
-
-export function normalizeLlmMaxBatchValue(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 40;
-  }
-  return Math.max(1, Math.min(100, Math.round(value)));
-}
-
-export function normalizeLlmParallelValue(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 0;
-  }
-  return Math.max(1, Math.min(24, Math.round(value)));
-}
-
-export function buildLlmInferenceParamsKeyValue(
-  mode: LlmBackendMode,
-  modelInput: string
-): string {
-  if (mode === 'local_gguf') {
-    return 'local_gguf';
-  }
-  const model = modelInput.trim();
-  return model ? `${mode}:${model}` : mode;
-}
-
-export function getStoredLlmInferenceParamsValue(
-  settings: AppSettingsV1,
-  key: string
-): { nCtx: number; maxBatch: number } {
-  const stored = settings.llm?.inferenceParamsByKey?.[key];
-  return {
-    nCtx: Number.isFinite(stored?.nCtx) ? normalizeLlmNCtxValue(Number(stored?.nCtx)) : 0,
-    maxBatch: Number.isFinite(stored?.maxBatch)
-      ? normalizeLlmMaxBatchValue(Number(stored?.maxBatch))
-      : 40
-  };
-}
-
-export function updateStoredLlmInferenceParamsValue(
-  settings: AppSettingsV1,
-  key: string,
-  params: { nCtx: number; maxBatch: number } | null,
-  resetParallel = false
-): AppSettingsV1 {
-  const llm = settings.llm ?? {};
-  const inferenceParamsByKey = { ...(llm.inferenceParamsByKey ?? {}) };
-  if (params) {
-    inferenceParamsByKey[key] = {
-      nCtx: normalizeLlmNCtxValue(params.nCtx),
-      maxBatch: normalizeLlmMaxBatchValue(params.maxBatch)
-    };
-  } else {
-    delete inferenceParamsByKey[key];
-  }
-  return {
-    ...settings,
-    llm: {
-      ...llm,
-      inferenceParamsByKey,
-      ...(resetParallel ? { llmParallel: 0 } : {})
-    }
-  };
-}
-
-/** 現在のLLM選択を保存し、モデル別プロンプト等の既存辞書は保持する。 */
-export function updateLlmSelectionSettingsValue(
-  settings: AppSettingsV1,
-  value: CurrentLlmSelectionSettingsValue
-): AppSettingsV1 {
-  return {
-    ...settings,
-    llm: {
-      ...(settings.llm ?? {}),
-      modelPath: value.modelPath,
-      backendMode: value.backendMode,
-      lmstudioModel: value.lmstudioModel,
-      ollamaModel: value.ollamaModel,
-      llmHipDeviceIndex: value.llmHipDeviceIndex,
-      llmPromptType: value.llmPromptType,
-      llmParallel: value.llmParallel,
-      proofreadModelTier: value.proofreadModelTier
-    }
-  };
-}
-
-export function buildLlmScopedSettingsKeyValue(
-  mode: LlmBackendMode,
-  modelInput: string,
-  modelPath: string
-): { scope: 'backend' | 'model'; key: string } | null {
-  if (mode === 'local_gguf') {
-    const key = getLlmModelFileNameValue(modelPath);
-    return key ? { scope: 'model', key } : null;
-  }
-  const model = modelInput.trim();
-  return model ? { scope: 'backend', key: `${mode}:${model}` } : null;
-}
-
-export function getStoredLlmStringSettingValue(
-  settings: AppSettingsV1,
-  field: LlmStringSettingsField,
-  key: string
-): string | undefined {
-  const value = settings.llm?.[field]?.[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-export function hasStoredLlmStringSettingValue(
-  settings: AppSettingsV1,
-  field: LlmStringSettingsField,
-  key: string
-): boolean {
-  return getStoredLlmStringSettingValue(settings, field, key) !== undefined;
-}
-
-export function updateStoredLlmStringSettingValue(
-  settings: AppSettingsV1,
-  field: LlmStringSettingsField,
-  key: string,
-  value: string | null
-): AppSettingsV1 {
-  const llm = settings.llm ?? {};
-  const record = { ...(llm[field] ?? {}) };
-  if (value === null) {
-    delete record[key];
-  } else {
-    record[key] = value;
-  }
-  return { ...settings, llm: { ...llm, [field]: record } };
-}
-
-export function getStoredLlmPromptTypeValue(
-  settings: AppSettingsV1,
-  key: string
-): LlmPromptType | undefined {
-  const value = settings.llm?.promptTypeByBackend?.[key];
-  return value === 'gemma4' || value === 'original' ? value : undefined;
-}
-
-export function updateStoredLlmPromptTypeValue(
-  settings: AppSettingsV1,
-  key: string,
-  value: LlmPromptType
-): AppSettingsV1 {
-  const llm = settings.llm ?? {};
-  return {
-    ...settings,
-    llm: {
-      ...llm,
-      promptTypeByBackend: { ...(llm.promptTypeByBackend ?? {}), [key]: value }
-    }
-  };
 }

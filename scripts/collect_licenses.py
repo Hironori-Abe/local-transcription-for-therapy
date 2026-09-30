@@ -329,8 +329,8 @@ def collect_node(frontend: Path) -> tuple[list, list]:
 
 # ----------------------------------------------------------------------------
 # 手動補完分（licenses/manual/ に git 管理で配置）
-#   - 自動収集で本文が取れないもの: pywin32 / sentencepiece / selectors (MPL-2.0)
-#   - 同梱バイナリの条件文書: NVIDIA CUDA Toolkit EULA（Attachment A/B 含む）
+#   - 自動収集で本文が取れないもの: sentencepiece（NeMo-Speech.cpp に静的リンク）/ selectors (MPL-2.0)
+#   - 同梱モデル・エンジンの条件文書: Nemotron-3-Diarization（OpenMDW-1.1）/ Silero VAD
 # ----------------------------------------------------------------------------
 def collect_manual(manual_dir: Path, excluded_names: set[str] | None = None) -> list[tuple[str, str]]:
     if not manual_dir.is_dir():

@@ -6,7 +6,6 @@ import {
   GGML_ESTIMATE_PROFILE,
   buildDocxExportRowsValue,
   buildExportSpeakerLabelByRowIdValue,
-  buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
   buildLocationDetectionScopeValue,
@@ -15,57 +14,28 @@ import {
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
   buildUniqueSpeakersValue,
-  canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
-  computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
-  cpuRuntimeSetupBannerVisibleValue,
-  countSubstringOccurrencesValue,
   displaySpeakerValue,
-  editorVoiceInputDownloadButtonColorValue,
-  editorVoiceInputMemoryTierValue,
-  editorVoiceInputMemoryWarningValue,
   editorVoiceInputUnavailableTooltipValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatEstimatedMinutesValue,
   formatMinuteSecondValue,
-  formatOverallProofreadProgressValue,
-  filterOverallProofreadVisibleItemsValue,
-  getAudioPreprocessPresetHintValue,
-  getAudioPreprocessSettingsForPresetValue,
   getAudioDurationMessageValue,
   getEditableTextFromMapValue,
   getEstimatedTimeMessageValue,
   getImportCompletedMessageValue,
-  getLlmModelFileNameValue,
   getProgressStageOrderValue,
   getLocationAreaPrefectureCodesValue,
   getSpeakerColorClassValue,
-  gpuDeviceLabelValue,
-  gpuSetupHintValue,
-  gpuAsrTierValue,
   hasFallbackInTranscriptionResultValue,
-  isGemma4DefaultLlmModelFileNameValue,
-  isGemma4DefaultLlmModelPathValue,
   isDiarizationModelMissingValue,
   isJapaneseLanguageValue,
   isPlaybackDisabledValue,
-  isVramOomErrorValue,
-  levenshteinDistanceValue,
-  llmBackendModeHintValue,
-  llmBackendModeOptionsValue,
-  llmBackendSelectionValue,
-  llmNCtxHintValue,
-  llmParallelHintValue,
   matchPlaybackShortcutCodeValue,
   inferLocationAreaFromPrefecturesValue,
-  normalizeComputeTypeValue,
-  normalizeDevEmulationModeValue,
   normalizeErrorMessageValue,
-  normalizeLlmMaxBatchValue,
-  normalizeLlmNCtxValue,
-  normalizeLlmParallelValue,
   normalizeLocationAreaValue,
   normalizeLocationDetectionScopeValue,
   normalizeSpeakerKeyValue,
@@ -77,42 +47,36 @@ import {
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
   normalizeTranscriptionLanguageValue,
-  parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
-  resolveEstimateComputeTypeValue,
   resolveTimeInputRangeValue,
-  resolveAudioPreprocessPresetValue,
-  resolveAutoLlmParallelValue,
-  resolveLlmDeviceVramMibValue,
-  resolveRuntimeBuildFlagsValue,
   isBuildVariantValue,
   resolveStepForStageValue,
   secondsToEstimatedMinutesValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
-  secretInputTypeValue,
-  secretVisibilityIconValue,
-  secretVisibilityLabelValue,
-  selectedGpuAsrWarningValue,
   shouldShowVoiceInputShortCandidateHintValue,
-  showProofreadSystemPromptEditorValue,
   speakerOptionLabelValue,
   stepTimeInputValuesValue,
-  setupNeedsHfTokenValue,
   locationDetectionScopeHintValue,
   themeModeLabelValue,
   themeToggleIconValue,
   transcriptionTabDisabledValue,
   transcriptionTabLabelValue,
   transcriptionRuntimeReasonValue,
-  validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
   processingStatusTextValue,
+  speechDeviceLineValue,
+  activeVulkanGpuNameValue,
+  diarizationGpuFallbackNoticeValue,
   effectiveVulkanGpuUuidValue,
   vulkanGpuAutoLabelValue,
   vulkanGpuLabelValue,
+  normalizeAudioPreprocessPresetValue,
+  audioPreprocessPresetFromLegacyFlags,
+  stripRemovedSettingsValue,
+  resolveGeneralAppSettingsValue,
 } from './app-utils.ts';
 
 test('duration formatters preserve rounding and negative-value behavior', () => {
@@ -160,121 +124,22 @@ test('estimated time messages preserve pending, insufficient, and ready states',
   assert.equal(getEstimatedTimeMessageValue(readyInput), '最低 4 分、概算 6 分');
 });
 
-test('GPU labels and setup hints preserve backend, recommendation, and warning text', () => {
-  assert.equal(computeEnvBackendLabelValue('cuda'), 'CUDA (NVIDIA)');
-  assert.equal(computeEnvBackendLabelValue('rocm'), 'ROCm (AMD)');
-  assert.equal(computeEnvBackendLabelValue('none'), 'GPU 未使用');
-  assert.equal(gpuDeviceLabelValue({
-    index: 2,
-    name: 'Radeon',
-    totalVramMb: 8192,
-    isLikelyIgpu: true,
-    gcnArchName: 'gfx1103'
-  }, 2, 'rocm'), 'Radeon（8GB ※統合GPU ⚠ 動作未確認 ★推奨）');
-  assert.equal(gpuDeviceLabelValue({
-    index: 0,
-    name: 'GeForce',
-    totalVramMb: 12288
-  }, 1, 'cuda'), 'GeForce（12GB）');
-  assert.match(gpuSetupHintValue(true, ''), /GPU内フォールバック/);
-  assert.match(gpuSetupHintValue(false, 'GPU 文字起こしに失敗しました: test'), /GPU 実行に失敗/);
-  assert.equal(gpuSetupHintValue(false, '別のエラー'), '');
-});
-
 test('Full GPU runtime reasons never promise an unavailable CPU fallback', () => {
   assert.equal(
-    transcriptionRuntimeReasonValue(false, 'GPU が確認できませんでした。CPU モードで動作します。', false),
+    transcriptionRuntimeReasonValue(false, 'GPU が確認できませんでした。CPU モードで動作します。'),
     'GPU が確認できませんでした。Full GPU版ではCPUへ切り替えず、文字起こし・話者分離は利用できません。GPUドライバーとランタイムを確認してください。'
   );
   assert.equal(
-    transcriptionRuntimeReasonValue(false, 'CPU モードで動作します。', true),
-    'CPU モードで動作します。'
-  );
-  assert.equal(
-    transcriptionRuntimeReasonValue(false, '', false),
+    transcriptionRuntimeReasonValue(false, ''),
     'GPU が確認できないため、文字起こし・話者分離は利用できません。'
   );
-  assert.equal(transcriptionRuntimeReasonValue(true, 'CUDA が利用可能です。', false), '');
+  assert.equal(transcriptionRuntimeReasonValue(true, 'CUDA が利用可能です。'), '');
 });
 
-test('CPU runtime reasons remain actionable when the runtime probe fails', () => {
-  const fallback = transcriptionRuntimeReasonValue(false, '', true);
-  assert.match(fallback, /CPU/);
-  assert.match(fallback, /ランタイム/);
-  assert.match(fallback, /文字起こし/);
-
-  const probeFailure = 'CTranslate2 の CPU ランタイムを確認できませんでした。Python環境を確認してください。';
-  assert.equal(transcriptionRuntimeReasonValue(false, `  ${probeFailure}  `, true), probeFailure);
-  assert.equal(transcriptionRuntimeReasonValue(true, probeFailure, true), '');
-});
-
-test('CPU runtime banner is shown only after setup is complete', () => {
-  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, true, false), true);
-  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, false, false), false);
-  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, false, true, false), false);
-  assert.equal(cpuRuntimeSetupBannerVisibleValue(true, true, true, true), false);
-  assert.equal(cpuRuntimeSetupBannerVisibleValue(false, true, true, false), false);
-});
-
-test('LLM mode, VRAM, parallelism, and context hints preserve current UI rules', () => {
-  assert.equal(llmBackendModeHintValue('lmstudio', 'e4b', null), '「localhost:1234」に接続します');
-  assert.equal(llmBackendModeHintValue('ollama', 'e4b', null), '「localhost:11434」に接続します');
-  assert.match(llmBackendModeHintValue('local_gguf', '12b', false), /約7GB/);
-  assert.match(llmBackendModeHintValue('local_gguf', '12b', true), /12B.*選択中/);
-  assert.match(llmBackendModeHintValue('local_gguf', 'e4b', null), /E4B/);
-  const devices = [{ index: 2, totalVramMb: 8192 }, { index: 4, totalVramMb: 16384 }];
-  assert.equal(resolveLlmDeviceVramMibValue([], -1, 2), null);
-  assert.equal(resolveLlmDeviceVramMibValue(devices, 4, 2), 16384);
-  assert.equal(resolveLlmDeviceVramMibValue(devices, -1, 2), 8192);
-  assert.equal(resolveLlmDeviceVramMibValue(devices, 99, 4), 8192);
-  assert.equal(llmParallelHintValue(1, 'cuda', 8192), '');
-  assert.equal(llmParallelHintValue(0, 'rocm', 8192), '');
-  assert.equal(llmParallelHintValue(0, 'cuda', null), '');
-  assert.equal(llmParallelHintValue(0, 'cuda', 8192), '現在: 2（VRAM 約8GB）');
-  assert.equal(llmNCtxHintValue(4096, 'local_gguf', 'cuda', 8192), '');
-  assert.equal(llmNCtxHintValue(0, 'ollama', 'cuda', 8192), '');
-  assert.equal(llmNCtxHintValue(0, 'local_gguf', 'rocm', 8192), '現在: 16,384');
-  assert.equal(llmNCtxHintValue(0, 'local_gguf', 'cuda', 8192), '現在: 16,384（VRAM 約8GB）');
-  assert.equal(llmNCtxHintValue(0, 'local_gguf', 'cuda', 16384), '現在: 32,768（VRAM 約16GB）');
-});
-
-test('LLM prompt editor and backend option helpers preserve available selections', () => {
-  assert.equal(showProofreadSystemPromptEditorValue(true, 'ollama', 'model'), false);
-  assert.equal(showProofreadSystemPromptEditorValue(false, 'ollama', ''), true);
-  assert.equal(showProofreadSystemPromptEditorValue(false, 'local_gguf', ''), false);
-  assert.equal(showProofreadSystemPromptEditorValue(false, 'local_gguf', '/custom.gguf'), true);
-  assert.equal(canSaveOverallProofreadSystemPromptValue(true, 'ollama', 'model', ''), false);
-  assert.equal(canSaveOverallProofreadSystemPromptValue(false, 'ollama', '  ', ''), false);
-  assert.equal(canSaveOverallProofreadSystemPromptValue(false, 'ollama', ' model ', ''), true);
-  assert.equal(canSaveOverallProofreadSystemPromptValue(
-    false, 'local_gguf', '', '/models/gemma-4-E4B-it-Q4_K_M.gguf'
-  ), false);
-  assert.equal(canSaveOverallProofreadSystemPromptValue(
-    false, 'local_gguf', '', '/models/custom.gguf'
-  ), true);
-  assert.deepEqual(llmBackendModeOptionsValue(false, false).map((option) => option.value), ['local_gguf']);
-  assert.deepEqual(llmBackendModeOptionsValue(true, false).map((option) => option.value), [
-    'local_gguf', 'local_gguf_12b'
-  ]);
-  assert.deepEqual(llmBackendModeOptionsValue(true, true).map((option) => option.value), [
-    'local_gguf', 'local_gguf_12b', 'lmstudio', 'ollama'
-  ]);
-  assert.deepEqual(llmBackendModeOptionsValue(true, false, true), []);
-  assert.deepEqual(llmBackendModeOptionsValue(true, true, true), []);
-  assert.equal(llmBackendSelectionValue('local_gguf', '12b'), 'local_gguf_12b');
-  assert.equal(llmBackendSelectionValue('local_gguf', 'e4b'), 'local_gguf');
-  assert.equal(llmBackendSelectionValue('ollama', '12b'), 'ollama');
-});
-
-test('language and selected GPU warnings preserve Japanese and ROCm special cases', () => {
+test('language detection treats missing values as Japanese', () => {
   assert.equal(isJapaneseLanguageValue('JA'), true);
   assert.equal(isJapaneseLanguageValue(undefined), true);
   assert.equal(isJapaneseLanguageValue('en'), false);
-  assert.equal(selectedGpuAsrWarningValue('cuda', true, 'gfx1103'), '');
-  assert.equal(selectedGpuAsrWarningValue('rocm', false, 'gfx1103'), '');
-  assert.match(selectedGpuAsrWarningValue('rocm', true, 'gfx1103'), /対応外GPU/);
-  assert.equal(selectedGpuAsrWarningValue('rocm', true, 'gfx1102'), '');
-  assert.match(selectedGpuAsrWarningValue('rocm', true, 'unknown'), /動作未確認/);
 });
 
 test('location count and hint helpers deduplicate selections across areas', () => {
@@ -342,69 +207,6 @@ test('normalizeErrorMessageValue safely handles values JSON cannot represent', (
   assert.equal(normalizeErrorMessageValue({ toJSON: () => { throw new Error('serialize failure'); } }), fallback);
 });
 
-test('buildFinalInitialPromptValue preserves prompt trimming and concatenation', () => {
-  assert.equal(
-    buildFinalInitialPromptValue('  基本指示  ', '  固有名詞を維持する  '),
-    '基本指示\n追加指示: 固有名詞を維持する'
-  );
-  assert.equal(buildFinalInitialPromptValue('  基本指示  ', ' \n '), '基本指示');
-  assert.equal(buildFinalInitialPromptValue('', '追加のみ'), '\n追加指示: 追加のみ');
-  assert.equal(buildFinalInitialPromptValue(' \n ', ''), '');
-});
-
-test('audio preprocessing settings resolve to the same preset and hint text', () => {
-  const presets = [
-    {
-      preset: 'none' as const,
-      settings: { highpassFilter: false, noiseReduction: false, normalizeAudio: false, noiseReductionMode: 'weak' as const },
-      hint: '録音が良質な場合'
-    },
-    {
-      preset: 'low_noise' as const,
-      settings: { highpassFilter: true, noiseReduction: false, normalizeAudio: false, noiseReductionMode: 'weak' as const },
-      hint: 'ハイパスフィルター。振動・空調ノイズを除去。'
-    },
-    {
-      preset: 'strong_noise' as const,
-      settings: { highpassFilter: true, noiseReduction: true, normalizeAudio: false, noiseReductionMode: 'weak' as const },
-      hint: 'ハイパス＋ノイズ除去。背景ノイズを抑制。'
-    },
-    {
-      preset: 'volume_boost' as const,
-      settings: { highpassFilter: true, noiseReduction: false, normalizeAudio: true, noiseReductionMode: 'weak' as const },
-      hint: 'ハイパス＋正規化。音量の統一と底上げ。'
-    },
-    {
-      preset: 'general_improvement' as const,
-      settings: { highpassFilter: true, noiseReduction: true, normalizeAudio: true, noiseReductionMode: 'weak' as const },
-      hint: 'ハイパス＋ノイズ除去＋正規化（全処理）'
-    }
-  ];
-
-  for (const { preset, settings, hint } of presets) {
-    assert.deepEqual(getAudioPreprocessSettingsForPresetValue(preset), settings);
-    assert.equal(resolveAudioPreprocessPresetValue(settings), preset);
-    assert.equal(getAudioPreprocessPresetHintValue(preset), hint);
-  }
-});
-
-test('manual audio preprocessing preserves the current controls', () => {
-  assert.equal(getAudioPreprocessSettingsForPresetValue('manual'), null);
-  assert.equal(getAudioPreprocessPresetHintValue('manual'), '');
-  assert.equal(resolveAudioPreprocessPresetValue({
-    highpassFilter: false,
-    noiseReduction: true,
-    normalizeAudio: false,
-    noiseReductionMode: 'weak'
-  }), 'manual');
-  assert.equal(resolveAudioPreprocessPresetValue({
-    highpassFilter: true,
-    noiseReduction: true,
-    normalizeAudio: true,
-    noiseReductionMode: 'standard'
-  }), 'manual');
-});
-
 test('speaker display helpers preserve aliases, normalization, and option labels', () => {
   const aliases = { SPEAKER_00: 'Th', SPEAKER_01: '', SPEAKER_02: '  IP  ' };
   assert.equal(normalizeSpeakerKeyValue('  SPEAKER_00  '), 'SPEAKER_00');
@@ -440,35 +242,6 @@ test('playback shortcut matching prefers physical codes and preserves key fallba
   assert.equal(matchPlaybackShortcutCodeValue(null, ' '), 'Space');
   assert.equal(matchPlaybackShortcutCodeValue('', 'spacebar'), 'Space');
   assert.equal(matchPlaybackShortcutCodeValue('', 'Process'), null);
-});
-
-test('Hugging Face token validation preserves accepted values and error categories', () => {
-  assert.equal(validateHfTokenFormatValue(''), null);
-  assert.equal(validateHfTokenFormatValue('   '), null);
-  assert.equal(validateHfTokenFormatValue('  hf_abcdefghijklmnopq  '), null);
-  assert.match(validateHfTokenFormatValue('hf_abcdef ghijklmnop') ?? '', /空白や改行/);
-  assert.match(validateHfTokenFormatValue('token_abcdefghijklmnop') ?? '', /「hf_」で始まります/);
-  assert.match(validateHfTokenFormatValue('hf_short') ?? '', /短すぎます/);
-  assert.match(validateHfTokenFormatValue('hf_abcdefghijklmnop-') ?? '', /使用できない文字/);
-  assert.match(validateHfTokenFormatValue('hf_あいうえおかきくけこさしすせそたちつてとなにぬねの') ?? '', /使用できない文字/);
-});
-
-test('secret field visibility helpers keep type, icon, and accessible label synchronized', () => {
-  assert.equal(secretInputTypeValue(false), 'password');
-  assert.equal(secretVisibilityIconValue(false), 'visibility');
-  assert.equal(secretVisibilityLabelValue(false), 'トークンを表示');
-  assert.equal(secretInputTypeValue(true), 'text');
-  assert.equal(secretVisibilityIconValue(true), 'visibility_off');
-  assert.equal(secretVisibilityLabelValue(true), 'トークンを隠す');
-});
-
-test('Levenshtein distance preserves empty, insertion, deletion, and replacement cases', () => {
-  assert.equal(levenshteinDistanceValue('', ''), 0);
-  assert.equal(levenshteinDistanceValue('', 'abc'), 3);
-  assert.equal(levenshteinDistanceValue('abc', ''), 3);
-  assert.equal(levenshteinDistanceValue('kitten', 'sitting'), 3);
-  assert.equal(levenshteinDistanceValue('文字起こし', '文字おこし'), 1);
-  assert.equal(levenshteinDistanceValue('same', 'same'), 0);
 });
 
 test('time input helpers preserve digit filtering, validation, and reversed-range correction', () => {
@@ -517,23 +290,6 @@ test('time field stepping preserves bounds and prevents start/end crossover', ()
   ), null);
 });
 
-test('Editor and CPU voice-input memory helpers preserve thresholds and warnings', () => {
-  const gib = 1024 ** 3;
-  assert.equal(editorVoiceInputMemoryTierValue(false, true, 8 * gib, 16 * gib, 24 * gib), 'unknown');
-  assert.equal(editorVoiceInputMemoryTierValue(true, false, 8 * gib, 16 * gib, 24 * gib), 'unknown');
-  assert.equal(editorVoiceInputMemoryTierValue(true, true, null, 16 * gib, 24 * gib), 'unknown');
-  assert.equal(editorVoiceInputMemoryTierValue(true, true, 15 * gib, 16 * gib, 24 * gib), 'low');
-  assert.equal(editorVoiceInputMemoryTierValue(true, true, 16 * gib, 16 * gib, 24 * gib), 'caution');
-  assert.equal(editorVoiceInputMemoryTierValue(true, true, 24 * gib, 16 * gib, 24 * gib), 'normal');
-  assert.match(editorVoiceInputMemoryWarningValue('low') ?? '', /利用は推奨しません/);
-  assert.match(editorVoiceInputMemoryWarningValue('caution') ?? '', /他のアプリ/);
-  assert.equal(editorVoiceInputMemoryWarningValue('normal'), null);
-  assert.equal(editorVoiceInputDownloadButtonColorValue(true, 'low'), 'warn');
-  assert.equal(editorVoiceInputDownloadButtonColorValue(true, 'caution'), 'warn');
-  assert.equal(editorVoiceInputDownloadButtonColorValue(true, 'normal'), 'primary');
-  assert.equal(editorVoiceInputDownloadButtonColorValue(false, 'low'), 'primary');
-});
-
 test('voice-input tooltip preserves condition priority', () => {
   assert.equal(editorVoiceInputUnavailableTooltipValue(false), '音声入力パックの状態を確認中です...');
   assert.match(editorVoiceInputUnavailableTooltipValue(true), /モデルをダウンロード/);
@@ -555,10 +311,9 @@ test('result and transcription tab helpers preserve setup labels', () => {
   assert.equal(isDiarizationModelMissingValue(true, false, true), true);
   assert.equal(isDiarizationModelMissingValue(true, true, false), true);
   assert.equal(isDiarizationModelMissingValue(true, true, true), false);
-  assert.equal(transcriptionTabLabelValue(false, true, false), '文字起こし（要設定）');
-  assert.equal(transcriptionTabLabelValue(true, false, true), '文字起こし（要設定）');
-  assert.equal(transcriptionTabLabelValue(true, false, false), '文字起こし（要GPU設定）');
-  assert.equal(transcriptionTabLabelValue(false, false, false), '文字起こし');
+  assert.equal(transcriptionTabLabelValue(false, true), '文字起こし（要設定）');
+  assert.equal(transcriptionTabLabelValue(true, false), '文字起こし（要設定）');
+  assert.equal(transcriptionTabLabelValue(false, false), '文字起こし');
 });
 
 test('tab and setup-adjacent helpers preserve safe UI states', () => {
@@ -566,31 +321,16 @@ test('tab and setup-adjacent helpers preserve safe UI states', () => {
     transcriptionTabVisible: true,
     editorOnlyBuild: false,
     setupChecked: true,
-    devEmulationMode: 'none' as const,
-    cpuOnlyBuild: false,
     needsFullSetup: false,
-    pythonEnvReady: true,
     transcriptionRuntimeAvailable: true
   };
   assert.equal(transcriptionTabDisabledValue(tabInput), false);
-  assert.equal(transcriptionTabDisabledValue({ ...tabInput, devEmulationMode: 'no_cuda' }), true);
-  assert.equal(transcriptionTabDisabledValue({
-    ...tabInput, devEmulationMode: 'no_cuda', cpuOnlyBuild: true
-  }), false);
   assert.equal(transcriptionTabDisabledValue({
     ...tabInput, transcriptionRuntimeAvailable: false
   }), true);
   assert.equal(transcriptionTabDisabledValue({
     ...tabInput, transcriptionRuntimeAvailable: false, needsFullSetup: true
   }), false);
-  assert.equal(transcriptionTabDisabledValue({
-    ...tabInput, transcriptionRuntimeAvailable: false, pythonEnvReady: false
-  }), false);
-  assert.equal(setupNeedsHfTokenValue(true, true, false, '  '), true);
-  assert.equal(setupNeedsHfTokenValue(true, true, false, 'hf_token'), false);
-  assert.equal(setupNeedsHfTokenValue(true, true, true, ''), false);
-  assert.equal(parallelModeHintValue('standard'), '標準・安定');
-  assert.equal(parallelModeHintValue('fast'), 'GPUスペックに余裕がある場合のみ');
 });
 
 test('processing status text preserves combined transcription and proofreading labels', () => {
@@ -601,10 +341,7 @@ test('processing status text preserves combined transcription and proofreading l
     diarizationPhaseActive: false,
     diarizationStage: '',
     parallelDiarizationStatus: '',
-    llmProofreadRunning: false,
-    llmProofreadStatus: '',
     ruleProofreadRunning: false,
-    cpuOnlyBuild: false,
     ruleProofreadProgressText: '',
     ruleProofreadStatus: ''
   };
@@ -624,28 +361,61 @@ test('processing status text preserves combined transcription and proofreading l
   }), '文字起こし：完了　話者分離：起動中');
   assert.equal(processingStatusTextValue({
     ...idle,
-    llmProofreadRunning: true,
-    llmProofreadStatus: '校正中: 3 / 10 行'
-  }), 'AI校正：3/10行');
+    ruleProofreadRunning: true,
+    ruleProofreadStatus: '2/5'
+  }), '句読点付与：2/5');
+  assert.equal(processingStatusTextValue({
+    ...idle,
+    transcriptionRunning: true,
+    displayProgress: 10,
+    cpuMode: true
+  }), '文字起こし：10%　（CPUで処理中）');
   assert.equal(processingStatusTextValue({
     ...idle,
     ruleProofreadRunning: true,
-    cpuOnlyBuild: true,
-    ruleProofreadStatus: '2/5'
-  }), '単純句読点付与：2/5');
+    ruleProofreadStatus: '2/5',
+    cpuMode: true
+  }), '句読点付与：2/5');
 });
 
-test('overall proofread visible items require changes and exclude dismissed IDs', () => {
-  const items = [
-    { id: 1, changed: true, text: 'a' },
-    { id: 2, changed: false, text: 'b' },
-    { id: 3, changed: true, text: 'c' }
-  ];
-  assert.deepEqual(filterOverallProofreadVisibleItemsValue(items, new Set([3])), [items[0]]);
-  assert.deepEqual(filterOverallProofreadVisibleItemsValue(null, new Set()), []);
+test('speech device line reports GPU, CPU and the dev override', () => {
+  assert.equal(speechDeviceLineValue({ vulkanAvailable: null, gpuName: '', devForceCpu: false }), '');
+  assert.equal(
+    speechDeviceLineValue({ vulkanAvailable: true, gpuName: 'RTX 4060', devForceCpu: false }),
+    '処理装置: GPU（RTX 4060）'
+  );
+  assert.equal(speechDeviceLineValue({ vulkanAvailable: true, gpuName: ' ', devForceCpu: false }), '処理装置: GPU');
+  assert.equal(
+    speechDeviceLineValue({ vulkanAvailable: false, gpuName: '', devForceCpu: false }),
+    '処理装置: CPU（GPUが見つからないため）'
+  );
+  assert.equal(
+    speechDeviceLineValue({ vulkanAvailable: false, gpuName: '', devForceCpu: true }),
+    '処理装置: CPU（開発オプションでCPU強制）'
+  );
 });
 
-test('runtime estimate helpers preserve minute rounding and effective compute types', () => {
+test('active GPU name follows the saved selection, then auto, then the fallback name', () => {
+  const list = {
+    devices: [
+      { index: 0, name: 'iGPU', uuid: 'a' },
+      { index: 1, name: 'dGPU', uuid: 'b' }
+    ],
+    autoUuid: 'b'
+  } as unknown as Parameters<typeof activeVulkanGpuNameValue>[1];
+  assert.equal(activeVulkanGpuNameValue('a', list, 'x'), 'iGPU');
+  assert.equal(activeVulkanGpuNameValue('', list, 'x'), 'dGPU');
+  assert.equal(activeVulkanGpuNameValue('gone', list, 'x'), 'dGPU');
+  assert.equal(activeVulkanGpuNameValue('', null, 'x'), 'x');
+});
+
+test('diarization GPU fallback notice appears only when flagged', () => {
+  assert.equal(diarizationGpuFallbackNoticeValue({ diarization: null }), null);
+  assert.equal(diarizationGpuFallbackNoticeValue({ diarization: { gpuFallback: false } }), null);
+  assert.match(diarizationGpuFallbackNoticeValue({ diarization: { gpuFallback: true } }) ?? '', /CPUで処理/);
+});
+
+test('runtime estimate helpers preserve minute rounding', () => {
   assert.equal(secondsToEstimatedMinutesValue(Number.NaN), 0);
   assert.equal(secondsToEstimatedMinutesValue(Number.POSITIVE_INFINITY), 0);
   assert.equal(secondsToEstimatedMinutesValue(0), 0);
@@ -653,9 +423,6 @@ test('runtime estimate helpers preserve minute rounding and effective compute ty
   assert.equal(secondsToEstimatedMinutesValue(0.1), 1);
   assert.equal(secondsToEstimatedMinutesValue(60), 1);
   assert.equal(secondsToEstimatedMinutesValue(60.1), 2);
-  assert.equal(resolveEstimateComputeTypeValue('cpu', 'float32'), 'int8');
-  assert.equal(resolveEstimateComputeTypeValue('cuda', 'auto'), 'float16');
-  assert.equal(resolveEstimateComputeTypeValue('cuda', 'int8_float16'), 'int8_float16');
 });
 
 test('whisper.cpp estimate samples are kept apart from faster-whisper compute types', () => {
@@ -698,15 +465,14 @@ test('saved runtime estimate samples skip corrupt entries and normalize devices'
     { audioSeconds: 1, elapsedSeconds: 1, diarization: 'yes', computeType: 'float16', createdAt: 4 }
   ]);
 
-  assert.deepEqual(parseRuntimeEstimateSamplesValue(serialized, false), [
+  assert.deepEqual(parseRuntimeEstimateSamplesValue(serialized), [
     { audioSeconds: 60, elapsedSeconds: 30, diarization: true, device: 'cpu', computeType: 'int8', createdAt: 1, fileSizeBytes: null },
     { audioSeconds: 90, elapsedSeconds: 45, diarization: false, device: 'cuda', computeType: 'float16', createdAt: 2, fileSizeBytes: 1234 },
     { audioSeconds: -1, elapsedSeconds: -2, diarization: true, device: 'cuda', computeType: 'float32', createdAt: 3, fileSizeBytes: null }
   ]);
-  assert.equal(parseRuntimeEstimateSamplesValue(serialized, true)[1]?.device, 'cpu');
-  assert.deepEqual(parseRuntimeEstimateSamplesValue(null, false), []);
-  assert.deepEqual(parseRuntimeEstimateSamplesValue('{', false), []);
-  assert.deepEqual(parseRuntimeEstimateSamplesValue('{}', false), []);
+  assert.deepEqual(parseRuntimeEstimateSamplesValue(null), []);
+  assert.deepEqual(parseRuntimeEstimateSamplesValue('{'), []);
+  assert.deepEqual(parseRuntimeEstimateSamplesValue('{}'), []);
 });
 
 test('runtime estimate sample append rejects invalid durations and keeps the newest 120', () => {
@@ -777,14 +543,6 @@ test('runtime estimate calculation preserves RTF percentile selection and readin
   });
 });
 
-test('substring occurrence counting preserves non-overlapping replace-all semantics', () => {
-  assert.equal(countSubstringOccurrencesValue('abc abc abc', 'abc'), 3);
-  assert.equal(countSubstringOccurrencesValue('aaaa', 'aa'), 2);
-  assert.equal(countSubstringOccurrencesValue('東京東京', '東京'), 2);
-  assert.equal(countSubstringOccurrencesValue('abc', 'x'), 0);
-  assert.equal(countSubstringOccurrencesValue('abc', ''), 0);
-});
-
 test('theme labels preserve all three UI display names', () => {
   assert.equal(themeModeLabelValue('system'), 'システムに合わせる');
   assert.equal(themeModeLabelValue('light'), 'ライト');
@@ -798,13 +556,6 @@ test('voice input short-candidate hint counts Unicode characters after trimming'
   assert.equal(shouldShowVoiceInputShortCandidateHintValue([' はい ', 'いいえ']), true);
   assert.equal(shouldShowVoiceInputShortCandidateHintValue(['😀😀😀😀']), true);
   assert.equal(shouldShowVoiceInputShortCandidateHintValue(['短い', '五文字です']), false);
-});
-
-test('overall proofread progress clamps and rounds values for display', () => {
-  assert.equal(formatOverallProofreadProgressValue(3.9, 10.8), '校正中: 3 / 10 行');
-  assert.equal(formatOverallProofreadProgressValue(12, 10), '校正中: 10 / 10 行');
-  assert.equal(formatOverallProofreadProgressValue(-1, 10), '校正中: 0 / 10 行');
-  assert.equal(formatOverallProofreadProgressValue(2, -1), '校正中: 0 / 0 行');
 });
 
 test('progress stage ordering and aliases preserve transcription and diarization flows', () => {
@@ -835,62 +586,6 @@ test('transcription fallback detection accepts explicit and diarization fallback
     diarization: { note: '話者分離が完了しました。' }
   }), false);
   assert.equal(hasFallbackInTranscriptionResultValue({ diarization: null }), false);
-});
-
-test('automatic LLM parallelism preserves VRAM thresholds', () => {
-  assert.equal(resolveAutoLlmParallelValue(Number.NaN), 1);
-  assert.equal(resolveAutoLlmParallelValue(6999), 1);
-  assert.equal(resolveAutoLlmParallelValue(7000), 2);
-  assert.equal(resolveAutoLlmParallelValue(10999), 2);
-  assert.equal(resolveAutoLlmParallelValue(11000), 4);
-});
-
-test('GPU ASR tier cautions only unknown ROCm architectures', () => {
-  assert.equal(gpuAsrTierValue('cuda', 'gfx1103'), 'ok');
-  assert.equal(gpuAsrTierValue('rocm', 'GFX1102'), 'ok');
-  assert.equal(gpuAsrTierValue('rocm', 'gfx1150'), 'ok');
-  assert.equal(gpuAsrTierValue('rocm', 'gfx1103'), 'caution');
-  assert.equal(gpuAsrTierValue('rocm', null), 'caution');
-});
-
-test('VRAM OOM detection preserves backend marker variants', () => {
-  const messages = [
-    '[VRAM_OOM] launch failed',
-    'CUDA out of memory',
-    'failed to allocate buffer',
-    'cudaMalloc returned an error',
-    'CUDAErrorMemoryAllocation',
-    'ggml_backend_cuda_buffer allocation failed'
-  ];
-  for (const message of messages) {
-    assert.equal(isVramOomErrorValue(message), true);
-  }
-  assert.equal(isVramOomErrorValue('model file not found'), false);
-  assert.equal(isVramOomErrorValue(''), false);
-  assert.equal(isVramOomErrorValue(null), false);
-});
-
-test('Gemma default model helpers support Windows, Unix, QAT, and legacy names', () => {
-  assert.equal(
-    getLlmModelFileNameValue(' C:\\models\\gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf '),
-    'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'
-  );
-  assert.equal(getLlmModelFileNameValue('/models/custom.gguf'), 'custom.gguf');
-  assert.equal(getLlmModelFileNameValue('/models/'), '');
-  assert.equal(getLlmModelFileNameValue(''), '');
-  assert.equal(isGemma4DefaultLlmModelFileNameValue(' GEMMA-4-E4B-IT-QAT-UD-Q4_K_XL.GGUF '), true);
-  assert.equal(isGemma4DefaultLlmModelFileNameValue('gemma-4-E4B-it-qat-UD-Q4_K_XL'), true);
-  assert.equal(isGemma4DefaultLlmModelFileNameValue('gemma-4-E4B-it-Q4_K_M.gguf'), true);
-  assert.equal(isGemma4DefaultLlmModelFileNameValue('custom.gguf'), false);
-  assert.equal(isGemma4DefaultLlmModelPathValue('/models/gemma-4-E4B-it-Q4_K_M.gguf'), true);
-  assert.equal(isGemma4DefaultLlmModelPathValue('/models/custom.gguf'), false);
-});
-
-test('development emulation mode accepts only supported persisted values', () => {
-  assert.equal(normalizeDevEmulationModeValue(' NO_CUDA '), 'no_cuda');
-  assert.equal(normalizeDevEmulationModeValue('Missing_Community1'), 'missing_community1');
-  assert.equal(normalizeDevEmulationModeValue('unknown'), 'none');
-  assert.equal(normalizeDevEmulationModeValue(null), 'none');
 });
 
 test('document export speaker labels preserve numbering and placeholder rules', () => {
@@ -1073,67 +768,23 @@ test('location detection request keeps other areas and updates only the active a
   });
 });
 
-test('proofread and LLM numeric settings use documented defaults and limits', () => {
+test('proofread numeric settings use documented defaults and limits', () => {
   assert.equal(normalizeProofreadChunkSizeValue(Number.NaN), 12);
   assert.equal(normalizeProofreadChunkSizeValue(0), 1);
   assert.equal(normalizeProofreadChunkSizeValue(64.6), 64);
   assert.equal(normalizeProofreadChunkMaxCharsValue(Number.POSITIVE_INFINITY), 1200);
   assert.equal(normalizeProofreadChunkMaxCharsValue(199), 200);
   assert.equal(normalizeProofreadChunkMaxCharsValue(6001), 6000);
-
-  assert.equal(normalizeLlmNCtxValue(Number.NaN), 0);
-  assert.equal(normalizeLlmNCtxValue(0), 0);
-  assert.equal(normalizeLlmNCtxValue(4097), 4096);
-  assert.equal(normalizeLlmNCtxValue(200000), 131072);
-  assert.equal(normalizeLlmMaxBatchValue(Number.NaN), 40);
-  assert.equal(normalizeLlmMaxBatchValue(0), 1);
-  assert.equal(normalizeLlmMaxBatchValue(101), 100);
-  assert.equal(normalizeLlmParallelValue(Number.NaN), 0);
-  assert.equal(normalizeLlmParallelValue(0), 0);
-  assert.equal(normalizeLlmParallelValue(25), 24);
 });
 
-test('saved selection settings normalize invalid and CPU-only values safely', () => {
+test('saved selection settings normalize invalid values safely', () => {
   const languageOptions = [{ value: 'ja' }, { value: 'en' }, { value: 'ko' }];
   assert.equal(normalizeThemeModeValue('dark'), 'dark');
   assert.equal(normalizeThemeModeValue('unknown'), 'system');
-  assert.equal(normalizeComputeTypeValue(' FLOAT16 ', false), 'float16');
-  assert.equal(normalizeComputeTypeValue('unknown', false), 'auto');
-  assert.equal(normalizeComputeTypeValue('float16', true), 'float32');
-  assert.equal(normalizeComputeTypeValue('int8', true), 'int8');
   assert.equal(normalizeTranscriptionLanguageValue(' EN ', languageOptions), 'en');
   assert.equal(normalizeTranscriptionLanguageValue('fr', languageOptions), 'ja');
-  assert.equal(normalizeTranscriptionDeviceValue('cpu', false), 'cpu');
-  assert.equal(normalizeTranscriptionDeviceValue('unknown', false), 'cuda');
-  assert.equal(normalizeTranscriptionDeviceValue('cuda', true), 'cpu');
-});
-
-test('runtime build flags trust the Rust CPU variant even when the frontend default leaked into a package', () => {
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, false, 'cpu'), {
-    cpuOnlyBuild: true,
-    aiProofreadBuild: false,
-    cpuVoiceInputBuild: true
-  });
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, 'cuda'), {
-    cpuOnlyBuild: false,
-    aiProofreadBuild: true,
-    cpuVoiceInputBuild: false
-  });
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, false, 'cuda'), {
-    cpuOnlyBuild: false,
-    aiProofreadBuild: true,
-    cpuVoiceInputBuild: false
-  });
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, null), {
-    cpuOnlyBuild: true,
-    aiProofreadBuild: false,
-    cpuVoiceInputBuild: true
-  });
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(true, false, 'cpu'), {
-    cpuOnlyBuild: true,
-    aiProofreadBuild: false,
-    cpuVoiceInputBuild: true
-  });
+  assert.equal(normalizeTranscriptionDeviceValue('cpu'), 'cpu');
+  assert.equal(normalizeTranscriptionDeviceValue('unknown'), 'cuda');
 });
 
 test('vulkan GPU labels show VRAM, mark integrated GPUs, and name the auto choice', () => {
@@ -1153,12 +804,28 @@ test('vulkan GPU labels show VRAM, mark integrated GPUs, and name the auto choic
   assert.equal(effectiveVulkanGpuUuidValue('', list), '');
 });
 
-test('runtime build flags disable AI proofreading for the Vulkan variant', () => {
-  assert.deepEqual(resolveRuntimeBuildFlagsValue(false, true, 'vulkan'), {
-    cpuOnlyBuild: false,
-    aiProofreadBuild: false,
-    cpuVoiceInputBuild: false
+test('audio preprocess preset settings validate, round-trip and migrate legacy flags', () => {
+  assert.equal(normalizeAudioPreprocessPresetValue('volume_boost'), 'volume_boost');
+  assert.equal(normalizeAudioPreprocessPresetValue('manual'), 'none');
+  assert.equal(normalizeAudioPreprocessPresetValue(undefined), 'none');
+
+  const kept = stripRemovedSettingsValue({ transcription: { audioPreprocess: 'strong_noise' } });
+  assert.equal(kept.transcription?.audioPreprocess, 'strong_noise');
+  const invalid = stripRemovedSettingsValue({ transcription: { audioPreprocess: 'bogus' } });
+  assert.equal(invalid.transcription?.audioPreprocess, 'none');
+  const absent = stripRemovedSettingsValue({ transcription: { language: 'ja' } });
+  assert.equal(absent.transcription?.audioPreprocess, undefined);
+
+  const legacy = stripRemovedSettingsValue({
+    transcription: { highpassFilter: true, noiseReduction: true, normalizeAudio: true }
   });
-  assert.equal(isBuildVariantValue('vulkan'), true);
-  assert.equal(isBuildVariantValue('metal'), false);
+  assert.equal(legacy.transcription?.audioPreprocess, 'general_improvement');
+  assert.equal(audioPreprocessPresetFromLegacyFlags({ highpassFilter: true }), 'low_noise');
+  assert.equal(audioPreprocessPresetFromLegacyFlags({ noiseReduction: true }), 'none');
+
+  const resolved = resolveGeneralAppSettingsValue(kept, {
+    transcriptionLanguageOptions: [{ value: 'ja' }],
+    playbackRateOptions: [1]
+  });
+  assert.equal(resolved.audioPreprocess, 'strong_noise');
 });

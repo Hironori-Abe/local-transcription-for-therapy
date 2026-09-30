@@ -1,19 +1,6 @@
 {
-  "productName": "Local Transcription for Therapy (Editor)",
-  "identifier": "net.gakkousya.lott-editor",
-  "app": {
-    "windows": [
-      {
-        "title": "Local Transcription for Therapy (Editor)",
-        "width": 1024,
-        "height": 820,
-        "maximized": true,
-        "resizable": true
-      }
-    ]
-  },
   "build": {
-    "beforeBuildCommand": "npm --prefix frontend run build -- --configuration editorProduction"
+    "beforeBuildCommand": "npm --prefix frontend run build -- --configuration production"
   },
   "bundle": {
     "targets": [
@@ -26,8 +13,8 @@
       "../THIRD_PARTY_LICENSES.md",
       "../licenses",
       "resources/proofread/punctuation_rules",
-      "resources/speech-engines/whisper",
-      "resources/speech-engines/vulkan-loader"
+      "resources/ffmpeg",
+      "resources/speech-engines"
     ],
     "linux": {
       "deb": {

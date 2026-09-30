@@ -23,20 +23,12 @@ import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration, waitForAudioSeek } from './browser-adapters';
 import {
   APP_SETTINGS_STORAGE_KEY,
-  EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY,
   LEGACY_APP_SETTINGS_STORAGE_KEY,
-  LEGACY_EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY,
   LEGACY_RUNTIME_ESTIMATE_STORAGE_KEY,
   RUNTIME_ESTIMATE_STORAGE_KEY
 } from './storage-keys';
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
-import {
-  DELAYED_GPU_RECHECK_DELAY_MS,
-  isGpuRuntimeResolved,
-  shouldScheduleDelayedGpuRecheck,
-  type DelayedGpuRecheckState
-} from './gpu-runtime-recheck';
 import {
   buildPlaybackQueue,
   clampPlaybackTarget,
@@ -48,7 +40,6 @@ import {
   resolveShortcutTarget
 } from './playback-state';
 import {
-  applyTextUpdates,
   insertSegmentRelative as buildRelativeSegmentInsertion,
   insertTextAtSelection,
   type SegmentStructureResult,
@@ -63,9 +54,6 @@ import {
 import {
   type AppSettingsV1,
   type GgmlSpeechStatus,
-  type LlmBackendMode,
-  type LlmPromptType,
-  type SpeechEngineOption,
   type ThemeMode,
   type VulkanGpuDevice,
   type VulkanGpuList
@@ -74,10 +62,6 @@ import {
   aggregateDownloadProgressPercent,
   browserSetupStatus,
   browserVoiceInputPackStatus,
-  downloadProgressBytesLabel,
-  downloadProgressPercent,
-  llmBackendInstallPlan,
-  llmBackendLabel,
   needsFullSetup,
   projectSetupStatus,
   setupErrorProgress,
@@ -97,68 +81,35 @@ import {
 import {
   appendRuntimeEstimateSampleValue,
   buildDocxExportRowsValue,
-  buildFinalInitialPromptValue,
   buildInitialSpeakerAliasMapValue,
   buildInitialSpeakerSelectionMapValue,
-  buildLlmInferenceParamsKeyValue,
-  buildLlmScopedSettingsKeyValue,
   buildLocationDetectionScopeValue,
   buildConsecutiveSpeakerRunMapValue,
   buildSegmentRowNumberMapValue,
   buildSrtExportRowsValue,
   buildXlsxExportRowsValue,
   buildUniqueSpeakersValue,
-  canSaveOverallProofreadSystemPromptValue,
   calculateRuntimeEstimateValue,
-  computeEnvBackendLabelValue,
   confirmDialogButtonClassValue,
-  cpuRuntimeSetupBannerVisibleValue,
   displaySpeakerValue,
-  editorVoiceInputDownloadButtonColorValue,
-  editorVoiceInputMemoryTierValue,
-  editorVoiceInputMemoryWarningValue,
   editorVoiceInputUnavailableTooltipValue,
   formatAudioDurationValue,
   formatElapsedMinuteSecondValue,
   formatEstimatedMinutesValue,
   formatMinuteSecondValue,
-  formatOverallProofreadProgressValue,
-  filterOverallProofreadVisibleItemsValue,
-  getAudioPreprocessPresetHintValue,
-  getAudioPreprocessSettingsForPresetValue,
   getAudioDurationMessageValue,
   getEditableTextFromMapValue,
   getEstimatedTimeMessageValue,
   getImportCompletedMessageValue,
-  getStoredLlmInferenceParamsValue,
-  getStoredLlmPromptTypeValue,
-  getStoredLlmStringSettingValue,
   getProgressStageOrderValue,
   getLocationAreaPrefectureCodesValue,
   getSpeakerColorClassValue,
-  gpuDeviceLabelValue,
-  gpuSetupHintValue,
   hasFallbackInTranscriptionResultValue,
-  hasStoredLlmStringSettingValue,
-  isGemma4DefaultLlmModelFileNameValue,
-  isGemma4DefaultLlmModelPathValue,
   isDiarizationModelMissingValue,
   isJapaneseLanguageValue,
   isPlaybackDisabledValue,
-  isVramOomErrorValue,
-  levenshteinDistanceValue,
-  llmBackendModeHintValue,
-  llmBackendModeOptionsValue,
-  llmBackendSelectionValue,
-  llmNCtxHintValue,
-  llmParallelHintValue,
   matchPlaybackShortcutCodeValue,
-  normalizeComputeTypeValue,
-  normalizeDevEmulationModeValue,
   normalizeErrorMessageValue,
-  normalizeLlmMaxBatchValue,
-  normalizeLlmNCtxValue,
-  normalizeLlmParallelValue,
   normalizeLocationAreaValue,
   normalizeSpeakerKeyValue,
   normalizeTimeInputValue,
@@ -167,67 +118,49 @@ import {
   normalizeProofreadChunkSizeValue,
   normalizeThemeModeValue,
   normalizeTranscriptionDeviceValue,
-  normalizeSpeechEngineValue,
   effectiveVulkanGpuUuidValue,
+  speechDeviceLineValue,
+  activeVulkanGpuNameValue,
+  diarizationGpuFallbackNoticeValue,
   vulkanGpuAutoLabelValue,
   vulkanGpuLabelValue,
   normalizeTranscriptionLanguageValue,
-  parallelModeHintValue,
   parseRuntimeEstimateSamplesValue,
   pickRuntimeEstimateSamplesValue,
   resolveRuntimeLogAudioSecondsValue,
-  resolveEstimateComputeTypeValue,
   GGML_ESTIMATE_PROFILE,
   resolveGeneralAppSettingsValue,
-  resolveLlmAppSettingsValue,
-  resolvePersistedLlmBackendModeValue,
+  AUDIO_PREPROCESS_PRESET_OPTIONS,
+  getAudioPreprocessPresetHintValue,
+  normalizeAudioPreprocessPresetValue,
+  type AudioPreprocessPreset,
   resolveTimeInputRangeValue,
-  resolveAudioPreprocessPresetValue,
-  resolveLlmDeviceVramMibValue,
-  resolveRuntimeBuildFlagsValue,
   resolveStepForStageValue,
   shouldShowVoiceInputShortCandidateHintValue,
-  secretInputTypeValue,
-  secretVisibilityIconValue,
-  secretVisibilityLabelValue,
-  showProofreadSystemPromptEditorValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
-  selectedGpuAsrWarningValue,
-  stripLegacyKeepFillersSettingValue,
+  stripRemovedSettingsValue,
   speakerOptionLabelValue,
   stepTimeInputValuesValue,
-  setupNeedsHfTokenValue,
   locationDetectionScopeHintValue,
   themeModeLabelValue,
   themeToggleIconValue,
   transcriptionTabDisabledValue,
   transcriptionTabLabelValue,
   transcriptionRuntimeReasonValue,
-  updateLlmSelectionSettingsValue,
-  updateStoredLlmInferenceParamsValue,
-  updateStoredLlmPromptTypeValue,
-  updateStoredLlmStringSettingValue,
-  validateHfTokenFormatValue,
   voiceInputButtonTooltipValue,
   processingStatusTextValue,
-  type AudioPreprocessPreset,
-  type ConcreteComputeType,
   type DocumentExportSourceRow,
   type LocationAreaCode,
   type LocationDetectionScope,
-  type NoiseReductionMode,
   type RuntimeEstimateSample,
-  type EditorVoiceInputMemoryTierValue,
   type BuildVariant,
   isBuildVariantValue
 } from './app-utils';
 import {
-  buildDiarizationEditedTextMapValue,
   buildExportTranscriptionPayloadValue,
   buildImportedTranscriptionStateValue,
   buildProofreadHintValue,
-  describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
   isPunctuationOnlyProofreadReasonValue,
   mergeConsecutiveSpeakerSegmentsValue,
@@ -293,6 +226,8 @@ interface TranscriptionResult {
       speakers: Array<{ speaker: string; duration: number }>;
     } | null;
     note?: string | null;
+    requestedDevice?: string | null;
+    gpuFallback?: boolean | null;
   };
   fallbackUsed?: boolean;
   fallbackReason?: string;
@@ -307,17 +242,10 @@ interface TranscriptionRuntimeStatusResponse {
   reason: string;
 }
 
-interface DevEmulationStatusResponse {
-  mode?: string;
-  noCuda: boolean;
-  missingCommunity1: boolean;
-}
-
 interface ReadTextFileResponse {
   content: string;
 }
 
-type ComputeTypeOption = 'auto' | 'float16' | 'float32' | 'int8_float16' | 'int8';
 type TranscriptionDeviceOption = 'cuda' | 'cpu';
 interface ProofreadSegmentInput {
   id: number;
@@ -327,16 +255,6 @@ interface ProofreadSegmentInput {
   start?: number;
   end?: number;
   words?: TranscriptionSegmentWord[];
-}
-
-// 「AI校正バックエンド」セレクタの UI 上の選択肢。内蔵モデルは E4B / 12B の
-// 2階層を別項目として見せるが、内部的にはどちらも backendMode='local_gguf' で、
-// 階層は proofreadModelTier（'e4b' / '12b'）で表す。'local_gguf_12b' は CUDA 版のみ。
-type LlmBackendSelection = LlmBackendMode | 'local_gguf_12b';
-
-interface LocalOpenAiModelsResponse {
-  serverName: string;
-  models: string[];
 }
 
 interface ProofreadItem {
@@ -376,24 +294,9 @@ interface ProofreadResultPayload {
   };
 }
 
-interface OverallProofreadItem {
-  id: number;
-  originalText: string;
-  revisedText: string;
-  note: string;
-  speakerLabel: string;
-  changed: boolean;
-}
-
-interface OverallProofreadResultData {
-  items: OverallProofreadItem[];
-  changedCount: number;
-  unchangedCount: number;
-}
-
 type ProofreadRunSource = 'transcription' | 'reader';
-type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization' | 'llmProofread';
-type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'resetOverallProofreadSystemPrompt' | 'gemmaNotFoundBeforeTranscription' | 'overallProofreadBeforeMerge' | 'downloadGemma12bForOverallProofread' | 'lowerLlmParallelOnOom' | 'installVoiceInputPackLowMemory' | 'enableVoiceInputLowMemory' | 'deletePythonRuntime';
+type CancelRunKind = 'transcription' | 'transcriptionPipeline' | 'proofread' | 'diarization';
+type ConfirmDialogActionKind = 'removeSegment' | 'cancelRun' | 'mergeUtterances' | 'importJsonOverwrite' | 'startTranscriptionConfirm' | 'deleteAllModels';
 type ConfirmDialogColor = 'primary' | 'accent' | 'warn' | null;
 interface ConfirmDialogState {
   actionKind: ConfirmDialogActionKind;
@@ -406,33 +309,6 @@ interface ConfirmDialogState {
   cancelColor: ConfirmDialogColor;
   segmentId?: number;
   cancelRunKind?: CancelRunKind;
-}
-
-interface AmdGpuFailureDialogState {
-  operation: string;
-  message: string;
-}
-
-interface LlmModelEntry {
-  name: string;
-  path: string;
-}
-
-interface GpuDeviceInfo {
-  index: number;
-  name: string;
-  totalVramMb: number;
-  freeVramMb: number;
-  isLikelyIgpu?: boolean;
-  gcnArchName?: string;
-}
-
-interface ComputeEnvResult {
-  backendType: 'cuda' | 'rocm' | 'none';
-  devices: GpuDeviceInfo[];
-  recommendedIndex: number;
-  cpu: { cores: number; totalRamMb?: number; freeRamMb?: number };
-  largeV3Installed?: boolean;
 }
 
 interface EditorVoiceInputResponse {
@@ -484,17 +360,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   readonly editorOnlyBuild = environment.editorOnly === true;
-  readonly cpuOnlyBuild = environment.cpuOnly === true;
   readonly isDevModeBuild = isDevMode();
   readonly appDisplayName = this.editorOnlyBuild
     ? 'Local Transcription for Therapy (LoTT) (Editor)'
-    : this.cpuOnlyBuild
-      ? 'Local Transcription for Therapy (LoTT) (CPU)'
-      : 'Local Transcription for Therapy (LoTT)';
+    : 'Local Transcription for Therapy (LoTT)';
   readonly appVersion = signal<string>('');
   readonly isTauriRuntime = signal<boolean>(this.detectTauriRuntime());
   readonly runtimeCheckDone = signal<boolean>(false);
-  readonly devEmulationLabel = signal<string>('');
   readonly transcriptionTabVisible = signal<boolean>(false);
   readonly transcriptionRuntimeAvailable = signal<boolean>(false);
   readonly transcriptionRuntimeReason = signal<string>('');
@@ -505,17 +377,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return this.activeTabIndex() <= readerTabIndex;
   });
   readonly isSegmentTableInView = signal<boolean>(false);
-  readonly diarizationInstallToken = signal<string>('');
-  readonly diarizationInstallTokenVisible = signal<boolean>(false);
-  readonly diarizationInstallTokenInputType = computed(() =>
-    secretInputTypeValue(this.diarizationInstallTokenVisible())
-  );
-  readonly diarizationInstallTokenVisibilityIcon = computed(() =>
-    secretVisibilityIconValue(this.diarizationInstallTokenVisible())
-  );
-  readonly diarizationInstallTokenVisibilityLabel = computed(() =>
-    secretVisibilityLabelValue(this.diarizationInstallTokenVisible())
-  );
   readonly selectedAudioPath = signal<string>('');
   readonly audioFileLoading = signal<boolean>(false);
   readonly importJsonReady = signal<boolean>(false);
@@ -527,15 +388,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly resultSource = signal<'transcription' | 'json' | null>(null);
   readonly diarization = signal<boolean>(true);
   readonly speakerCount = signal<number>(2);
-  readonly normalizeAudio = signal<boolean>(false);
-  readonly highpassFilter = signal<boolean>(false);
-  readonly noiseReduction = signal<boolean>(false);
-  readonly noiseReductionMode = signal<NoiseReductionMode>('weak');
-  readonly diarizationDevice = signal<TranscriptionDeviceOption>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
-  readonly computeType = signal<ComputeTypeOption>(this.cpuOnlyBuild ? 'float32' : 'auto');
+  readonly diarizationDevice = signal<TranscriptionDeviceOption>('cuda');
   readonly whisperModel = signal<string>('turbo');
   readonly transcriptionLanguage = signal<string>('ja');
-  readonly transcriptionDevice = signal<TranscriptionDeviceOption>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
+  readonly transcriptionDevice = signal<TranscriptionDeviceOption>('cuda');
   // 編集UIの「+、」「+。」ボタンが挿入する句読点。日本語のときは全角（、。）、
   // それ以外の言語では半角（, .）。判定は結果が実際に文字起こしされた言語を優先し、
   // 無ければ現在の言語設定にフォールバックする。
@@ -543,8 +399,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const lang = (this.result()?.settings?.language ?? this.transcriptionLanguage() ?? 'ja').toLowerCase();
     return isJapaneseLanguageValue(lang);
   });
-  readonly initialPrompt = signal<string>('');
-  readonly baseInitialPrompt = signal<string>('');
   readonly running = signal<boolean>(false);
   /** 文字起こし開始ボタンから連続実行する、話者分離・AI句読点・固有名詞確認までの全工程。 */
   readonly transcriptionPipelineRunning = signal<boolean>(false);
@@ -556,32 +410,33 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly displayProgress = signal<number>(0);
   readonly runningStepCurrent = signal<number>(0);
   readonly runningStepTotal = signal<number>(0);
-  readonly runningComputeType = signal<string>('');
   readonly parallelDiarizationStatus = signal<string>('');
   readonly runningSeconds = signal<number>(0);
   readonly proofreadRunning = signal<boolean>(false);
   readonly proofreadStatus = signal<string>('');
   readonly punctStatus = signal<string>('');
-  readonly llmProofreadRunning = signal<boolean>(false);
-  readonly llmProofreadCanceling = signal<boolean>(false);
-  readonly llmProofreadStatus = signal<string>('');
-  readonly llmProofreadRunningSeconds = signal<number>(0);
-  readonly llmBackendMode = signal<LlmBackendMode>('local_gguf');
-  readonly cudaAvailable = signal<boolean | null>(null);
-  readonly rocmAvailable = signal<boolean | null>(null);
-  /** ROCm あり・CUDA なし = AMD GPU 環境と判定する。 */
-  readonly isRocmGpu = computed(() => this.rocmAvailable() === true && this.cudaAvailable() === false);
-  /**
-   * ビルド種別。'cuda' = CUDA 版、'rocm' = ROCm/AMD 版、'cpu' = CPU 版、
-   * 'vulkan' = Vulkan 版（NVIDIA / AMD / Intel 共通。Rust の feature で判定）。
-   */
-  readonly buildVariant = signal<BuildVariant>(this.cpuOnlyBuild ? 'cpu' : 'cuda');
+  /** ビルド種別。'vulkan' = フル機能版、'editor' = Editor 版（Rust の identifier で判定）。 */
+  readonly buildVariant = signal<BuildVariant>(this.editorOnlyBuild ? 'editor' : 'vulkan');
   /** Rust側の実行時判定。nullの間だけAngularのコンパイル時値へフォールバックする。 */
   readonly runtimeBuildVariant = signal<BuildVariant | null>(null);
   readonly vulkanBuild = computed(() => this.buildVariant() === 'vulkan');
   /** Vulkan 版: Vulkan で使える GPU があるか（null は未確認）と、自動選択される GPU の名前。 */
   readonly vulkanAvailable = signal<boolean | null>(null);
   readonly vulkanGpuName = signal<string>('');
+  /** 開発ビルドで LOTT_DEV_FORCE_CPU=1 が有効なとき true（GPU を無いものとして CPU で動かす）。 */
+  readonly devForceCpu = signal<boolean>(false);
+  /** Full 版: 今 CPU で処理する（GPU が見つからない／開発用の CPU 強制）。 */
+  readonly speechRunsOnCpu = computed(() => this.vulkanBuild() && this.vulkanAvailable() === false);
+  /** 文字起こし画面に出す「処理装置」の1行（未確認・Editor 版は空）。 */
+  readonly speechDeviceLine = computed(() =>
+    this.vulkanBuild()
+      ? speechDeviceLineValue({
+          vulkanAvailable: this.vulkanAvailable(),
+          gpuName: activeVulkanGpuNameValue(this.ggmlGpuUuid(), this.vulkanGpus(), this.vulkanGpuName()),
+          devForceCpu: this.devForceCpu()
+        })
+      : ''
+  );
   /** Vulkan 版: CUDA 版から上書きしたときに残った不要データ（リリース版のみ。無ければ空）。 */
   readonly legacyCudaData = signal<{ label: string; path: string; bytes: number }[]>([]);
   readonly legacyCudaDataConfirming = signal<boolean>(false);
@@ -601,171 +456,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     return Array.from(groups, ([label, bytes]) => ({ label, bytes }));
   });
-  /**
-   * 配布物のAngular設定とRust側identifierが食い違った場合に備えた実行時能力。
-   * startup中はコンパイル時値を使い、Rustのcheck_gpu_availability完了後は
-   * identifier由来のbuildVariantを優先する。
-   */
-  readonly runtimeBuildFlags = computed(() => resolveRuntimeBuildFlagsValue(
-    this.editorOnlyBuild,
-    this.cpuOnlyBuild,
-    this.runtimeBuildVariant()
-  ));
-  readonly runtimeCpuOnlyBuild = computed(() => this.runtimeBuildFlags().cpuOnlyBuild);
-  readonly runtimeAiProofreadBuild = computed(() => this.runtimeBuildFlags().aiProofreadBuild);
-  readonly runtimeCpuVoiceInputBuild = computed(() => this.runtimeBuildFlags().cpuVoiceInputBuild);
   /** Rustが返す実行OS。GPU導入案内をLinux/Windowsで分離するために使う。 */
   readonly runtimePlatform = signal<'windows' | 'linux' | 'macos' | 'other' | 'unknown'>('unknown');
-  /**
-   * ローカルAIアプリ（LM Studio / Ollama）との OpenAI 互換 API 連携が有効か。
-   * 公式配布は無効（フェイルクローズ）。local-llm-apps feature 付きでソースから
-   * ビルドした構成だけが、Rust の check_gpu_availability 経由で true を返す。
-   */
-  readonly localLlmAppsEnabled = signal<boolean>(false);
-  /** GPU セットアップバナーで CUDA インストール案内を表示するか。 */
-  readonly showCudaInstallLinks = computed(() =>
-    this.isNoCudaEmulation() || this.buildVariant() === 'cuda'
-  );
-  /** GPU セットアップバナーで ROCm インストール案内を表示するか。 */
-  readonly showRocmInstallLinks = computed(() =>
-    this.isNoCudaEmulation() || this.buildVariant() === 'rocm'
-  );
-  /** no_cuda 開発エミュレーション中かどうか。 */
-  readonly isNoCudaEmulation = computed(() =>
-    normalizeDevEmulationModeValue(this.appSettings.devEmulation?.mode) === 'no_cuda'
-  );
-  readonly computeEnvInfo = signal<ComputeEnvResult | null>(null);
-  readonly availableGpuDevices = signal<GpuDeviceInfo[]>([]);
-  readonly recommendedGpuDeviceIndex = signal<number>(-1);
-  readonly selectedHipDeviceIndex = signal<number>(-1);
-  readonly selectedLlmHipDeviceIndex = signal<number>(-1);
-  /** AI校正の並列スロット数。0=自動（VRAMで決定）、1/2/4/8/12/16/20/24=手動上書き。CUDA経路のみ有効。 */
-  readonly selectedLlmParallel = signal<number>(0);
-  readonly llmServerStatus = signal<'unknown' | 'running' | 'stopped' | 'starting' | 'not_installed' | 'error'>('unknown');
-  readonly llmLoadedDevice = signal<'unknown' | 'gpu' | 'cpu' | 'stopped' | 'error'>('unknown');
-  readonly llmModelPath = signal<string>('');
-  readonly lmstudioModelInput = signal<string>('');
-  readonly ollamaModelInput = signal<string>('');
-  readonly localOpenAiServerName = signal<string>('local');
-  readonly localOpenAiStatusMessage = signal<string>('');
-  readonly localOpenAiAvailableModels = signal<string[]>([]);
-  readonly localOpenAiModelsLoading = signal<boolean>(false);
-  readonly activeOpenAiBaseUrl = computed(() =>
-    this.llmBackendMode() === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234'
-  );
-  readonly activeOpenAiModelInput = computed(() =>
-    this.llmBackendMode() === 'ollama' ? this.ollamaModelInput() : this.lmstudioModelInput()
-  );
-  readonly llmEngineUiVisible = computed(() =>
-    // Editor 版は AI 校正機能を一切持たないため、内蔵 llama-server UI / 状態確認を抑止する。
-    this.runtimeAiProofreadBuild() && this.llmBackendMode() === 'local_gguf'
-  );
-  /**
-   * Setup must distinguish "still probing" and "no GPU" from a valid backend.
-   * In particular, the latter is not a request to install llama.cpp CPU on a
-   * Full CUDA/ROCm build.
-   */
-  readonly llmBackendSetupPlan = computed(() => llmBackendInstallPlan(
-    this.cudaAvailable(),
-    this.rocmAvailable(),
-    this.buildVariant()
-  ));
-  readonly llmBackendSetupLabel = computed(() => {
-    const plan = this.llmBackendSetupPlan();
-    if (plan.status === 'not_applicable') return '対象外';
-    if (plan.status === 'checking') return '判定中';
-    if (plan.status === 'unavailable') return 'GPU未検出';
-    if (plan.status === 'bundled') return this.vulkanBuild() ? 'Vulkan（同梱）' : 'CUDA（NVIDIA・同梱）';
-    return llmBackendLabel(plan.primary);
-  });
-  readonly llmBackendSetupNote = computed(() => {
-    const plan = this.llmBackendSetupPlan();
-    if (plan.status === 'not_applicable') return plan.reason;
-    if (plan.status === 'ready') {
-      return `${llmBackendLabel(plan.primary)}を使用します。`;
-    }
-    return plan.reason;
-  });
-  readonly llmBackendModeHint = computed(() => {
-    return llmBackendModeHintValue(
-      this.llmBackendMode(),
-      this.proofreadModelTier(),
-      this.gemma12bInstalled()
-    );
-  });
-  readonly availableLlmModels = signal<LlmModelEntry[]>([]);
-  /** コンテキスト長(n_ctx)。0=自動（VRAMで判定 / CUDAサーバーの--ctx-size）。手動値で上書き可。 */
-  readonly llmNCtx = signal<number>(0);
-  readonly llmMaxBatch = signal<number>(40);
-  /** 選択中のLLM用GPUデバイスのVRAM(MiB)。不明なら null。自動判定の現在値ヒントに使う。 */
-  readonly llmDeviceVramMib = computed<number | null>(() => {
-    const info = this.computeEnvInfo();
-    return resolveLlmDeviceVramMibValue(
-      info?.devices ?? [],
-      this.selectedLlmHipDeviceIndex(),
-      info?.recommendedIndex
-    );
-  });
-  /** 並列処理数フィールドのヒント。自動(0)選択時のみ、VRAMから解決した実値（Rust choose_llm_parallelism 相当）を表示。手動値は空（非表示）。 */
-  readonly llmParallelHint = computed<string>(() => {
-    return llmParallelHintValue(
-      this.selectedLlmParallel(),
-      this.computeEnvInfo()?.backendType,
-      this.llmDeviceVramMib()
-    );
-  });
-  /** コンテキスト長フィールドのヒント。自動(0)選択時のみ、VRAM/バックエンドから解決した実値を表示。手動値は空（非表示）。 */
-  readonly llmNCtxHint = computed<string>(() => {
-    return llmNCtxHintValue(
-      this.llmNCtx(),
-      this.llmBackendMode(),
-      this.computeEnvInfo()?.backendType,
-      this.llmDeviceVramMib()
-    );
-  });
-  readonly llmPromptType = signal<LlmPromptType>('gemma4');
-  readonly proofreadSystemPrompt = signal<string>('');
-  readonly fixedProofreadSystemPrompt = signal<string>('');
-  readonly defaultProofreadSystemPrompt = signal<string>('');
-  readonly proofreadSystemPromptReadonly = computed(() =>
-    this.llmBackendMode() === 'local_gguf' && isGemma4DefaultLlmModelPathValue(this.llmModelPath())
-  );
-  readonly showProofreadSystemPromptEditor = computed(() => {
-    return showProofreadSystemPromptEditorValue(
-      this.proofreadSystemPromptReadonly(),
-      this.llmBackendMode(),
-      this.llmModelPath()
-    );
-  });
-  readonly overallProofreadSystemPrompt = signal<string>('');
-  readonly fixedOverallProofreadSystemPrompt = signal<string>('');
-  readonly defaultOverallProofreadSystemPrompt = signal<string>('');
-  private readonly overallPromptSaveVersion = signal(0);
-  readonly canSaveOverallProofreadSystemPrompt = computed(() => {
-    return canSaveOverallProofreadSystemPromptValue(
-      this.proofreadSystemPromptReadonly(),
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-  });
-  readonly overallProofreadPromptIsCustomized = computed(() => {
-    this.overallPromptSaveVersion();
-    if (this.proofreadSystemPromptReadonly()) return false;
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target || (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key))) {
-      return false;
-    }
-    const field = target.scope === 'backend'
-      ? 'overallSystemPromptsByBackend'
-      : 'overallSystemPromptsByModelFileName';
-    return hasStoredLlmStringSettingValue(this.appSettings, field, target.key);
-  });
-  readonly llmSegmentStatus = signal<Record<number, 'processing' | 'done'>>({});
   readonly proofreadProgressText = signal<string>('');
   readonly diarizationPhaseActive = signal<boolean>(false);
   readonly diarizationStage = signal<string>('');
@@ -778,12 +470,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       diarizationPhaseActive: this.diarizationPhaseActive(),
       diarizationStage: this.diarizationStage(),
       parallelDiarizationStatus: this.parallelDiarizationStatus(),
-      llmProofreadRunning: this.llmProofreadRunning(),
-      llmProofreadStatus: this.llmProofreadStatus(),
       ruleProofreadRunning: this.proofreadRunning(),
-      cpuOnlyBuild: this.runtimeCpuOnlyBuild(),
       ruleProofreadProgressText: this.proofreadProgressText(),
-      ruleProofreadStatus: this.proofreadStatus()
+      ruleProofreadStatus: this.proofreadStatus(),
+      cpuMode: this.speechRunsOnCpu()
     });
   });
   readonly mergeStatus = signal<string>('');
@@ -793,12 +483,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly diarizationRunning = signal<boolean>(false);
   readonly diarizationCanceling = signal<boolean>(false);
   readonly diarizationStatus = signal<string>('');
-  readonly diarizationRunningSeconds = signal<number>(0);
   readonly transcriptionCanceling = signal<boolean>(false);
   readonly errorWasCancelledByUser = signal<boolean>(false);
   readonly proofreadCanceling = signal<boolean>(false);
   readonly pendingConfirmDialog = signal<ConfirmDialogState | null>(null);
-  readonly amdGpuFailureDialog = signal<AmdGpuFailureDialogState | null>(null);
   readonly proofreadHintBySegmentId = signal<Record<number, string>>({});
   readonly proofreadMetadataBySegmentId = signal<Record<number, ExportProofreadMetadata>>({});
   readonly proofreadUpdatedCount = signal<number>(0);
@@ -824,43 +512,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly proofreadEditingLocked = signal<boolean>(false);
   readonly addUtteranceNumber = signal<boolean>(true);
 
-  readonly overallProofreadRunning = signal<boolean>(false);
-  readonly overallProofreadCanceling = signal<boolean>(false);
-  readonly overallProofreadStatus = signal<string>('');
-  readonly overallProofreadResult = signal<OverallProofreadResultData | null>(null);
-  readonly overallProofreadDismissedIds = signal<Set<number>>(new Set());
-  readonly overallProofreadDialogOpen = signal<boolean>(false);
-  readonly overallProofreadError = signal<string>('');
-  readonly overallProofreadVisibleItems = computed(() => {
-    return filterOverallProofreadVisibleItemsValue(
-      this.overallProofreadResult()?.items,
-      this.overallProofreadDismissedIds()
-    );
-  });
-  readonly overallProofreadHasPendingItems = computed(
-    () => this.overallProofreadVisibleItems().length > 0
-  );
-  readonly overallProofreadBtnAboveViewport = signal(false);
-  private _overallProofreadScrollRaf: number | null = null;
-  private readonly _checkOverallProofreadBtnPos = (): void => {
-    const els = Array.from(document.querySelectorAll<HTMLElement>('.merge-overall-center'));
-    let scrolledPast = false;
-    for (const el of els) {
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom <= 0) {
-        scrolledPast = true;
-        break;
-      }
-    }
-    if (this.overallProofreadBtnAboveViewport() !== scrolledPast) {
-      this.ngZone.run(() => this.overallProofreadBtnAboveViewport.set(scrolledPast));
-    }
-    this._overallProofreadScrollRaf = null;
-  };
-  private readonly _overallProofreadScrollListener = (): void => {
-    if (this._overallProofreadScrollRaf !== null) return;
-    this._overallProofreadScrollRaf = requestAnimationFrame(this._checkOverallProofreadBtnPos);
-  };
   readonly lastRunElapsedSeconds = signal<number>(0);
   readonly estimatedAudioSeconds = signal<number | null>(null);
   readonly selectedAudioFileSizeBytes = signal<number | null>(null);
@@ -913,38 +564,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly voiceInputCandidates = signal<{ segmentId: number; candidates: string[] } | null>(null);
   readonly voiceInputStatus = signal<string>('');
   readonly voiceInputError = signal<string>('');
-  readonly editorInstalledMemoryBytes = signal<number | null>(null);
-  readonly editorInstalledMemoryChecked = signal<boolean>(false);
-  readonly editorLowMemoryVoiceInputOptIn = signal<boolean>(false);
-  private readonly editorLowMemoryVoiceInputOptInStorageKey = EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY;
-  private readonly editorVoiceInputMinimumMemoryBytes = 16 * 1024 ** 3;
-  private readonly editorVoiceInputRecommendedMemoryBytes = 24 * 1024 ** 3;
-  readonly editorVoiceInputMemoryTier = computed<EditorVoiceInputMemoryTierValue>(() =>
-    editorVoiceInputMemoryTierValue(
-      this.runtimeCpuVoiceInputBuild(),
-      this.editorInstalledMemoryChecked(),
-      this.editorInstalledMemoryBytes(),
-      this.editorVoiceInputMinimumMemoryBytes,
-      this.editorVoiceInputRecommendedMemoryBytes
-    )
-  );
-  readonly editorVoiceInputMemoryAllowed = computed(
-    () => !this.runtimeCpuVoiceInputBuild()
-      || this.editorVoiceInputMemoryTier() !== 'low'
-      || this.editorLowMemoryVoiceInputOptIn()
-  );
-  readonly editorVoiceInputButtonsVisible = computed(
-    () => this.isTauriRuntime() && this.editorVoiceInputMemoryAllowed()
-  );
-  readonly editorVoiceInputMemoryWarning = computed<string | null>(() =>
-    editorVoiceInputMemoryWarningValue(this.editorVoiceInputMemoryTier())
-  );
-  readonly editorVoiceInputDownloadButtonColor = computed<'primary' | 'warn'>(
-    () => editorVoiceInputDownloadButtonColorValue(
-      this.runtimeCpuVoiceInputBuild(),
-      this.editorVoiceInputMemoryTier()
-    )
-  );
   // 統合セットアップ
   readonly allSetupStatus = signal<AllSetupStatus | null>(null);
   readonly allSetupChecked = signal<boolean>(false);
@@ -957,11 +576,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly editorVoiceInputPackDeleteResult = signal<DeleteModelsResponse | null>(null);
   readonly editorVoiceInputPackProgressMap = signal<Record<string, SetupProgressEvent>>({});
   readonly editorVoiceInputAvailable = computed(
-    // Full 版（CUDA/AMD）でも導入済みなら利用可能。editor 版限定ではない。
-    () => this.editorVoiceInputPackStatus()?.installed === true && this.editorVoiceInputMemoryAllowed()
+    () => this.editorVoiceInputPackStatus()?.installed === true
   );
   readonly editorVoiceInputUnavailableTooltip = computed(() =>
-    editorVoiceInputUnavailableTooltipValue(this.editorVoiceInputPackChecked(), this.vulkanBuild())
+    editorVoiceInputUnavailableTooltipValue(
+      this.editorVoiceInputPackChecked(),
+      this.vulkanBuild() || this.editorOnlyBuild
+    )
   );
   readonly editorVoiceInputDevControlsVisible = computed(
     () => this.isDevModeBuild && this.isTauriRuntime()
@@ -975,9 +596,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       tauriRuntime: this.isTauriRuntime(),
       setupChecked: this.allSetupChecked(),
       status: this.allSetupStatus(),
-      transcriptionTabVisible: this.transcriptionTabVisible(),
-      aiProofreadBuild: this.runtimeAiProofreadBuild(),
-      buildVariant: this.buildVariant()
+      transcriptionTabVisible: this.transcriptionTabVisible()
     });
   });
   readonly transcriptionTabDisabled = computed(() => {
@@ -985,61 +604,43 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       transcriptionTabVisible: this.transcriptionTabVisible(),
       editorOnlyBuild: this.editorOnlyBuild,
       setupChecked: this.allSetupChecked(),
-      devEmulationMode: normalizeDevEmulationModeValue(this.appSettings.devEmulation?.mode),
-      cpuOnlyBuild: this.runtimeCpuOnlyBuild(),
       needsFullSetup: this.needsFullSetup(),
-      pythonEnvReady: this.allSetupStatus()?.pythonEnv === true,
       transcriptionRuntimeAvailable: this.transcriptionRuntimeAvailable()
     });
   });
 
-  readonly setupNeedsHfToken = computed(() => {
-    // Vulkan 版の話者分離モデル（Nemotron）はトークン不要でダウンロードできる。
-    if (this.vulkanBuild()) return false;
-    const s = this.allSetupStatus();
-    return setupNeedsHfTokenValue(
-      s !== null,
-      this.transcriptionTabVisible(),
-      s?.diarization === true,
-      this.diarizationInstallToken()
-    );
-  });
-
   readonly segmentRowFilter = signal<'all' | 'caution' | 'caution_context'>('all');
   readonly parallelMode = signal<'standard' | 'fast'>('standard');
-  /** 文字起こし・話者分離のエンジン（既定 standard。ggml は whisper.cpp / Nemotron の試験的経路）。 */
-  readonly transcriptionEngine = signal<SpeechEngineOption>('standard');
-  readonly diarizationEngine = signal<SpeechEngineOption>('standard');
   readonly ggmlSpeechStatus = signal<GgmlSpeechStatus | null>(null);
   /** ggml エンジン（Vulkan 版）の GPU 一覧と、設定で選ばれた GPU（UUID。'' は自動）。 */
   readonly vulkanGpus = signal<VulkanGpuList | null>(null);
+  /** GPU が見つからないとき、ドライバーの確認を促す案内文（無ければ null）。 */
+  readonly gpuDriverHint = signal<string | null>(null);
   readonly ggmlGpuUuid = signal<string>('');
-  /** Vulkan 版の ggml エンジンを使う設定のときだけ GPU 選択欄を出す（CUDA 版は既存の「使用デバイス」）。 */
-  readonly ggmlGpuSelectorVisible = computed(() => {
-    if (this.vulkanBuild()) {
-      // Vulkan 版は音声エンジンで使う GPU を選べるよう、GPU が1つでも表示する。
-      return (this.vulkanGpus()?.devices.length ?? 0) > 0;
-    }
-    const status = this.ggmlSpeechStatus();
-    const usesVulkan = (this.transcriptionEngine() === 'ggml' && status?.whisperBackend === 'vulkan')
-      || (this.diarizationEngine() === 'ggml' && status?.nemoBackend === 'vulkan');
-    return usesVulkan && (this.vulkanGpus()?.devices.length ?? 0) > 0;
-  });
+  /** 文字起こし用音声の調整プリセット（話者分離には適用しない）。 */
+  readonly audioPreprocess = signal<AudioPreprocessPreset>('none');
+  readonly audioPreprocessPresetOptions = AUDIO_PREPROCESS_PRESET_OPTIONS;
+  readonly audioPreprocessPresetHint = computed<string>(() =>
+    getAudioPreprocessPresetHintValue(this.audioPreprocess())
+  );
+  /** Vulkan 版の ggml エンジンを使う設定のときだけ GPU 選択欄を出す。 */
+  /** 音声エンジンで使う GPU を選べるよう、GPU が1つでもあれば選択欄を出す（Editor 版は GPU を使わない）。 */
+  readonly ggmlGpuSelectorVisible = computed(
+    () => this.vulkanBuild() && (this.vulkanGpus()?.devices.length ?? 0) > 0
+  );
   readonly ggmlGpuSelectValue = computed(() => effectiveVulkanGpuUuidValue(this.ggmlGpuUuid(), this.vulkanGpus()));
   readonly ggmlGpuAutoLabel = computed(() => vulkanGpuAutoLabelValue(this.vulkanGpus()));
   readonly ggmlSpeechWarning = computed(() => {
     const status = this.ggmlSpeechStatus();
     const lines: string[] = [];
-    if (this.transcriptionEngine() === 'ggml' && status && !status.transcriptionReady) {
+    if (status && !status.transcriptionReady) {
       lines.push(`文字起こし（whisper.cpp）の準備が済んでいません: ${status.missingForTranscription.join(' / ')}`);
     }
-    if (this.diarizationEngine() === 'ggml' && status && !status.diarizationReady) {
+    if (status && !status.diarizationReady) {
       lines.push(`話者分離（Nemotron）の準備が済んでいません: ${status.missingForDiarization.join(' / ')}`);
     }
     return lines.join('\n');
   });
-  readonly clusteringAdjust = signal<'standard' | 'over_split' | 'under_split'>('standard');
-  readonly parallelModeHint = computed(() => parallelModeHintValue(this.parallelMode()));
   readonly resultWarningStats = computed(() => {
     const metadataMap = this.proofreadMetadataBySegmentId();
     const segments = this.segmentRows;
@@ -1050,17 +651,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const redCount = Object.values(metadataMap).filter((m) => this.isRedSensitiveEntityMetadata(m)).length;
     return { unknownSpeakerCount, yellowCount, redCount };
   });
-  readonly audioPreprocessPreset = computed<AudioPreprocessPreset>(() => {
-    return resolveAudioPreprocessPresetValue({
-      highpassFilter: this.highpassFilter(),
-      noiseReduction: this.noiseReduction(),
-      normalizeAudio: this.normalizeAudio(),
-      noiseReductionMode: this.noiseReductionMode()
-    });
-  });
-  readonly audioPreprocessPresetHint = computed<string>(() =>
-    getAudioPreprocessPresetHintValue(this.audioPreprocessPreset())
-  );
   readonly cautionPinnedSegmentIds = signal<Record<number, boolean>>({});
   readonly cautionExtracting = signal<boolean>(false);
   readonly cautionExtractingProgress = signal<{ current: number; total: number } | null>(null);
@@ -1070,37 +660,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly findReplaceQuery = signal<string>('');
   readonly findReplaceWith = signal<string>('');
   readonly findReplaceStatus = signal<string>('');
-  readonly largeV3Installed = signal<boolean | null>(null);
-  readonly largeV3Downloading = signal<boolean>(false);
-  readonly largeV3DownloadMessage = signal<string>('');
-  readonly largeV3DownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['whisper_large_v3']);
-  readonly largeV3DownloadPercent = computed(() => {
-    return downloadProgressPercent(this.largeV3DownloadProgress());
-  });
-  readonly largeV3DownloadBytesLabel = computed(() => {
-    return downloadProgressBytesLabel(this.largeV3DownloadProgress());
-  });
-  // 内蔵校正AIモデルの階層（CUDA / AMD 版）。
-  readonly proofreadModelTier = signal<'e4b' | '12b'>('e4b');
-  readonly gemma12bInstalled = signal<boolean | null>(null);
-  readonly gemma12bDownloading = signal<boolean>(false);
-  readonly gemma12bDownloadMessage = signal<string>('');
-  readonly gemma12bDownloadProgress = computed<SetupProgressEvent | undefined>(() => this.setupProgressMap()['gemma_12b']);
-  readonly gemma12bDownloadPercent = computed(() => {
-    return downloadProgressPercent(this.gemma12bDownloadProgress());
-  });
-  readonly gemma12bDownloadBytesLabel = computed(() => {
-    return downloadProgressBytesLabel(this.gemma12bDownloadProgress());
-  });
-  /**
-   * 12B関連 UI（説明アイコン・ダウンロード進捗）の表示条件:
-   * Editor版以外・内蔵バックエンド時のみ。
-   * それ以外のビルドでは
-   * 「AI校正バックエンド」セレクタ（llmBackendSelection）へ統合済み。
-   */
-  readonly proofreadModelTierVisible = computed<boolean>(() =>
-    this.runtimeAiProofreadBuild() && this.llmBackendMode() === 'local_gguf'
-  );
   readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => this.vulkanBuild() ? [
     // Vulkan 版は whisper.cpp の turbo だけを配布する（large-v3 の ggml モデルは未提供）。
     { value: 'turbo', label: 'turbo（高速・既定）' },
@@ -1111,25 +670,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // { value: 'small', label: 'small' },
     // { value: 'base', label: 'base（最軽量）' },
   ]);
-  readonly computeTypeOptions = computed<ReadonlyArray<{ value: ComputeTypeOption; label: string }>>(() =>
-    this.runtimeCpuOnlyBuild()
-      ? [
-          { value: 'auto', label: 'auto（CPU向け自動推定）' },
-          { value: 'int8', label: 'int8（軽量）' },
-          { value: 'float32', label: 'float32（高精度だが重い）' }
-        ]
-      : [
-          { value: 'auto', label: 'auto（自動推定）' },
-          { value: 'int8', label: 'int8（軽量だが精度低下）' },
-          { value: 'int8_float16', label: 'int8_float16（長尺の場合など）' },
-          { value: 'float16', label: 'float16（推奨）' },
-          { value: 'float32', label: 'float32（高精度だが重い）' }
-        ]
-  );
-  readonly transcriptionDeviceOptions: ReadonlyArray<{ value: TranscriptionDeviceOption; label: string }> = [
-    { value: 'cuda', label: 'GPU（CUDA / ROCm）' },
-    { value: 'cpu', label: 'CPU' }
-  ];
   // 文字起こし言語の選択肢。
   // faster-whisper と Gemma 4 E4B の音声 ASR の両方で対応が明示されている言語に限定する。
   // Gemma 4 Technical Report の FLEURS ASR 評価では pt-br だが、Whisper の言語コードは pt。
@@ -1148,18 +688,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: 'pt', label: 'ポルトガル語' },
     { value: 'ru', label: 'ロシア語' }
   ];
-  // ローカルAIアプリ連携が無効のときは LM Studio / Ollama を選択肢から除外する。
-  // （内蔵モデルは常に選択可能。連携の有効化はインストール時オプトインのみ）
-  readonly llmBackendModeOptions = computed<ReadonlyArray<{ value: LlmBackendSelection; label: string }>>(() => {
-    return llmBackendModeOptionsValue(this.runtimeAiProofreadBuild(), this.localLlmAppsEnabled(), this.vulkanBuild());
-  });
-  /**
-   * 「AI校正バックエンド」セレクタの現在値（UI 表示用）。
-   * 内蔵モデルかつ CUDA 版で 12B 階層なら 'local_gguf_12b' を返し、それ以外は backendMode そのもの。
-   */
-  readonly llmBackendSelection = computed<LlmBackendSelection>(() =>
-    llmBackendSelectionValue(this.llmBackendMode(), this.proofreadModelTier())
-  );
   readonly locationAreaOptions: ReadonlyArray<{ value: LocationAreaCode; label: string }> = [
     { value: 'hokkaidoTohoku', label: '北海道・東北' },
     { value: 'kanto', label: '関東' },
@@ -1218,13 +746,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     { value: '46', label: '鹿児島県' },
     { value: '47', label: '沖縄県' }
   ];
-  readonly audioPreprocessPresetOptions: ReadonlyArray<{ value: Exclude<AudioPreprocessPreset, 'manual'>; label: string }> = [
-    { value: 'none', label: '何もしない' },
-    { value: 'low_noise', label: '低域ノイズの処理' },
-    { value: 'strong_noise', label: '強いノイズの処理' },
-    { value: 'volume_boost', label: '音量拡大' },
-    { value: 'general_improvement', label: '全般的な改善' }
-  ];
   readonly speakerCountOptions: ReadonlyArray<number> = [1, 2, 3, 4, 5];
   private readonly runningTicker = new RepeatingTimer();
   // 表示用の進捗を滑らかに進めるためのティッカー（500ms）と、現在実行中の概算所要時間（秒）。
@@ -1232,14 +753,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private activeRunEstimatedSeconds: number | null = null;
   private readonly proofreadTicker = new RepeatingTimer();
   private readonly diarizationTicker = new RepeatingTimer();
-  private readonly llmProofreadTicker = new RepeatingTimer();
-  /** セットアップ直後だけ使う、Linux CUDA/ROCm向けの遅延GPU再確認。 */
-  private readonly delayedGpuRecheckTimer = new OneShotTimer();
-  private llmProgressOffset = 0;
-  private llmTotalProcessedCount = 0;
-  private overallProofreadProgressCurrent = 0;
-  private overallProofreadProgressStarted = false;
-  private _gemmaCheckBypassed = false;
   private progressSnackBarRef: MatSnackBarRef<ProgressSnackbarComponent> | null = null;
   private readonly progressSubscription = new AsyncCleanupSlot();
   private readonly parallelDiarizationSubscription = new AsyncCleanupSlot();
@@ -1277,36 +790,20 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private previewStartSeconds: number | null = null;
   private previewEndSeconds: number | null = null;
   private seekPlayGeneration = 0;
-  private pendingOverallProofreadTier: 'e4b' | '12b' = 'e4b';
   private pendingImportedPayload: ExportTranscriptionPayload | null = null;
   // undefined = 未取得, null = 存在しない, string = パス
   private devDemoDataDir: string | null | undefined = undefined;
   readonly devDeletingModels = signal(false);
   readonly devDeleteModelsResult = signal<{ deleted: string[]; notFound: string[]; errors: string[] } | null>(null);
-  readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'whisper_large_v3' | 'diarization' | 'llm' | 'python_runtime'>('all');
+  readonly devDeleteTarget = signal<'all' | 'whisper_turbo' | 'diarization'>('all');
   private readonly estimateMinRequired = 5;
   private readonly estimateStorageKey = RUNTIME_ESTIMATE_STORAGE_KEY;
   private readonly appSettingsStorageKey = APP_SETTINGS_STORAGE_KEY;
   private readonly browserStorage = new BestEffortBrowserStorage();
   private readonly fixedProofreadChunkSize = 12;
   private readonly fixedProofreadChunkMaxChars = 1200;
-  private readonly fallbackDefaultProofreadSystemPrompt =
-    'あなたは日本語の音声文字起こしテキストを校正するアシスタントです。各セグメントは独立して処理し、他セグメントとの統合・削除は行わないでください。\n' +
-    '校正ルール：句読点（、。！？）は積極的に追加・修正する。会話フィラー（あー・えーとなど）はそのまま残す。明らかな誤字脱字と余計な半角スペースは修正・削除する。それ以外の言葉・表現は変更しない。';
-  private readonly fallbackOriginalTypeSystemPrompt = [
-    'あなたは日本語の音声文字起こしテキストを校正するアシスタントです。',
-    '各セグメントは独立して処理し、他セグメントとの統合・削除・順序変更は行わないでください。',
-    '',
-    '校正ルール:',
-    '- 句読点（、。！？）は自然な位置に追加・修正してください。',
-    '- 会話フィラー（あー、えーと、まあ、うーん等）は原則として残してください。',
-    '- 明らかな誤字脱字、音声認識由来の不自然な表記、余計な半角スペースは修正してください。',
-    '- 話者の意図、語調、専門用語、固有名詞、数値は推測で変更しないでください。',
-    '- 校正対象外の説明、要約、翻訳、言い換えは行わないでください。',
-  ].join('\n');
   private estimateSamples: RuntimeEstimateSample[] = [];
   private appSettings: AppSettingsV1 = {};
-  private lastObservedComputeType: string | null = null;
   private lastObservedTranscriptionDevice: string | null = null;
 
   // ===== 画面テーマ（システム / ライト / ダーク） =====
@@ -1377,14 +874,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return selectedFileNameValue(this.selectedAudioPath());
   }
 
-  get gpuSetupHint(): string {
-    return gpuSetupHintValue(this.result()?.fallbackUsed === true, this.error());
-  }
-
-  private buildFinalInitialPrompt(): string {
-    return buildFinalInitialPromptValue(this.baseInitialPrompt(), this.initialPrompt());
-  }
-
   private async getDevDemoDataDir(): Promise<string | null> {
     if (this.devDemoDataDir !== undefined) return this.devDemoDataDir;
     try {
@@ -1406,19 +895,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     sensitiveEntityRaw?: unknown
   ): string {
     return buildProofreadHintValue(originalText, revisedText, reasonRaw, sensitiveEntityRaw);
-  }
-
-  /**
-   * AI校正の note を、LLM の自由記述（"changed" フィールド）ではなく
-   * 実際の差分（prev→revised）から生成する。これにより note と本文のズレ
-   * （例: note は「、。を追加」だが本文に「、」が無い）を防ぐ。
-   * - 句読点／空白のみの変更: 実際に増えた記号だけを「。を追加」「、。を追加」のように列挙。
-   *   追加以外（記号の置換・削除）が混ざる場合は「句読点・記号の調整」（buildProofreadHint が
-   *   句読点扱いで（元文）比較表示にする）。
-   * - 単語レベルの変更: 空文字を返し、buildProofreadHint 側の（元文）比較表示に委ねる。
-   */
-  private describeProofreadDiffReason(prev: string, revised: string): string {
-    return describeProofreadDiffReasonValue(prev, revised);
   }
 
   private normalizeProofreadMetadata(
@@ -1583,7 +1059,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getEstimatedTimeLabel(): string {
-    return `文字起こし推定所要時間（${this.resolveEstimateComputeType()}）`;
+    return `文字起こし推定所要時間（${this.effectiveSpeechDevice() === 'cpu' ? 'CPU' : 'GPU'}）`;
   }
 
   private async updateEstimatedTimeFromPath(path: string): Promise<void> {
@@ -1655,7 +1131,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.estimateStorageKey,
       LEGACY_RUNTIME_ESTIMATE_STORAGE_KEY
     );
-    this.estimateSamples = parseRuntimeEstimateSamplesValue(raw, this.runtimeCpuOnlyBuild());
+    this.estimateSamples = parseRuntimeEstimateSamplesValue(raw);
   }
 
   private persistEstimateSamples(): void {
@@ -1667,31 +1143,24 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.appSettingsStorageKey,
       LEGACY_APP_SETTINGS_STORAGE_KEY
     ) ?? {};
-    this.appSettings = stripLegacyKeepFillersSettingValue(stored);
+    this.appSettings = stripRemovedSettingsValue(stored);
   }
 
   private persistAppSettings(): void {
-    this.appSettings = stripLegacyKeepFillersSettingValue(this.appSettings);
+    this.appSettings = stripRemovedSettingsValue(this.appSettings);
     this.browserStorage.writeJson(this.appSettingsStorageKey, this.appSettings);
   }
 
   private applyAppSettings(): void {
     const general = resolveGeneralAppSettingsValue(this.appSettings, {
-      cpuOnlyBuild: this.cpuOnlyBuild,
       transcriptionLanguageOptions: this.transcriptionLanguageOptions,
       playbackRateOptions: this.playbackRateOptions
     });
     if (general.transcriptionDevice !== undefined) {
       this.transcriptionDevice.set(general.transcriptionDevice);
     }
-    if (general.computeType !== undefined) {
-      this.computeType.set(general.computeType);
-    }
     if (general.transcriptionLanguage !== undefined) {
       this.transcriptionLanguage.set(general.transcriptionLanguage);
-    }
-    if (general.hipDeviceIndex !== undefined) {
-      this.selectedHipDeviceIndex.set(general.hipDeviceIndex);
     }
     if (general.playbackRate !== undefined) {
       this.playbackRate.set(general.playbackRate);
@@ -1717,38 +1186,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (general.addUtteranceNumber !== undefined) {
       this.addUtteranceNumber.set(general.addUtteranceNumber);
     }
-    if (general.transcriptionEngine !== undefined && !this.vulkanBuild()) {
-      this.transcriptionEngine.set(general.transcriptionEngine);
-    }
-    if (general.diarizationEngine !== undefined && !this.vulkanBuild()) {
-      this.diarizationEngine.set(general.diarizationEngine);
+    if (general.audioPreprocess !== undefined) {
+      this.audioPreprocess.set(general.audioPreprocess);
     }
     if (general.ggmlGpuUuid !== undefined) {
       this.ggmlGpuUuid.set(general.ggmlGpuUuid);
       this.syncPreferredVulkanGpu();
     }
-
-    const llm = resolveLlmAppSettingsValue(this.appSettings, {
-      localLlmAppsEnabled: this.localLlmAppsEnabled(),
-      aiProofreadBuild: this.runtimeAiProofreadBuild()
-    });
-    if (llm.modelPath !== undefined) this.llmModelPath.set(llm.modelPath);
-    if (llm.backendMode !== undefined) this.llmBackendMode.set(llm.backendMode);
-    if (llm.lmstudioModel !== undefined) this.lmstudioModelInput.set(llm.lmstudioModel);
-    if (llm.ollamaModel !== undefined) this.ollamaModelInput.set(llm.ollamaModel);
-    if (llm.llmHipDeviceIndex !== undefined) {
-      this.selectedLlmHipDeviceIndex.set(llm.llmHipDeviceIndex);
-    }
-    if (llm.llmPromptType !== undefined) this.llmPromptType.set(llm.llmPromptType);
-    if (llm.llmParallel !== undefined) this.selectedLlmParallel.set(llm.llmParallel);
-    // localStorage は初期UI値であり、最終的にはバックエンドの階層マーカーと同期する。
-    this.proofreadModelTier.set(llm.proofreadModelTier);
-    if (this.llmBackendMode() === 'local_gguf') {
-      this.llmPromptType.set('gemma4');
-    }
-
-    this.applyLlmInferenceParamsForSelectedModel();
-    this.updateDevEmulationLabelFromSettings();
   }
 
   private normalizeThemeMode(value: unknown): ThemeMode {
@@ -1803,18 +1247,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       ...this.appSettings,
       transcription: {
         device: this.normalizeTranscriptionDevice(this.transcriptionDevice()),
-        computeType: this.normalizeComputeType(this.computeType()),
         language: this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
-        hipDeviceIndex: this.selectedHipDeviceIndex(),
-        engine: this.transcriptionEngine(),
-        ggmlGpuUuid: this.ggmlGpuUuid()
+        ggmlGpuUuid: this.ggmlGpuUuid(),
+        audioPreprocess: this.audioPreprocess()
       }
     };
     this.persistAppSettings();
   }
 
-  private normalizeComputeType(valueRaw: string): ComputeTypeOption {
-    return normalizeComputeTypeValue(valueRaw, this.runtimeCpuOnlyBuild());
+  onAudioPreprocessPresetChange(value: unknown): void {
+    this.audioPreprocess.set(normalizeAudioPreprocessPresetValue(value));
+    this.persistTranscriptionSettings();
   }
 
   /** 文字起こし言語コードを正規化する。選択肢に無い値は既定の ja に戻す。 */
@@ -1828,11 +1271,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   private normalizeTranscriptionDevice(valueRaw: string): TranscriptionDeviceOption {
-    return normalizeTranscriptionDeviceValue(valueRaw, this.runtimeCpuOnlyBuild());
+    return normalizeTranscriptionDeviceValue(valueRaw);
   }
 
-  private normalizeTranscriptionDeviceForEstimate(valueRaw: string): 'cuda' | 'cpu' {
-    return normalizeTranscriptionDeviceValue(valueRaw, this.runtimeCpuOnlyBuild());
+  /**
+   * 実際に使う実行デバイス。GPU が見つからないときは CPU を送る
+   * （'cuda' のまま送ると、話者分離エンジンが GPU を探して一度失敗してから CPU に切り替わるため）。
+   */
+  private effectiveSpeechDevice(): TranscriptionDeviceOption {
+    return this.vulkanAvailable() === false ? 'cpu' : 'cuda';
   }
 
   private buildLocationDetectionScopeRequest(): LocationDetectionScope {
@@ -1860,8 +1307,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       ...this.appSettings,
       diarization: {
         device: this.normalizeTranscriptionDevice(this.diarizationDevice()),
-        speakerCount: this.speakerCount(),
-        engine: this.diarizationEngine()
+        speakerCount: this.speakerCount()
       }
     };
     this.persistAppSettings();
@@ -1889,17 +1335,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private pickEstimateSamplesForCurrentProfile(): RuntimeEstimateSample[] {
     const diarization = this.diarization();
-    const device = this.normalizeTranscriptionDeviceForEstimate(this.transcriptionDevice());
-    const compute = this.resolveEstimateComputeType();
-    return pickRuntimeEstimateSamplesValue(this.estimateSamples, diarization, device, compute);
-  }
-
-  /** 所要時間の記録・推定の区分。ggml は計算方式を選べないため、エンジン名で分ける。 */
-  private resolveEstimateComputeType(): ConcreteComputeType | typeof GGML_ESTIMATE_PROFILE {
-    if (this.transcriptionEngine() === 'ggml') {
-      return GGML_ESTIMATE_PROFILE;
-    }
-    return resolveEstimateComputeTypeValue(this.transcriptionDevice(), this.computeType());
+    const device = this.effectiveSpeechDevice();
+    return pickRuntimeEstimateSamplesValue(this.estimateSamples, diarization, device, GGML_ESTIMATE_PROFILE);
   }
 
   private detectTauriRuntime(): boolean {
@@ -1927,18 +1364,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   ngOnInit(): void {
     void this.debounceDevWindowFocus();
-    this.loadEditorLowMemoryVoiceInputOptIn();
     this.loadAppSettings();
     this.initTheme();
     this.applyAppSettings();
     this.loadEstimateSamples();
     void this.initializeStartupState();
     void this.refreshGgmlSpeechStatus();
-    if (!this.vulkanBuild()) {
-      this.ngZone.runOutsideAngular(() => {
-        window.addEventListener('scroll', this._overallProofreadScrollListener, { passive: true });
-      });
-    }
   }
 
   ngAfterViewInit(): void {
@@ -1969,7 +1400,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.stopSmoothProgress();
     this.stopProofreadTicker();
     this.stopDiarizationTicker();
-    this.stopLlmProofreadTicker();
     this.stopSegmentPlayback();
     this.revokePreviewObjectUrl();
     this.progressSubscription.clear();
@@ -1979,19 +1409,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.setupProgressSubscription.clear();
     this.dismissPlaybackTranscodeSnackbar();
     this.cleanupVoiceInputRecording(false);
-    if (this.llmEngineUiVisible()) {
-      this.stopLlm();
-    }
-    window.removeEventListener('scroll', this._overallProofreadScrollListener);
-    if (this._overallProofreadScrollRaf !== null) {
-      cancelAnimationFrame(this._overallProofreadScrollRaf);
-    }
     window.removeEventListener('scroll', this._refreshSegmentTableInView);
     this.shortcutFocusRetryTimer.cancel();
     this.findReplaceFocusTimer.cancel();
     this.segmentCursorFocusTimer.cancel();
     this.timeEditFocusTimer.cancel();
-    this.delayedGpuRecheckTimer.cancel();
   }
 
   /**
@@ -2127,21 +1549,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.finishVoiceInputRecording(recordingSegmentId);
       return;
     }
-    if (!this.editorInstalledMemoryChecked()) {
-      await this.checkEditorInstalledMemory();
-    }
-    if (this.runtimeCpuVoiceInputBuild() && !this.editorVoiceInputMemoryAllowed()) {
-      this.snackBar.open('このPCはスペック（メモリ容量）が足りないため、音声入力を使用できません', undefined, { duration: 4000 });
-      return;
-    }
     if (!this.editorVoiceInputPackChecked()) {
       await this.checkEditorVoiceInputPackStatus();
     }
     if (this.editorVoiceInputPackStatus()?.installed !== true) {
       this.snackBar.open(
-        this.vulkanBuild()
-          ? '音声入力には文字起こし用のモデル（whisper.cpp）が必要です。設定画面のセットアップを完了してください'
-          : '音声入力用のGemma 4が未導入です。設定画面の「音声入力パック」からAIモデルをダウンロードしてください',
+        this.editorOnlyBuild
+          ? '音声入力には音声認識モデル（whisper.cpp）が必要です。設定画面の「音声入力パック」からダウンロードしてください'
+          : '音声入力には文字起こし用のモデル（whisper.cpp）が必要です。設定画面のセットアップを完了してください',
         undefined,
         { duration: 5000 }
       );
@@ -2563,11 +1978,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.error.set('');
     this.errorCopiedMessage.set('');
     if (this.isTranscriptionTabDisabled()) {
-      this.error.set(this.runtimeCpuOnlyBuild()
-        ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
-        : this.vulkanBuild()
-          ? '文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。'
-          : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
+      this.error.set('文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。');
       return;
     }
 
@@ -2611,70 +2022,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  onComputeTypeChange(value: ComputeTypeOption): void {
-    this.computeType.set(value);
-    this.persistTranscriptionSettings();
-    const seconds = this.estimatedAudioSeconds();
-    if (seconds && seconds > 0) {
-      this.recalculateEstimatedTime(seconds);
-    }
-  }
-
-  onHighpassFilterChange(checked: boolean): void {
-    this.highpassFilter.set(Boolean(checked));
-  }
-
-  onNoiseReductionChange(checked: boolean): void {
-    this.noiseReduction.set(Boolean(checked));
-    if (checked) {
-      this.noiseReductionMode.set('weak');
-    }
-  }
-
-  onNormalizeAudioChange(checked: boolean): void {
-    this.normalizeAudio.set(Boolean(checked));
-  }
-
-  onAudioPreprocessPresetChange(value: AudioPreprocessPreset): void {
-    const settings = getAudioPreprocessSettingsForPresetValue(value);
-    if (!settings) {
-      return;
-    }
-    this.highpassFilter.set(settings.highpassFilter);
-    this.noiseReduction.set(settings.noiseReduction);
-    this.normalizeAudio.set(settings.normalizeAudio);
-    this.noiseReductionMode.set(settings.noiseReductionMode);
-  }
-
-  onTranscriptionDeviceChange(valueRaw: string): void {
-    const normalized = this.normalizeTranscriptionDevice(valueRaw);
-    this.transcriptionDevice.set(normalized);
-    this.diarizationDevice.set(normalized);
-    this.persistTranscriptionSettings();
-    this.persistDiarizationSettings();
-  }
-
   onSpeakerCountChange(value: number): void {
     const normalized = Number.isFinite(value) ? Math.max(1, Math.min(5, Math.floor(value))) : 2;
     this.speakerCount.set(normalized);
     this.persistDiarizationSettings();
-  }
-
-  onDiarizationDeviceChange(valueRaw: string): void {
-    this.diarizationDevice.set(this.normalizeTranscriptionDevice(valueRaw));
-    this.persistDiarizationSettings();
-  }
-
-  onTranscriptionEngineChange(valueRaw: string): void {
-    this.transcriptionEngine.set(normalizeSpeechEngineValue(valueRaw));
-    this.persistTranscriptionSettings();
-    void this.refreshGgmlSpeechStatus();
-  }
-
-  onDiarizationEngineChange(valueRaw: string): void {
-    this.diarizationEngine.set(normalizeSpeechEngineValue(valueRaw));
-    this.persistDiarizationSettings();
-    void this.refreshGgmlSpeechStatus();
   }
 
   /** ggml エンジンの実行ファイル・モデルが揃っているかを確認する（起動はしない）。 */
@@ -2696,6 +2047,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.vulkanGpus.set(await invoke<VulkanGpuList>('list_vulkan_gpus', { refresh }));
     } catch {
       this.vulkanGpus.set(null);
+    }
+    if (this.editorOnlyBuild || !this.isTauriRuntime()) return;
+    try {
+      this.gpuDriverHint.set(await invoke<string | null>('get_gpu_driver_hint'));
+    } catch {
+      this.gpuDriverHint.set(null);
     }
   }
 
@@ -2773,18 +2130,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     if (this.isTranscriptionTabDisabled() || (this.transcriptionDevice() === 'cuda' && !this.transcriptionTabVisible())) {
-      this.error.set(this.runtimeCpuOnlyBuild()
-        ? 'CPU 推論ランタイムが確認できないため、文字起こし機能は利用できません。'
-        : this.vulkanBuild()
-          ? '文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。'
-          : 'この環境では CUDA が確認できないため、文字起こし機能は利用できません。');
+      this.error.set('文字起こし・話者分離のエンジンが見つかりません。アプリを再インストールしてください。');
       return;
     }
-    if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
-      this.error.set('AI校正の処理中です。先に中止または完了を待ってください。');
-      return;
-    }
-
     if (!this.isTauriRuntime()) {
       this.error.set('ブラウザ起動では文字起こしを実行できません。Tauri ウィンドウから実行してください。');
       return;
@@ -2795,19 +2143,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (!this.vulkanBuild() && this.runtimeAiProofreadBuild() && this.allSetupStatus()?.gemmaGguf === false && !this._gemmaCheckBypassed) {
-      this.openConfirmDialog({
-        actionKind: 'gemmaNotFoundBeforeTranscription',
-        title: 'Gemma 4モデルが見つかりません',
-        message: 'AI校正用のGemma 4モデルが見つかりませんでした。\n（確認場所: python_sidecar/models/llm/gemma-4-e4b-it/）\n\nモデルなしで文字起こしを開始しますか？\nモデルのダウンロードはセットアップタブから行えます。',
-        confirmLabel: 'このまま開始',
-        cancelLabel: 'キャンセル',
-        confirmColor: null,
-        cancelColor: null,
-      });
-      return;
-    }
-    this._gemmaCheckBypassed = false;
 
     this.error.set('');
     this.errorWasCancelledByUser.set(false);
@@ -2824,7 +2159,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.displayProgress.set(0);
     this.runningStepCurrent.set(0);
     this.runningStepTotal.set(getProgressStageOrderValue(this.diarization()).length);
-    this.runningComputeType.set('');
     this.proofreadRunning.set(false);
     this.proofreadEditingLocked.set(false);
     this.proofreadStatus.set('');
@@ -2835,18 +2169,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadMetadataBySegmentId.set({});
     this.proofreadUpdatedCount.set(0);
     this.proofreadCompleted.set(false);
-    this.llmProofreadRunning.set(false);
-    this.llmProofreadCanceling.set(false);
-    this.llmProofreadStatus.set('');
-    this.llmProofreadRunningSeconds.set(0);
-    this.llmSegmentStatus.set({});
-    this.llmProgressOffset = 0;
-    this.llmTotalProcessedCount = 0;
     this.diarizationPhaseActive.set(false);
     this.diarizationStage.set('');
     this.segmentRowFilter.set('all');
     this._allRenderLimit.set(Number.MAX_SAFE_INTEGER);
-    this.lastObservedComputeType = null;
     this.lastObservedTranscriptionDevice = null;
     this.runningSeconds.set(0);
     this.lastRunElapsedSeconds.set(0);
@@ -2872,7 +2198,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const runId = Date.now();
 
     try {
-      this.runningStatus.set('Python sidecar を起動しています...');
+      this.runningStatus.set('音声エンジンを起動しています...');
       console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_start]`);
       const response = await invoke<{ success: boolean; result?: TranscriptionResult; errorMessage?: string }>(
         'run_transcription',
@@ -2882,24 +2208,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
             audioPath: this.selectedAudioPath(),
             diarization: true,
             speakerCount: this.speakerCount(),
-            device: this.transcriptionDevice(),
-            computeType: this.computeType(),
+            device: this.effectiveSpeechDevice(),
             model: this.whisperModel(),
             language: this.transcriptionLanguage(),
-            initialPrompt: this.buildFinalInitialPrompt(),
-            normalizeAudio: this.normalizeAudio(),
-            highpassFilter: this.highpassFilter(),
-            noiseReduction: this.noiseReduction(),
-            noiseReductionMode: this.noiseReduction() ? this.noiseReductionMode() : 'weak',
             parallelDiarization: this.parallelMode() === 'fast',
-            clusteringThreshold: this.clusteringAdjust() === 'over_split' ? 0.82
-              : this.clusteringAdjust() === 'under_split' ? 0.55
-              : null,
-            hipDeviceIndex: this.selectedHipDeviceIndex() >= 0 ? this.selectedHipDeviceIndex() : null,
-            transcriptionEngine: this.transcriptionEngine(),
-            diarizationEngine: this.diarizationEngine(),
-            keepFillers: true,
             ggmlGpuUuid: this.ggmlGpuUuid() || null,
+            audioPreprocess: this.audioPreprocess(),
           }
         }
       );
@@ -2911,7 +2225,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         throw new Error(response.errorMessage ?? '文字起こしに失敗しました。');
       }
 
-      if (hasFallbackInTranscriptionResultValue(response.result) || this.hadRetryInCurrentRun()) {
+      const gpuFallbackNotice = diarizationGpuFallbackNoticeValue(response.result);
+      if (gpuFallbackNotice) {
+        // 結果カード内の案内として表示する（再生中のスナックバーを消さないよう、スナックバーは使わない）。
+        this.lastRunNotice.set(gpuFallbackNotice);
+      } else if (hasFallbackInTranscriptionResultValue(response.result) || this.hadRetryInCurrentRun()) {
         this.lastRunNotice.set('再試行またはフォールバックが発生しました。結果は取得できていますが、初回実行は失敗しています。');
       }
 
@@ -2932,17 +2250,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       // 結果反映直後の入力欄への自動フォーカスは行わない。WebKitGTK + XWayland +
       // IMEの組み合わせでは、処理完了の描画中にIMEを起動するとイベントループが
       // 停止することがある。利用者が明示的にクリックしたときだけ入力を開始する。
-      this.lastObservedComputeType =
-        String((response.result.settings as { computeType?: unknown })?.computeType ?? this.computeType());
       this.lastObservedTranscriptionDevice =
-        String((response.result.settings as { device?: unknown })?.device ?? this.transcriptionDevice());
+        String((response.result.settings as { device?: unknown })?.device ?? this.effectiveSpeechDevice());
       autoEntityCheckAfterTranscription = true;
       console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=result_state_done]`);
     } catch (error) {
       const message = this.normalizeErrorMessage(error);
       console.error(`[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_error]`);
       this.error.set(message);
-      this.showAmdGpuProcessingFailure('文字起こし・話者分離', message);
     } finally {
       this.stopSmoothProgress();
       this.running.set(false);
@@ -2951,36 +2266,25 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.displayProgress.set(0);
       this.runningStepCurrent.set(0);
       this.runningStepTotal.set(0);
-      this.runningComputeType.set('');
       this.parallelDiarizationStatus.set('');
       console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=transcription_ui_released]`);
     }
 
     try {
       if (autoEntityCheckAfterTranscription && !this.transcriptionPipelineCanceling()) {
-        if (this.vulkanBuild() || this.transcriptionEngine() === 'ggml') {
-          // whisper.cpp は、フィラーの例文（句読点を含む）をまねて句読点を付けて出力する
-          // （実測で99%の行が句読点で終わる）。LLM は使わず、ルールで全角化と欠けた文末だけを補う。
-          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=rule_punctuation_start]`);
-          await this.runProofread('transcription', false, 'punct');
-          autoEntityCheckAfterTranscription = false;
-          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=rule_punctuation_done]`);
-        } else if (this.runtimeAiProofreadBuild()) {
-          // GPU版（faster-whisper）は、保存中の高精度モデル設定に関係なくE4Bで句読点を自動付与する。
-          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=auto_punctuation_start]`);
-          await this.startAutoLlmProofread();
-          console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=auto_punctuation_done]`);
-        } else if (this.runtimeCpuOnlyBuild()) {
-          // CPU版のpunctモードは、単純句読点付与と固有名詞チェックを一度に実行する。
-          await this.runProofread('transcription', false, 'punct');
-          autoEntityCheckAfterTranscription = false;
-        }
-        // 表示する所要時間は、文字起こし開始からAI句読点付与の完了までとする。
+        // whisper.cpp は、フィラーの例文（句読点を含む）をまねて句読点を付けて出力する
+        // （実測で99%の行が句読点で終わる）。ルールで全角化と欠けた文末だけを補い、
+        // 固有名詞チェックも同時に行う。
+        console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=rule_punctuation_start]`);
+        await this.runProofread('transcription', false, 'punct');
+        autoEntityCheckAfterTranscription = false;
+        console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=rule_punctuation_done]`);
+        // 表示する所要時間は、文字起こし開始から句読点付与の完了までとする。
         // この後に続く固有名詞チェックの時間は含めない。
         this.stopRunningTicker();
         const elapsed = this.runningSeconds();
         this.lastRunElapsedSeconds.set(elapsed);
-        // 所要時間ログと次回以降の予測にも、AI句読点付与までの総時間を使う。
+        // 所要時間ログと次回以降の予測にも、句読点付与までの総時間を使う。
         if (this.proofreadCompleted() && elapsed > 0) {
           const audioSeconds = this.resolveRuntimeLogAudioSeconds();
           if (audioSeconds && audioSeconds > 0) {
@@ -2988,12 +2292,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
               audioSeconds,
               elapsedSeconds: elapsed,
               diarization: true,
-              device: this.normalizeTranscriptionDeviceForEstimate(
-                this.lastObservedTranscriptionDevice ?? this.transcriptionDevice()
+              device: this.normalizeTranscriptionDevice(
+                this.lastObservedTranscriptionDevice ?? this.effectiveSpeechDevice()
               ),
-              computeType: this.transcriptionEngine() === 'ggml'
-                ? GGML_ESTIMATE_PROFILE
-                : this.lastObservedComputeType ?? this.computeType(),
+              computeType: GGML_ESTIMATE_PROFILE,
               createdAt: Date.now(),
               fileSizeBytes: this.selectedAudioFileSizeBytes()
             });
@@ -3014,112 +2316,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.transcriptionPipelineCanceling.set(false);
       this.dismissProgressSnackbar();
       console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=pipeline_released]`);
-    }
-  }
-
-  async runDiarization(): Promise<void> {
-    if (this.transcriptionPipelineRunning() || this.running() || this.proofreadRunning() || this.diarizationRunning()) {
-      return;
-    }
-    if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
-      this.error.set('AI校正の処理中です。先に中止または完了を待ってください。');
-      return;
-    }
-    if (!this.isTauriRuntime()) {
-      this.error.set('ブラウザ起動では話者分離を実行できません。Tauri ウィンドウから実行してください。');
-      return;
-    }
-    if (!this.selectedAudioPath()) {
-      this.error.set('音声ファイルを選択してください。');
-      return;
-    }
-    if (this.requiresDiarizationSetup()) {
-      this.error.set(
-        `話者分離モデルが見つかりません。先にセットアップを完了してください: ${this.diarizationModelExpectedPath()}`
-      );
-      return;
-    }
-    const current = this.result();
-    if (!current || this.segmentRows.length === 0) {
-      this.error.set('話者分離対象の文字起こし結果がありません。先に文字起こしを実行してください。');
-      return;
-    }
-
-    this.error.set('');
-    this.errorCopiedMessage.set('');
-    this.diarizationRunning.set(true);
-    this.diarizationCanceling.set(false);
-    this.diarizationRunningSeconds.set(0);
-    this.updateDiarizationRunningStatus();
-    this.startDiarizationTicker();
-    await this.ensureProgressListener();
-
-    let autoEntityCheckSource: ProofreadRunSource | null = null;
-
-    try {
-      const response = await invoke<{ success: boolean; result?: TranscriptionResult; errorMessage?: string }>(
-        'run_diarization',
-        {
-          request: {
-            audioPath: this.selectedAudioPath(),
-            speakerCount: this.speakerCount(),
-            device: this.diarizationDevice(),
-            result: current,
-            clusteringThreshold: this.clusteringAdjust() === 'over_split' ? 0.82
-              : this.clusteringAdjust() === 'under_split' ? 0.55
-              : null,
-            diarizationEngine: this.diarizationEngine(),
-            ggmlGpuUuid: this.ggmlGpuUuid() || null,
-          }
-        }
-      );
-      if (!response.success || !response.result) {
-        throw new Error(response.errorMessage ?? '話者分離に失敗しました。');
-      }
-
-      this.result.set(response.result);
-      this.resultSource.set(this.resultSource() ?? 'transcription');
-      this.editedSegmentTextMap.set(
-        buildDiarizationEditedTextMapValue(response.result.segments, this.editedSegmentTextMap())
-      );
-      this.selectedSpeakerBySegmentId.set(buildInitialSpeakerSelectionMapValue(response.result.segments));
-      const existingAlias = this.speakerAliasMap();
-      const inferredAlias = buildInitialSpeakerAliasMapValue(response.result.segments);
-      this.speakerAliasMap.set({ ...inferredAlias, ...existingAlias });
-      const actualDeviceRaw = String(response.result.diarization?.device ?? '').trim().toLowerCase();
-      if (actualDeviceRaw === 'cuda' || actualDeviceRaw === 'cpu') {
-        this.diarizationDevice.set(this.normalizeTranscriptionDevice(actualDeviceRaw));
-        this.persistDiarizationSettings();
-      }
-      const shownDevice = actualDeviceRaw === 'cpu' ? 'CPU' : (actualDeviceRaw === 'cuda' ? 'GPU' : this.diarizationDevice().toUpperCase());
-      this.diarizationStatus.set(`話者分離が完了しました。（所要: ${this.diarizationRunningSeconds()} 秒 / 実行: ${shownDevice}）`);
-      autoEntityCheckSource = 'transcription';
-    } catch (error) {
-      const message = this.normalizeErrorMessage(error);
-      this.error.set(message);
-      this.diarizationStatus.set('');
-      this.showAmdGpuProcessingFailure('話者分離', message);
-    } finally {
-      this.stopDiarizationTicker();
-      this.diarizationRunning.set(false);
-      this.diarizationCanceling.set(false);
-    }
-
-    if (autoEntityCheckSource) {
-      // 話者割り当ての変化を反映して句読点付与を再実行する（whisper.cpp はルール、faster-whisper のGPU版はE4B）。
-      this.llmSegmentStatus.set({});
-      this.llmProgressOffset = 0;
-      this.llmTotalProcessedCount = 0;
-      this.proofreadUpdatedCount.set(0);
-      if (this.vulkanBuild() || this.transcriptionEngine() === 'ggml') {
-        // whisper.cpp の文字起こしは句読点付きなので、ルールだけで補う（LLM は使わない）。
-        await this.runProofread(autoEntityCheckSource, false, 'punct');
-      } else if (this.runtimeAiProofreadBuild()) {
-        await this.startAutoLlmProofread();
-        await this.runProofread(autoEntityCheckSource, false, 'entity');
-      } else if (this.runtimeCpuOnlyBuild()) {
-        await this.runProofread(autoEntityCheckSource, false, 'punct');
-      }
     }
   }
 
@@ -3285,10 +2481,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       await this.cancelTranscriptionRun();
       return;
     }
-    if (this.llmProofreadRunning()) {
-      await this.cancelLlmProofread();
-      return;
-    }
     if (this.proofreadRunning()) {
       await this.cancelProofreadRun();
     }
@@ -3312,213 +2504,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  async runLlmProofread(
-    autoMode = false,
-    segments?: ProofreadSegmentInput[],
-    backendOverride?: 'llama_cpp' | 'llama_cpp_rocm' | 'llama_server' | 'openai_compatible',
-  ): Promise<void> {
-    if (this.vulkanBuild()) return;
-    if (this.llmProofreadRunning() || this.llmProofreadCanceling()) {
-      return;
-    }
-    if (this.overallProofreadRunning()) {
-      if (!autoMode) {
-        this.error.set('全体校正の処理中です。先に完了を待ってください。');
-      }
-      return;
-    }
-    if (this.running() || this.proofreadRunning() || this.diarizationRunning()) {
-      if (!autoMode) {
-        this.error.set('他の処理が実行中のため、AI校正を開始できません。');
-      }
-      return;
-    }
-    if (!this.isTauriRuntime() || (!segments && !this.result())) {
-      return;
-    }
-
-    // 既に完了済みのセグメントを除外して送信。校正対象が無ければエンジンを起動せず早期returnする
-    // （対象ゼロで同梱エンジン（llama-server）を無駄に起動・常駐させないため、起動より前に判定する）。
-    const currentDoneStatus = this.llmSegmentStatus();
-    this.llmProgressOffset = Object.values(currentDoneStatus).filter(v => v === 'done').length;
-    const resolvedSegments = segments
-      ? segments.filter((s) => currentDoneStatus[s.id] !== 'done')
-      : this.segmentRows
-          .filter((seg) => currentDoneStatus[seg.id] !== 'done')
-          .map((segment) => ({
-            id: segment.id,
-            text: this.getEditableText(segment),
-            speaker: this.getAssignedSpeakerKey(segment) || null,
-            speakerLabel: this.getAssignedSpeakerKey(segment) || null,
-            start: segment.start,
-            end: segment.end,
-          }));
-
-    if (resolvedSegments.length === 0) {
-      this.llmProofreadStatus.set('全セグメント処理済みです。');
-      return;
-    }
-
-    const backend = backendOverride ?? 'llama_cpp';
-    let modelPath = this.llmModelPath();
-    if (backend === 'llama_cpp' || backend === 'llama_cpp_rocm') {
-      if (!modelPath) {
-        if (autoMode) {
-          this.llmProofreadStatus.set('モデルパスが未設定のためAI校正をスキップしました。');
-          return;
-        }
-        this.llmProofreadStatus.set('Gemma 4モデルが見つかりません。セットアップタブからダウンロードしてください。');
-        return;
-      }
-    } else if (backend === 'llama_server') {
-      // 内蔵 llama-server バックエンド: サーバー起動確認
-      await this.checkLlmStatus();
-      if (this.llmServerStatus() !== 'running') {
-        const currentStatus = this.llmServerStatus();
-        if (currentStatus === 'not_installed' || currentStatus === 'unknown') {
-          await this.checkLlmStatus();
-        }
-        if (this.llmServerStatus() === 'not_installed') {
-          this.llmProofreadStatus.set('AI校正エンジンが未インストールです。設定タブからインストールしてください。');
-          return;
-        }
-        this.llmProofreadStatus.set('AI校正エンジンを起動中...');
-        await this.startLlm(false, autoMode ? 'e4b' : undefined);
-        if (this.llmServerStatus() !== 'running') {
-          // 起動時にKVキャッシュ確保でVRAM不足になった場合は、並列処理数を下げて再試行を促す
-          if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runLlmProofread(autoMode, segments, backendOverride))) {
-            this.llmProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-          } else {
-            this.llmProofreadStatus.set('AI校正エンジンの起動に失敗しました。');
-            this.showAmdGpuProcessingFailure(
-              'AI校正',
-              this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
-            );
-          }
-          return;
-        }
-      }
-      await this.refreshLlmLoadedDevice();
-      if (this.llmLoadedDevice() === 'cpu') {
-        const msg = 'CPU 専用バックエンドが検出されました。AI校正を中止しました。GPU対応のllama-serverを確認してください。';
-        this.llmProofreadStatus.set(msg);
-        this.showAmdGpuProcessingFailure('AI校正', msg);
-        return;
-      }
-    } else {
-      // openai_compatible バックエンド (lmstudio / ollama)
-      const model = this.activeOpenAiModelInput().trim();
-      if (!model) {
-        const msg = 'モデル名が選択されていません。設定タブで「モデル一覧を取得」してモデルを選択してください。';
-        this.llmProofreadStatus.set(msg);
-        if (!autoMode) {
-          this.error.set(msg);
-        }
-        return;
-      }
-    }
-
-    this.error.set('');
-    if (!autoMode) {
-      this.llmTotalProcessedCount = 0;
-    }
-    await this.ensureProgressListener();
-    this.llmProofreadRunning.set(true);
-    this.llmProofreadCanceling.set(false);
-    this.llmProofreadRunningSeconds.set(0);
-    this.startLlmProofreadTicker();
-    this.llmProofreadStatus.set('AI校正を準備中...');
-
-    // 'processing'状態のみリセット、'done'は保持
-    this.llmSegmentStatus.update((s) => {
-      const next: Record<number, 'processing' | 'done'> = {};
-      for (const [k, v] of Object.entries(s)) {
-        if (v === 'done') next[+k] = 'done';
-      }
-      return next;
-    });
-
-    try {
-      const response = await invoke<{ success: boolean; result?: ProofreadResultPayload; errorMessage?: string }>(
-        'proofread_transcription_llm',
-        {
-          request: {
-            segments: resolvedSegments,
-            modelPath,
-            nGpuLayers: backend === 'llama_server' ? 0 : -1,
-            backend,
-            openaiBaseUrl: this.activeOpenAiBaseUrl(),
-            openaiModel: this.activeOpenAiModelInput(),
-            systemPrompt: this.getSelectedProofreadSystemPromptForRun(),
-            nCtx: this.llmNCtx() > 0 ? this.llmNCtx() : 16384,
-            maxBatch: this.llmMaxBatch(),
-            promptType: this.llmPromptType(),
-          }
-        }
-      );
-
-      const wasCancelled = !response.success && (response.errorMessage ?? '').includes('中止');
-
-      if (!response.success || !response.result) {
-        if (wasCancelled) {
-          const elapsed = this.formatElapsedMinuteSecond(this.llmProofreadRunningSeconds() + 1);
-          this.llmProofreadStatus.set(`AI校正を中止しました。（${elapsed}経過）再度実行すると未処理の行から再開します。`);
-          return;
-        }
-        throw new Error(response.errorMessage ?? 'AI校正に失敗しました。');
-      }
-
-      // イベント経由で未処理のセグメント（短い行など）のみ適用
-      const alreadyDone = this.llmSegmentStatus();
-      for (const item of response.result.items ?? []) {
-        const sid = Number(item.id);
-        if (!Number.isFinite(sid) || alreadyDone[sid] === 'done') continue;
-        this.applyLlmBatchResult([item]);
-      }
-
-      const totalChanged = this.proofreadUpdatedCount();
-      const totalProcessed = this.llmTotalProcessedCount;
-      const elapsed = this.formatElapsedMinuteSecond(this.llmProofreadRunningSeconds() + 1);
-      const countText = totalProcessed > totalChanged
-        ? `${totalProcessed} 行を確認し、${totalChanged} 行を修正しました。`
-        : `${totalProcessed} 行を校正しました。`;
-      this.llmProofreadStatus.set(`完了: ${countText}（所要: ${elapsed}）`);
-      this.proofreadCompleted.set(true);
-    } catch (error) {
-      const msg = this.normalizeErrorMessage(error);
-      // 推論中のVRAM不足は赤字エラーにせず、並列処理数を下げて再試行する確認ダイアログを出す
-      if (await this.maybePromptLowerParallelOnOom(msg, () => this.runLlmProofread(autoMode, segments, backendOverride))) {
-        this.llmProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-      } else {
-        this.error.set(msg);
-        // runProofread が this.error をクリアしてもエラーを確認できるよう status にも残す
-        this.llmProofreadStatus.set(`AI校正エラー: ${msg}`);
-        if (backend !== 'openai_compatible') {
-          this.showAmdGpuProcessingFailure('AI校正', msg);
-        }
-      }
-    } finally {
-      this.stopLlmProofreadTicker();
-      this.llmProofreadRunning.set(false);
-      this.llmProofreadCanceling.set(false);
-    }
-  }
-
-  async cancelLlmProofread(): Promise<void> {
-    if (!this.llmProofreadRunning() || this.llmProofreadCanceling()) return;
-    this.llmProofreadCanceling.set(true);
-    try {
-      await invoke('cancel_llm_proofread');
-    } catch { }
-  }
-
-  /** 話者分離完了後、内蔵E4Bで句読点付与を自動実行する。 */
-  private async startAutoLlmProofread(): Promise<void> {
-    if (!this.result()) return;
-    // 12BやローカルAIアプリの選択は全体校正などの明示操作にだけ適用する。
-    await this.runLlmProofread(true, undefined, 'llama_server');
-  }
-
   private openProgressSnackbar(): void {
     this.dismissProgressSnackbar();
     this.progressSnackbarVisible.set(true);
@@ -3536,100 +2521,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.progressSnackBarRef.dismiss();
       this.progressSnackBarRef = null;
     }
-  }
-
-  private applyLlmBatchResult(items: any[]): void {
-    const hintMap = { ...this.proofreadHintBySegmentId() };
-    const metadataMap = { ...this.proofreadMetadataBySegmentId() };
-    const currentTexts = { ...this.editedSegmentTextMap() };
-    const statusMap = { ...this.llmSegmentStatus() };
-    const changedTexts: Record<number, string> = {};
-    let appliedCount = this.proofreadUpdatedCount();
-    let processedCount = 0;
-    // segments.find() をループ内で呼ぶと O(N²) になるため、先に Map を構築する
-    const segmentTextById = new Map<number, string>(
-      (this.result()?.segments ?? []).map((s) => [s.id, s.text ?? ''])
-    );
-
-    for (const item of items) {
-      const sid = Number(item.id);
-      if (!Number.isFinite(sid)) continue;
-      processedCount++;
-      statusMap[sid] = 'done';
-      const prev = currentTexts[sid] ?? segmentTextById.get(sid) ?? (typeof item.originalText === 'string' ? item.originalText : '');
-      const revised = typeof item.revisedText === 'string' ? item.revisedText : prev;
-      const existingMeta = metadataMap[sid];
-      // ハリュシネーション検出: LLMの仕事は句読点追加のみ。
-      // 元テキストとの編集距離が元文字数の30%超かつ5文字超ならID混同による誤出力として却下する。
-      const origText = typeof item.originalText === 'string' ? item.originalText : prev;
-      // ID混在検出: LLMが想定した元文と実際のセルテキストが大きく乖離している場合は別セグメントの結果と判定する。
-      const origPrevThreshold = Math.max(5, Math.floor(Math.max(origText.length, prev.length) * 0.25));
-      if (origText.length > 0 && prev.length > 0 && levenshteinDistanceValue(origText, prev) > origPrevThreshold) {
-        // console.warn(`[proofread] ID混在の疑い: sid=${sid} origText="${origText}" prev="${prev}"`);
-        hintMap[sid] = 'AI校正：（変更無し）';
-        continue;
-      }
-      const maxAllowedDist = Math.max(5, Math.floor(origText.length * 0.3));
-      if (origText.length > 0 && levenshteinDistanceValue(origText, revised) > maxAllowedDist) {
-        hintMap[sid] = 'AI校正：（変更無し）';
-        continue;
-      }
-      if (revised === prev || revised === '') {
-        if (existingMeta?.sensitiveEntity?.hasSensitiveEntity === true || (existingMeta?.lintIssues?.length ?? 0) > 0) {
-          hintMap[sid] = this.buildProofreadHint(
-            existingMeta.diff.from,
-            existingMeta.diff.to,
-            existingMeta.reason,
-            existingMeta.sensitiveEntity
-          );
-        } else {
-          hintMap[sid] = 'AI校正：（変更無し）';
-        }
-        continue;
-      }
-      // note は LLM の自由記述（item.reason）ではなく実差分から生成し、本文とのズレを防ぐ（#2 対応）。
-      const diffReason = this.describeProofreadDiffReason(prev, revised);
-      // 句読点以外の文字が変化した変更（diffReason === ''）の扱いはプロンプト種別で分岐する。
-      // - gemma4（既定・句読点専用）: 語が変わる変更はハリュシネーション（短文の丸ごと置換、
-      //   例:「あるじゃん」→「マジで？」）とみなして却下し原文を保持する。編集距離ガードは
-      //   短文で floor=5 を通過してしまうため、ここで確実に止めて文字起こしの忠実性を守る。
-      // - original（誤字脱字修正を許可）: 小さな語修正は通すが、短文の丸ごと置換は
-      //   厳しめのしきい値 max(2, ⌈元文長×0.34⌉) で却下する（短文ハリュシネーション対策）。
-      if (diffReason === '') {
-        const allowWordEdit =
-          this.llmPromptType() === 'original' &&
-          prev.length > 0 &&
-          levenshteinDistanceValue(prev, revised) <= Math.max(2, Math.ceil(prev.length * 0.34));
-        if (!allowWordEdit) {
-          if (existingMeta?.sensitiveEntity?.hasSensitiveEntity === true || (existingMeta?.lintIssues?.length ?? 0) > 0) {
-            hintMap[sid] = this.buildProofreadHint(
-              existingMeta.diff.from,
-              existingMeta.diff.to,
-              existingMeta.reason,
-              existingMeta.sensitiveEntity
-            );
-          } else {
-            hintMap[sid] = 'AI校正：（変更無し）';
-          }
-          continue;
-        }
-        // original の小さな誤字脱字修正として許可 → 下の通常適用へ（note は（元文）比較表示）。
-      }
-      const metadata = this.normalizeProofreadMetadata(prev, revised, item.confidence, diffReason, existingMeta?.sensitiveEntity, existingMeta?.lintIssues);
-      hintMap[sid] = this.buildProofreadHint(metadata.diff.from, metadata.diff.to, metadata.reason, metadata.sensitiveEntity);
-      metadataMap[sid] = metadata;
-      currentTexts[sid] = revised;
-      changedTexts[sid] = revised;
-      appliedCount += 1;
-    }
-
-    this.editedSegmentTextMap.set(currentTexts);
-    this.applyEditedTextsToResultSegments(changedTexts);
-    this.proofreadHintBySegmentId.set(hintMap);
-    this.proofreadMetadataBySegmentId.set(metadataMap);
-    this.proofreadUpdatedCount.set(appliedCount);
-    this.llmTotalProcessedCount += processedCount;
-    this.llmSegmentStatus.set(statusMap);
   }
 
   async cancelDiarizationRun(): Promise<void> {
@@ -3663,18 +2554,13 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       if (!this.proofreadRunning() || this.proofreadCanceling()) {
         return;
       }
-    } else if (kind === 'llmProofread') {
-      if (!this.llmProofreadRunning() || this.llmProofreadCanceling()) {
-        return;
-      }
     } else if (!this.diarizationRunning() || this.diarizationCanceling()) {
       return;
     }
     const message = kind === 'transcription'
       ? '文字起こし処理を中止しますか？'
-      : kind === 'transcriptionPipeline' ? `文字起こし・話者分離・${this.vulkanBuild() || this.transcriptionEngine() === 'ggml' ? '句読点付与' : 'AI句読点付与'}の一括処理を中止しますか？`
+      : kind === 'transcriptionPipeline' ? '文字起こし・話者分離・句読点付与の一括処理を中止しますか？'
       : kind === 'proofread' ? '校正処理を中止しますか？'
-      : kind === 'llmProofread' ? 'LLM校正処理を中止しますか？\n中断後は未処理の行から再開できます。'
       : '話者分離処理を中止しますか？';
     this.openConfirmDialog({
       actionKind: 'cancelRun',
@@ -3689,7 +2575,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   closeConfirmDialog(): void {
-    this.pendingVramOomRetry = null;
     this.pendingConfirmDialog.set(null);
   }
 
@@ -3700,18 +2585,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (dialog.actionKind === 'installVoiceInputPackLowMemory') {
-      this.persistEditorLowMemoryVoiceInputOptIn();
-      await this.performInstallEditorVoiceInputPack();
-      return;
-    }
-
-    if (dialog.actionKind === 'enableVoiceInputLowMemory') {
-      this.persistEditorLowMemoryVoiceInputOptIn();
-      return;
-    }
-
-    if (dialog.actionKind === 'deletePythonRuntime') {
+    if (dialog.actionKind === 'deleteAllModels') {
       await this.performDevDeleteModels();
       return;
     }
@@ -3731,10 +2605,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
       if (dialog.cancelRunKind === 'diarization') {
         await this.cancelDiarizationRun();
-        return;
-      }
-      if (dialog.cancelRunKind === 'llmProofread') {
-        await this.cancelLlmProofread();
       }
       return;
     }
@@ -3775,41 +2645,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    if (dialog.actionKind === 'gemmaNotFoundBeforeTranscription') {
-      this._gemmaCheckBypassed = true;
-      await this.runTranscription();
-      return;
-    }
-
-    if (dialog.actionKind === 'resetOverallProofreadSystemPrompt') {
-      this.resetOverallProofreadSystemPromptForSelectedModel();
-    }
-
-    if (dialog.actionKind === 'overallProofreadBeforeMerge') {
-      await this.runOverallProofread(this.pendingOverallProofreadTier);
-    }
-
-    if (dialog.actionKind === 'downloadGemma12bForOverallProofread') {
-      const downloaded = await this.downloadGemma12b();
-      if (downloaded) {
-        this.openOrRunOverallProofread(false, '12b');
-      }
-      return;
-    }
-
-    if (dialog.actionKind === 'lowerLlmParallelOnOom') {
-      const retry = this.pendingVramOomRetry;
-      this.pendingVramOomRetry = null;
-      // 段階的に下げる（24→20、20→16、16→12、12→8、8→4、4→2、2→1）。再びOOMならもう一段下のダイアログが出る
-      this.selectedLlmParallel.set(this.pendingVramOomTargetNp);
-      this.persistLlmSettings();
-      // 現行サーバーを停止し、次回起動時に新しい並列処理数を確実に反映させる
-      await this.stopLlm();
-      if (retry) {
-        await retry();
-      }
-      return;
-    }
   }
 
   private promptPassword(): Promise<string | null> {
@@ -3819,205 +2654,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         resolve(result ?? null);
       });
     });
-  }
-
-  openOrRunOverallProofread(withConfirm: boolean, proofreadTier: 'e4b' | '12b' = 'e4b'): void {
-    if (this.vulkanBuild()) return;
-    this.openOrRunOverallProofreadForTier(withConfirm, proofreadTier);
-  }
-
-  private openOrRunOverallProofreadForTier(withConfirm: boolean, proofreadTier: 'e4b' | '12b'): void {
-    if (this.overallProofreadHasPendingItems()) {
-      this.overallProofreadDialogOpen.set(true);
-      return;
-    }
-    if (withConfirm) {
-      this.pendingOverallProofreadTier = proofreadTier;
-      this.openConfirmDialog({
-        actionKind: 'overallProofreadBeforeMerge',
-        title: 'AI全体校正',
-        message: '全体校正の前に、発言の統合まで完了していることが推奨されます。また、この作業は時間がかかります。実行しますか？',
-        confirmLabel: '実行',
-        cancelLabel: 'キャンセル',
-        confirmColor: 'primary',
-        cancelColor: null,
-      });
-    } else {
-      void this.runOverallProofread(proofreadTier);
-    }
-  }
-
-  async openOrRunOverallProofreadWith12b(withConfirm: boolean): Promise<void> {
-    if (this.vulkanBuild()) return;
-    if (this.overallProofreadHasPendingItems()) {
-      this.overallProofreadDialogOpen.set(true);
-      return;
-    }
-    if (!this.isTauriRuntime()) return;
-    let installed = false;
-    try {
-      installed = await invoke<boolean>('check_gemma_12b_installed');
-      this.gemma12bInstalled.set(installed);
-    } catch {
-      // 状態を確認できない場合にE4Bへ黙ってフォールバックしないよう、未導入として扱う。
-      installed = false;
-    }
-    if (!installed) {
-      this.openConfirmDialog({
-        actionKind: 'downloadGemma12bForOverallProofread',
-        title: '高精度モデルをダウンロードしますか？',
-        message: 'Gemma 4 12Bはまだダウンロードされていません。約7GBのダウンロードが必要で、回線速度によっては数分から十数分かかります。これからダウンロードしますか？',
-        confirmLabel: 'ダウンロードする',
-        cancelLabel: 'キャンセル',
-        confirmColor: 'primary',
-        cancelColor: null,
-      });
-      return;
-    }
-    this.openOrRunOverallProofreadForTier(withConfirm, '12b');
-  }
-
-  async runOverallProofread(proofreadTier: 'e4b' | '12b' = 'e4b'): Promise<void> {
-    if (this.vulkanBuild()) return;
-    if (this.overallProofreadRunning()) return;
-    if (this.running() || this.proofreadRunning() || this.diarizationRunning() || this.llmProofreadRunning()) {
-      this.overallProofreadError.set('他の処理が実行中のため、全体校正を開始できません。');
-      this.overallProofreadDialogOpen.set(true);
-      return;
-    }
-    if (!this.isTauriRuntime() || !this.result()) return;
-
-    // 分割ボタンからの全体校正は、設定中の外部ローカルAIアプリに左右されず
-    // 指定された内蔵 Gemma 4 階層をジョブ単位で使用する。
-    const backend: 'llama_server' = 'llama_server';
-    const modelPath = '';
-
-    // 校正対象が無ければエンジンを起動せず早期returnする（無駄起動・常駐の防止）。
-    const segments = this.segmentRows.map((seg) => ({
-      id: seg.id,
-      text: this.getEditableText(seg),
-      speaker: this.displaySpeaker(this.getAssignedSpeakerKey(seg)) || null,
-      start: seg.start,
-      end: seg.end,
-    }));
-
-    if (segments.length === 0) {
-      this.overallProofreadError.set('校正対象のセグメントがありません。');
-      this.overallProofreadDialogOpen.set(true);
-      return;
-    }
-
-    await this.checkLlmStatus();
-    if (this.llmServerStatus() !== 'running') {
-      this.overallProofreadStatus.set('AI校正エンジンを起動中...');
-      await this.startLlm(false, proofreadTier);
-      if (this.llmServerStatus() !== 'running') {
-        if (await this.maybePromptLowerParallelOnOom(this.llmLastError, () => this.runOverallProofread(proofreadTier))) {
-          this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-        } else {
-          this.overallProofreadError.set('AI校正エンジンの起動に失敗しました。');
-          this.showAmdGpuProcessingFailure(
-            '全体校正',
-            this.llmLastError || 'AI校正エンジンの起動に失敗しました。'
-          );
-          if (this.buildVariant() !== 'rocm') {
-            this.overallProofreadDialogOpen.set(true);
-          }
-        }
-        return;
-      }
-    }
-
-    await this.ensureProgressListener();
-    this.overallProofreadRunning.set(true);
-    this.overallProofreadError.set('');
-    this.overallProofreadResult.set(null);
-    this.overallProofreadDismissedIds.set(new Set());
-    this.overallProofreadProgressCurrent = 0;
-    this.overallProofreadProgressStarted = false;
-    this.overallProofreadStatus.set('しばらくお待ち下さい...');
-
-    // VRAM不足で並列処理数を下げる確認ダイアログを出した場合は、結果ダイアログを開かない
-    let oomHandled = false;
-    try {
-      const response = await invoke<{ success: boolean; result?: OverallProofreadResultData; errorMessage?: string }>(
-        'run_overall_proofread',
-        {
-          request: {
-            segments,
-            modelPath,
-            nGpuLayers: 0,
-            backend,
-            openaiBaseUrl: this.activeOpenAiBaseUrl(),
-            openaiModel: this.activeOpenAiModelInput(),
-            nCtx: this.llmNCtx() > 0 ? this.llmNCtx() : 16384,
-            promptType: 'gemma4',
-            systemPrompt: null,
-          }
-        }
-      );
-
-      if (!response.success || !response.result) {
-        const msg = response.errorMessage ?? '全体校正に失敗しました。';
-        if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
-          oomHandled = true;
-          this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-        } else {
-          this.overallProofreadError.set(msg);
-          if (backend === 'llama_server') {
-            this.showAmdGpuProcessingFailure('全体校正', msg);
-          }
-        }
-      } else {
-        this.overallProofreadResult.set(response.result);
-        this.overallProofreadStatus.set('全体校正が完了しました。');
-      }
-    } catch (error) {
-      const msg = this.normalizeErrorMessage(error);
-      if (await this.maybePromptLowerParallelOnOom(msg, () => this.runOverallProofread(proofreadTier))) {
-        oomHandled = true;
-        this.overallProofreadStatus.set('VRAM不足の可能性があります。並列処理数を下げて再実行できます。');
-      } else {
-        this.overallProofreadError.set(msg);
-        if (backend === 'llama_server') {
-          this.showAmdGpuProcessingFailure('全体校正', msg);
-        }
-      }
-    } finally {
-      const wasCanceled = this.overallProofreadCanceling();
-      this.overallProofreadRunning.set(false);
-      this.overallProofreadCanceling.set(false);
-      if (!wasCanceled && !oomHandled && !this.amdGpuFailureDialog()) {
-        this.overallProofreadDialogOpen.set(true);
-      }
-    }
-  }
-
-  cancelOverallProofread(): void {
-    if (!this.overallProofreadRunning() || this.overallProofreadCanceling()) return;
-    this.overallProofreadCanceling.set(true);
-    void invoke('cancel_llm_proofread').catch(() => {});
-  }
-
-  acceptOverallProofreadItem(item: OverallProofreadItem): void {
-    const currentTexts = { ...this.editedSegmentTextMap() };
-    currentTexts[item.id] = item.revisedText;
-    this.editedSegmentTextMap.set(currentTexts);
-    this.applyEditedTextsToResultSegments({ [item.id]: item.revisedText });
-    this.overallProofreadDismissedIds.update((s) => new Set([...s, item.id]));
-  }
-
-  dismissOverallProofreadItem(item: OverallProofreadItem): void {
-    this.overallProofreadDismissedIds.update((s) => new Set([...s, item.id]));
-  }
-
-  dismissAllOverallProofreadItems(): void {
-    const ids = this.overallProofreadVisibleItems().map((i) => i.id);
-    this.overallProofreadDismissedIds.update((s) => new Set([...s, ...ids]));
-  }
-
-  closeOverallProofreadDialog(): void {
-    this.overallProofreadDialogOpen.set(false);
   }
 
   async saveJson(): Promise<void> {
@@ -4231,7 +2867,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       })),
       speakerDisplayNameByValue: this.speakerAliasMap(),
       proofreadMetadataBySegmentId: this.proofreadMetadataBySegmentId(),
-      llmSegmentStatusBySegmentId: this.llmSegmentStatus(),
+      // 保存形式を保つため項目は残す（AI 校正は無くなったので常に空）。
+      llmSegmentStatusBySegmentId: {},
       proofreadCompleted: this.proofreadCompleted()
     });
   }
@@ -4272,17 +2909,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadEditingLocked.set(false);
     this.proofreadUpdatedCount.set(0);
     this.proofreadProgressText.set('');
-    this.llmProofreadRunning.set(false);
-    this.llmProofreadCanceling.set(false);
-    this.llmProofreadStatus.set('');
-    this.llmProofreadRunningSeconds.set(0);
-    this.llmProgressOffset = 0;
-    this.llmTotalProcessedCount = 0;
-    this.stopLlmProofreadTicker();
     this.stopProofreadTicker();
-    this.overallProofreadResult.set(null);
-    this.overallProofreadDismissedIds.set(new Set());
-    this.overallProofreadDialogOpen.set(false);
     this.segmentTextHistory.clearAll();
 
     const imported = buildImportedTranscriptionStateValue(payload);
@@ -4310,7 +2937,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadMetadataBySegmentId.set(imported.proofreadMetadataBySegmentId);
     this.proofreadHintBySegmentId.set(imported.proofreadHintBySegmentId);
     this.proofreadCompleted.set(imported.proofreadCompleted);
-    this.llmSegmentStatus.set(imported.llmSegmentStatus);
     this.hiddenSegmentIds.set({});
     this.pendingConfirmDialog.set(null);
     this.stopSegmentPlayback();
@@ -4337,15 +2963,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  requiresDiarizationSetup(): boolean {
-    return (
-      this.isTauriRuntime() &&
-      !this.isTranscriptionTabDisabled() &&
-      this.diarizationSetupVisible() &&
-      this.isDiarizationModelMissing()
-    );
-  }
-
   canShowTranscriptionTab(): boolean {
     return !this.editorOnlyBuild && this.transcriptionTabVisible();
   }
@@ -4353,22 +2970,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   getTranscriptionTabLabel(): string {
     return transcriptionTabLabelValue(
       this.isTranscriptionTabDisabled(),
-      this.isDiarizationModelMissing(),
-      this.runtimeCpuOnlyBuild()
+      this.isDiarizationModelMissing()
     );
   }
 
   isTranscriptionTabDisabled(): boolean {
     return this.transcriptionTabDisabled();
-  }
-
-  isCpuRuntimeSetupBannerVisible(): boolean {
-    return cpuRuntimeSetupBannerVisibleValue(
-      this.runtimeCpuOnlyBuild(),
-      this.transcriptionTabVisible(),
-      this.isTranscriptionTabDisabled(),
-      this.needsFullSetup()
-    );
   }
 
   isDiarizationModelMissing(): boolean {
@@ -4402,23 +3009,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private async initializeStartupState(): Promise<void> {
     this.runtimeCheckDone.set(false);
     void this.loadAppVersion();
-    await this.probeAndPersistDevEmulationState();
-    // Rustのidentifierを実行時のビルド種別の真実として先に取得する。
-    // CPU版frontendの取り違えがあっても、GPU/LLM専用経路へ進まないようにする。
+    // Rustのidentifierを実行時のビルド種別（フル機能版 / Editor 版）の真実として先に取得する。
     await this.checkGpuAvailability();
-    if (this.runtimeCpuOnlyBuild()) {
-      void this.loadLargeV3InstallStatus();
-    } else if (this.vulkanBuild()) {
-      // Vulkan 版は Python の GPU 検出（detect_env_cli）を使わず、Vulkan の GPU 一覧を使う。
-      void this.refreshVulkanGpus(false);
-      void this.refreshLegacyCudaData();
-    } else {
-      void this.loadComputeEnv();
-    }
+    // GPU は Vulkan の一覧で判定する（Editor 版は GPU を使わない）。
+    if (this.vulkanBuild()) void this.refreshVulkanGpus(false);
+    void this.refreshLegacyCudaData();
     await this.checkTranscriptionRuntimeSupport();
     void this.ensureSetupProgressListener();
     await this.checkAllSetupStatus();
-    await this.checkEditorInstalledMemory();
     await this.checkEditorVoiceInputPackStatus();
     // ここ以降は直前までの await で実行コンテキストが Angular ゾーン外に出ている。
     // 画面表示を左右する signal（タブ表示を gate する runtimeCheckDone と
@@ -4426,969 +3024,80 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     // 確実に走らせる。これをしないと spinner → タブ表示の切替が描画されず、
     // ウィンドウ再フォーカス等で CD が走るまで古い（未確定の）画面が残る。
     this.ngZone.run(() => this.activeTabIndex.set(0));
-    if (this.runtimeAiProofreadBuild()) {
-      await this.loadProofreadSystemPrompt();
-      await this.loadOverallProofreadSystemPrompt();
-    }
     this.ngZone.run(() => this.runtimeCheckDone.set(true));
     // ここまでで GPU/セットアップ判定の signal は確定している。eventCoalescing 構成では
     // 変更検知がフレーム単位にまとめられ、ウィンドウが前面化されるまで描画が遅延しうる
     // （GPU 未検出バナーが古いまま残り、最前面化で初めて消える）。確定値を即座に反映させる
     // ため、同期的な変更検知を一度だけ強制する。
     this.appRef.tick();
-    if (this.runtimeAiProofreadBuild()) {
-      void this.initDefaultLlmModelPath();
-      void this.initProofreadModelTier();
-      void this.refreshLlmUiState();
-    }
   }
 
   /**
-   * GPU 未検出バナー上の「GPU を再確認」ボタン用。
-   * CUDA/ROCm を後から入れた場合の再判定を兼ねるが、最大の効果は「クリック＝変更検知が走る」こと。
-   * eventCoalescing 構成で描画が遅延し、GPU導入済みでもバナーが古いまま残るケースを、
-   * アプリ再起動なしにその場で解消できる。
+   * 「GPU を再確認」ボタン用。ドライバーを入れた後などに、Vulkan の GPU 一覧を取り直す。
+   * 最大の効果は「クリック＝変更検知が走る」こと（eventCoalescing 構成で描画が遅延し、
+   * バナーが古いまま残るケースを、アプリ再起動なしにその場で解消できる）。
    */
-  async recheckGpuRuntime(notify = true): Promise<void> {
+  async recheckGpuRuntime(): Promise<void> {
     if (!this.isTauriRuntime() || this.gpuRechecking()) return;
     this.gpuRechecking.set(true);
     try {
       await this.checkGpuAvailability(true);
-      await this.checkTranscriptionRuntimeSupport(
-        this.cudaAvailable() === true || this.rocmAvailable() === true
-      );
+      if (this.vulkanBuild()) await this.refreshVulkanGpus(true);
+      await this.checkTranscriptionRuntimeSupport();
     } finally {
       this.gpuRechecking.set(false);
-      this.cancelDelayedGpuRecheckIfResolved();
-      const unresolvedLinuxGpu = shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState());
-      if (notify && unresolvedLinuxGpu) {
-        // 手動確認でまだ初期化中の場合だけ、次の自動確認があることを伝える。
-        // 自動確認自身からは通知せず、短い再試行を連続表示しない。
-        this.scheduleDelayedGpuRecheckAfterSetup();
-        this.snackBar.open(
-          `まだ${this.runtimeBuildVariant() === 'rocm' ? 'ROCm' : 'CUDA'}を確認できません。セットアップ直後は約1分後に自動再確認します。`,
-          undefined,
-          { duration: 5000 }
-        );
-      }
       // 確定値を即座に描画へ反映させる（フレーム単位の遅延を回避）
       this.appRef.tick();
     }
-  }
-
-  private delayedGpuRecheckState(): DelayedGpuRecheckState {
-    return {
-      platform: this.runtimePlatform(),
-      buildVariant: this.runtimeBuildVariant(),
-      cudaAvailable: this.cudaAvailable(),
-      rocmAvailable: this.rocmAvailable(),
-      transcriptionRuntimeAvailable: this.transcriptionRuntimeAvailable(),
-      noCudaEmulation: this.isNoCudaEmulation(),
-    };
-  }
-
-  private cancelDelayedGpuRecheckIfResolved(): void {
-    if (isGpuRuntimeResolved(this.delayedGpuRecheckState())) {
-      this.delayedGpuRecheckTimer.cancel();
-    }
-  }
-
-  /**
-   * セットアップ完了直後のCUDA/ROCm初期化遅延を吸収するための安全網。
-   * 起動時には予約せず、Linux GPU版で未解決の場合だけ一度だけ実行する。
-   */
-  private scheduleDelayedGpuRecheckAfterSetup(): void {
-    const state = this.delayedGpuRecheckState();
-    if (!shouldScheduleDelayedGpuRecheck(state)) {
-      this.delayedGpuRecheckTimer.cancel();
-      return;
-    }
-
-    this.delayedGpuRecheckTimer.schedule(() => {
-      if (!shouldScheduleDelayedGpuRecheck(this.delayedGpuRecheckState())) {
-        return;
-      }
-      void this.recheckGpuRuntime(false).catch(() => {
-        // 手動再確認と同じく、失敗時は現在の状態を保ち、UIを固めない。
-      });
-    }, DELAYED_GPU_RECHECK_DELAY_MS);
   }
 
   private async checkGpuAvailability(retry = false): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
       const result = await invoke<{
-        cudaAvailable: boolean;
-        rocmAvailable: boolean;
         buildVariant?: string;
         runtimePlatform?: string;
-        localLlmAppsEnabled?: boolean;
         vulkanAvailable?: boolean;
         vulkanGpuName?: string | null;
+        devForceCpu?: boolean;
       }>('check_gpu_availability', { retry });
       // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
       this.ngZone.run(() => {
-        this.cudaAvailable.set(result.cudaAvailable);
-        this.rocmAvailable.set(result.rocmAvailable);
         if (isBuildVariantValue(result.buildVariant)) {
           this.runtimeBuildVariant.set(result.buildVariant);
           this.buildVariant.set(result.buildVariant);
         }
         if (result.buildVariant === 'vulkan') {
-          // Vulkan 版は ggml エンジンだけを持つ（標準の Python 経路は同梱しない）。
-          this.transcriptionEngine.set('ggml');
-          this.diarizationEngine.set('ggml');
           if (this.whisperModel() !== 'turbo') {
             this.whisperModel.set('turbo');
           }
           this.vulkanAvailable.set(result.vulkanAvailable === true);
           this.vulkanGpuName.set(result.vulkanGpuName ?? '');
-        }
-        if (result.buildVariant === 'cpu') {
-          // A mismatched/default Angular bundle must still use the CPU ASR
-          // settings when the Rust package identifier says this is CPU.
-          this.transcriptionDevice.set('cpu');
-          this.diarizationDevice.set('cpu');
-          this.computeType.set('float32');
+          this.devForceCpu.set(result.devForceCpu === true);
         }
         if (result.runtimePlatform === 'windows' || result.runtimePlatform === 'linux' || result.runtimePlatform === 'macos') {
           this.runtimePlatform.set(result.runtimePlatform);
         } else if (result.runtimePlatform) {
           this.runtimePlatform.set('other');
         }
-        // 明示的に true のときだけ有効化（欠落・false はフェイルクローズで無効のまま）
-        this.localLlmAppsEnabled.set(result.localLlmAppsEnabled === true);
-        // フラグ確定後に保存済み backendMode を再適用（有効なら lmstudio/ollama を復元）
-        this.applyBackendModeFromSettings();
       });
-      this.cancelDelayedGpuRecheckIfResolved();
     } catch {
       // GPU確認失敗時は既存の設定値を維持する
-    }
-  }
-
-  async loadComputeEnv(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      const result = await invoke<ComputeEnvResult>('detect_compute_env');
-      // invoke の Promise は NgZone 外で resolve されうるため、signal 更新を zone 内で行い再描画を保証する
-      this.ngZone.run(() => {
-        this.computeEnvInfo.set(result);
-        this.availableGpuDevices.set(result.devices ?? []);
-        this.recommendedGpuDeviceIndex.set(result.recommendedIndex ?? -1);
-        if (result.largeV3Installed !== undefined) {
-          this.largeV3Installed.set(result.largeV3Installed);
-        }
-        // 保存値がない（-1 初期値のまま）かつ推奨が存在する場合、推奨を自動選択して永続化
-        if (this.selectedHipDeviceIndex() < 0 && (result.recommendedIndex ?? -1) >= 0) {
-          this.selectedHipDeviceIndex.set(result.recommendedIndex);
-          this.persistTranscriptionSettings();
-        }
-        if (this.selectedLlmHipDeviceIndex() < 0 && (result.recommendedIndex ?? -1) >= 0) {
-          this.selectedLlmHipDeviceIndex.set(result.recommendedIndex);
-          this.persistLlmSettings();
-        }
-      });
-    } catch {
-      // 取得失敗時は既存の状態を維持
-    }
-  }
-
-  private async loadLargeV3InstallStatus(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      const installed = await invoke<boolean>('check_whisper_model_installed', { modelName: 'large-v3' });
-      this.ngZone.run(() => this.largeV3Installed.set(installed));
-    } catch {
-      // 取得失敗時は未確認の状態を維持
     }
   }
 
   onWhisperModelChange(value: string): void {
     this.whisperModel.set(value);
     void this.refreshGgmlSpeechStatus();
-    if (value === 'large-v3' && this.largeV3Installed() === false && !this.largeV3Downloading()) {
-      void this.downloadLargeV3();
-    }
-  }
-
-  private async downloadLargeV3(): Promise<void> {
-    this.largeV3Downloading.set(true);
-    this.largeV3DownloadMessage.set('large-v3 をダウンロード中... （数分かかる場合があります）');
-    try {
-      await invoke<boolean>('download_whisper_model', { modelName: 'large-v3' });
-      this.largeV3Installed.set(true);
-      this.snackBar.open('large-v3 のダウンロードが完了しました', undefined, { duration: 3000 });
-    } catch (e) {
-      this.largeV3DownloadMessage.set(`ダウンロード失敗: ${e}`);
-      this.snackBar.open(`large-v3 ダウンロード失敗: ${e}`, undefined, { duration: 5000 });
-    } finally {
-      this.largeV3Downloading.set(false);
-    }
-  }
-
-  /** 起動時に、バックエンドの階層マーカーと 12B 導入状態をフロントへ同期する。 */
-  private async initProofreadModelTier(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime() || !this.runtimeAiProofreadBuild()) return;
-    try {
-      const tier = await invoke<string>('get_proofread_model_tier');
-      this.ngZone.run(() => {
-        this.proofreadModelTier.set(tier === '12b' ? '12b' : 'e4b');
-      });
-    } catch {
-      // 取得失敗時は localStorage 由来の現在値を維持
-    }
-    try {
-      const installed = await invoke<boolean>('check_gemma_12b_installed');
-      this.ngZone.run(() => this.gemma12bInstalled.set(installed));
-    } catch {
-      // 判定失敗時は null のまま（未確定）
-    }
-  }
-
-  async onProofreadModelTierChange(value: 'e4b' | '12b'): Promise<void> {
-    if (this.vulkanBuild()) return;
-    const tier: 'e4b' | '12b' = value === '12b' ? '12b' : 'e4b';
-    this.proofreadModelTier.set(tier);
-    this.persistLlmSettings();
-    // バックエンドのマーカー（サーバ起動時に参照される真実）へ反映する。
-    try {
-      await invoke('set_proofread_model_tier', { tier });
-    } catch (e) {
-      this.snackBar.open(`モデル設定の保存に失敗しました: ${e}`, undefined, { duration: 5000 });
-      return;
-    }
-    // 12B 選択時で未導入なら、large-v3 と同じく後からダウンロードする。
-    if (tier === '12b' && this.gemma12bInstalled() === false && !this.gemma12bDownloading()) {
-      await this.downloadGemma12b();
-    }
-    // 起動済みの校正エンジンは旧モデルを保持しているため停止し、次回校正時に新モデルで再起動させる。
-    if (this.llmServerStatus() === 'running' || this.llmServerStatus() === 'starting') {
-      await this.stopLlm();
-      this.llmServerStatus.set('stopped');
-      this.llmLoadedDevice.set('stopped');
-    }
-  }
-
-  private async downloadGemma12b(): Promise<boolean> {
-    if (this.vulkanBuild() || this.gemma12bDownloading()) return false;
-    await this.ensureSetupProgressListener();
-    this.gemma12bDownloading.set(true);
-    this.gemma12bDownloadMessage.set('Gemma 4 12B（QAT+MTP）をダウンロード中... （約7GB・数分〜十数分かかります）');
-    try {
-      await invoke<boolean>('download_gemma_12b');
-      this.gemma12bInstalled.set(true);
-      this.gemma12bDownloadMessage.set('');
-      this.snackBar.open('Gemma 4 12B のダウンロードが完了しました', undefined, { duration: 3000 });
-      return true;
-    } catch (e) {
-      this.gemma12bDownloadMessage.set(`ダウンロード失敗: ${e}`);
-      this.snackBar.open(`Gemma 4 12B ダウンロード失敗: ${e}`, undefined, { duration: 5000 });
-      return false;
-    } finally {
-      this.gemma12bDownloading.set(false);
-    }
-  }
-
-  computeEnvBackendLabel(): string {
-    return computeEnvBackendLabelValue(this.computeEnvInfo()?.backendType);
-  }
-
-  onHipDeviceChange(index: number): void {
-    this.selectedHipDeviceIndex.set(index);
-    this.persistTranscriptionSettings();
-  }
-
-  onLlmHipDeviceChange(index: number): void {
-    this.selectedLlmHipDeviceIndex.set(index);
-    this.persistLlmSettings();
-  }
-
-  onLlmParallelChange(value: number): void {
-    this.selectedLlmParallel.set(this.normalizeLlmParallel(value));
-    this.persistLlmSettings();
-  }
-
-  readonly selectedGpuAsrWarning = computed<string>(() => {
-    const info = this.computeEnvInfo();
-    let idx = this.selectedHipDeviceIndex();
-    if (idx < 0) {
-      idx = this.recommendedGpuDeviceIndex();
-    }
-    const device = info?.devices.find(d => d.index === idx);
-    return selectedGpuAsrWarningValue(info?.backendType, !!device, device?.gcnArchName);
-  });
-
-  gpuDeviceLabel(device: GpuDeviceInfo): string {
-    return gpuDeviceLabelValue(
-      device,
-      this.recommendedGpuDeviceIndex(),
-      this.computeEnvInfo()?.backendType
-    );
-  }
-
-  /**
-   * 内蔵 llama-server の導入状況とサーバー状態を確認してUI表示を更新する。
-   * pre-warm（起動直後のエンジン自動起動・モデル即ロード）は廃止し、遅延起動に統一した。
-   * エンジンは実際の校正実行時（runLlmProofread / runOverallProofread の startLlm）に初めて起動する。
-   * これにより校正していない間は VRAM を保持しない（「自身が起動したモデルは終了後解放」の方針を、
-   * そもそも校正前から保持しない形で徹底する）。
-   */
-  private async refreshLlmUiState(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    if (!this.llmEngineUiVisible()) return;
-    await this.checkLlmStatus();
-  }
-
-  private async initDefaultLlmModelPath(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    if (this.llmModelPath()) {
-      void this.loadLlmModels();
-      return;
-    }
-    try {
-      const path = await invoke<string | null>('get_default_llm_model_path');
-      if (path) {
-        this.llmModelPath.set(path);
-        this.persistLlmSettings();
-        this.applyProofreadSystemPromptForSelectedModel();
-        this.applyOverallProofreadSystemPromptForSelectedModel();
-      }
-    } catch {
-      // デフォルトパスが取得できない場合はファイル選択ダイアログにフォールバック
-    }
-    void this.loadLlmModels();
-  }
-
-  async loadLlmModels(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    try {
-      const models = await invoke<LlmModelEntry[]>('list_llm_models');
-      this.availableLlmModels.set(models);
-      const current = this.llmModelPath();
-      if (!current && models.length > 0) {
-        const defaultModel = models.find(m => m.name.toLowerCase().includes('gemma')) ?? models[0];
-        this.llmModelPath.set(defaultModel.path);
-        this.persistLlmSettings();
-      } else if (current && !models.some(m => m.path === current) && models.length > 0) {
-        const defaultModel = models.find(m => m.name.toLowerCase().includes('gemma')) ?? models[0];
-        this.llmModelPath.set(defaultModel.path);
-        this.persistLlmSettings();
-      }
-      this.applyProofreadSystemPromptForSelectedModel();
-      this.applyOverallProofreadSystemPromptForSelectedModel();
-    } catch {
-      // スキャン失敗は無視
-    }
-  }
-
-  async openLlmModelsFolder(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      await invoke('open_llm_models_folder');
-    } catch {
-      // ignore
-    }
-  }
-
-  onLlmModelChange(path: string): void {
-    this.llmModelPath.set(path);
-    this.persistLlmSettings();
-    this.applyProofreadSystemPromptForSelectedModel();
-    this.applyOverallProofreadSystemPromptForSelectedModel();
-  }
-
-  /**
-   * 保存済み backendMode を現在のポリシーに沿って適用する。
-   * ローカルAIアプリ連携が無効のとき、lmstudio / ollama は内蔵モデルにフォールバックする。
-   * localLlmAppsEnabled は起動時の check_gpu_availability で非同期に確定するため、
-   * 設定適用時（applyAppSettings）とフラグ確定後（checkGpuAvailability）の両方から呼ぶ。
-   */
-  private applyBackendModeFromSettings(): void {
-    const mode = resolvePersistedLlmBackendModeValue(
-      this.appSettings.llm?.backendMode,
-      this.localLlmAppsEnabled()
-    );
-    if (mode !== undefined) {
-      this.llmBackendMode.set(mode);
-    }
-  }
-
-  /**
-   * 「AI校正バックエンド」セレクタの変更ハンドラ。内蔵モデルの E4B / 12B 階層と
-   * ローカルAIアプリ（lmstudio / ollama）の切替を 1 つのセレクタで扱う。
-   * 内蔵モデルは backendMode='local_gguf' に統一し、階層は proofreadModelTier で表す。
-   */
-  async onLlmBackendSelectionChange(value: LlmBackendSelection): Promise<void> {
-    if (this.vulkanBuild()) return;
-    if (value === 'local_gguf_12b') {
-      this.onLlmBackendModeChange('local_gguf');
-      // 12B 選択。未導入なら onProofreadModelTierChange 内でダウンロードを開始する。
-      await this.onProofreadModelTierChange('12b');
-      return;
-    }
-    if (value === 'local_gguf') {
-      this.onLlmBackendModeChange('local_gguf');
-      // 内蔵モデルを E4B（標準）へ戻す。
-      if (this.proofreadModelTier() === '12b') {
-        await this.onProofreadModelTierChange('e4b');
-      }
-      return;
-    }
-    // ローカルAIアプリ（lmstudio / ollama）。階層は内蔵モデル専用なので変更しない。
-    this.onLlmBackendModeChange(value);
-  }
-
-  onLlmBackendModeChange(value: LlmBackendMode): void {
-    if (this.vulkanBuild()) return;
-    this.llmBackendMode.set(value);
-    // 内蔵 llama-server の状態確認は local_gguf 選択時だけ有効にする。
-    this.localOpenAiAvailableModels.set([]);
-    this.localOpenAiStatusMessage.set('');
-    this.localOpenAiServerName.set('local');
-    this.applyStoredLlmPromptTypeForSelectedModel();
-    this.applyProofreadSystemPromptForSelectedModel();
-    this.applyOverallProofreadSystemPromptForSelectedModel();
-    this.applyLlmInferenceParamsForSelectedModel();
-    this.persistLlmSettings();
-    if (value === 'local_gguf') {
-      this.llmPromptType.set('gemma4');
-      void this.refreshLlmUiState();
-    }
-  }
-
-  onLocalOpenAiModelInput(value: string): void {
-    if (this.llmBackendMode() === 'ollama') {
-      this.ollamaModelInput.set(value);
-    } else {
-      this.lmstudioModelInput.set(value);
-    }
-    this.persistLlmSettings();
-    this.applyStoredLlmPromptTypeForSelectedModel();
-    this.applyProofreadSystemPromptForSelectedModel();
-    this.applyOverallProofreadSystemPromptForSelectedModel();
-    this.applyLlmInferenceParamsForSelectedModel();
-  }
-
-  async loadLocalOpenAiModels(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    const baseUrl = this.activeOpenAiBaseUrl();
-    this.localOpenAiModelsLoading.set(true);
-    this.localOpenAiStatusMessage.set('モデル一覧を取得中...');
-    try {
-      const response = await invoke<LocalOpenAiModelsResponse>('list_local_openai_models', { request: { baseUrl } });
-      const models = response.models ?? [];
-      this.localOpenAiServerName.set(response.serverName?.trim() || 'local');
-      this.localOpenAiAvailableModels.set(models);
-      if (models.length === 0) {
-        this.localOpenAiStatusMessage.set(`推論エンジン: ${this.localOpenAiServerName()}。モデル一覧が空でした。モデル名を手入力してください。`);
-        return;
-      }
-      const current = this.activeOpenAiModelInput().trim();
-      if (!current || !models.includes(current)) {
-        this.onLocalOpenAiModelInput(models[0]);
-      }
-      this.localOpenAiStatusMessage.set(`推論エンジン: ${this.localOpenAiServerName()}。${models.length} 件のモデルを取得しました。`);
-    } catch (error) {
-      this.localOpenAiAvailableModels.set([]);
-      this.localOpenAiStatusMessage.set(this.normalizeErrorMessage(error));
-    } finally {
-      this.localOpenAiModelsLoading.set(false);
-    }
-  }
-
-  private async loadProofreadSystemPrompt(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    try {
-      const [fixedResponse, defaultResponse] = await Promise.all([
-        invoke<ReadTextFileResponse>('get_proofread_system_prompt'),
-        invoke<ReadTextFileResponse>('get_default_proofread_system_prompt'),
-      ]);
-      this.fixedProofreadSystemPrompt.set(fixedResponse.content);
-      this.defaultProofreadSystemPrompt.set(defaultResponse.content || this.fallbackDefaultProofreadSystemPrompt);
-    } catch {
-      this.fixedProofreadSystemPrompt.set('');
-      this.defaultProofreadSystemPrompt.set(this.fallbackDefaultProofreadSystemPrompt);
-    }
-    this.applyProofreadSystemPromptForSelectedModel();
-  }
-
-  private async loadOverallProofreadSystemPrompt(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    try {
-      const [fixedResponse, defaultResponse] = await Promise.all([
-        invoke<ReadTextFileResponse>('get_overall_proofread_system_prompt'),
-        invoke<ReadTextFileResponse>('get_default_overall_proofread_system_prompt'),
-      ]);
-      this.fixedOverallProofreadSystemPrompt.set(fixedResponse.content);
-      this.defaultOverallProofreadSystemPrompt.set(defaultResponse.content);
-    } catch {
-      this.fixedOverallProofreadSystemPrompt.set('');
-      this.defaultOverallProofreadSystemPrompt.set('');
-    }
-    this.applyOverallProofreadSystemPromptForSelectedModel();
-  }
-
-  private getDefaultForCurrentOverallPromptType(): string {
-    if (this.llmPromptType() === 'original') {
-      return this.defaultOverallProofreadSystemPrompt();
-    }
-    return this.fixedOverallProofreadSystemPrompt();
-  }
-
-  private applyOverallProofreadSystemPromptForSelectedModel(): void {
-    if (this.proofreadSystemPromptReadonly()) {
-      this.overallProofreadSystemPrompt.set(this.fixedOverallProofreadSystemPrompt());
-      return;
-    }
-    this.overallProofreadSystemPrompt.set(this.getStoredOverallProofreadSystemPrompt());
-  }
-
-  private getStoredOverallProofreadSystemPrompt(): string {
-    const fallback = this.getDefaultForCurrentOverallPromptType();
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target) return fallback;
-    const field = target.scope === 'backend'
-      ? 'overallSystemPromptsByBackend'
-      : 'overallSystemPromptsByModelFileName';
-    return getStoredLlmStringSettingValue(this.appSettings, field, target.key) ?? fallback;
-  }
-
-  private persistOverallProofreadSystemPromptForSelectedModel(value: string): void {
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target || (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key))) {
-      return;
-    }
-    const field = target.scope === 'backend'
-      ? 'overallSystemPromptsByBackend'
-      : 'overallSystemPromptsByModelFileName';
-    this.appSettings = updateStoredLlmStringSettingValue(
-      this.appSettings,
-      field,
-      target.key,
-      value
-    );
-    this.persistAppSettings();
-    this.overallPromptSaveVersion.update(v => v + 1);
-  }
-
-  onOverallProofreadSystemPromptInput(event: Event): void {
-    if (this.proofreadSystemPromptReadonly()) {
-      this.overallProofreadSystemPrompt.set(this.fixedOverallProofreadSystemPrompt());
-      return;
-    }
-    const value = event.target instanceof HTMLTextAreaElement ? event.target.value : '';
-    this.overallProofreadSystemPrompt.set(value);
-  }
-
-  saveOverallProofreadSystemPrompt(): void {
-    if (!this.canSaveOverallProofreadSystemPrompt()) return;
-    this.persistOverallProofreadSystemPromptForSelectedModel(this.overallProofreadSystemPrompt());
-    const type = this.llmPromptType() === 'gemma4' ? 'Gemma4フォーマット' : 'オリジナルフォーマット';
-    this.snackBar.open(`全体校正プロンプトを保存しました（${type}）`, undefined, { duration: 2500 });
-  }
-
-  confirmResetOverallProofreadSystemPrompt(): void {
-    if (this.proofreadSystemPromptReadonly()) return;
-    this.openConfirmDialog({
-      actionKind: 'resetOverallProofreadSystemPrompt',
-      title: '全体校正プロンプトを初期値に戻す',
-      message: '現在の全体校正プロンプトを破棄して初期値に戻します。よろしいですか？',
-      confirmLabel: '初期値に戻す',
-      cancelLabel: 'キャンセル',
-      confirmColor: 'warn',
-      cancelColor: null,
-    });
-  }
-
-  resetOverallProofreadSystemPromptForSelectedModel(): void {
-    if (this.proofreadSystemPromptReadonly()) return;
-    const fallback = this.getDefaultForCurrentOverallPromptType();
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target) {
-      if (this.llmBackendMode() !== 'local_gguf') {
-        this.overallProofreadSystemPrompt.set(fallback);
-      }
-      return;
-    }
-    if (target.scope === 'model' && isGemma4DefaultLlmModelFileNameValue(target.key)) {
-      return;
-    }
-    const field = target.scope === 'backend'
-      ? 'overallSystemPromptsByBackend'
-      : 'overallSystemPromptsByModelFileName';
-    this.appSettings = updateStoredLlmStringSettingValue(
-      this.appSettings,
-      field,
-      target.key,
-      null
-    );
-    this.persistAppSettings();
-    this.overallPromptSaveVersion.update(v => v + 1);
-    this.overallProofreadSystemPrompt.set(fallback);
-  }
-
-  private persistLlmSettings(): void {
-    this.appSettings = updateLlmSelectionSettingsValue(this.appSettings, {
-      modelPath: this.llmModelPath(),
-      backendMode: this.llmBackendMode(),
-      lmstudioModel: this.lmstudioModelInput(),
-      ollamaModel: this.ollamaModelInput(),
-      llmHipDeviceIndex: this.selectedLlmHipDeviceIndex(),
-      llmPromptType: this.llmPromptType(),
-      llmParallel: this.selectedLlmParallel(),
-      proofreadModelTier: this.proofreadModelTier()
-    });
-    this.persistAppSettings();
-  }
-
-  onLlmPromptTypeChange(value: LlmPromptType): void {
-    this.llmPromptType.set(value);
-    this.persistLlmSettings();
-    this.persistLlmPromptTypeForModel();
-    this.applyProofreadSystemPromptForSelectedModel();
-    this.applyOverallProofreadSystemPromptForSelectedModel();
-  }
-
-  async checkLlmStatus(): Promise<void> {
-    if (this.vulkanBuild()) {
-      this.llmServerStatus.set('not_installed');
-      this.llmLoadedDevice.set('stopped');
-      return;
-    }
-    if (!this.isTauriRuntime()) return;
-    try {
-      const status = await invoke<string>('get_llm_server_status');
-      this.llmServerStatus.set(status as 'running' | 'stopped' | 'starting' | 'not_installed');
-      if (status === 'running') {
-        void this.refreshLlmLoadedDevice();
-      } else if (status === 'stopped' || status === 'not_installed') {
-        this.llmLoadedDevice.set('stopped');
-      }
-    } catch {
-      this.llmServerStatus.set('error');
-      this.llmLoadedDevice.set('error');
-    }
-  }
-
-  /** start_llm_server の直近のエラーメッセージ。VRAM不足判定（OOMマーカー含む）に使う。 */
-  private llmLastError = '';
-  /** VRAM不足ダイアログで「下げて再実行」が承認されたときに呼ぶ再試行コールバック。 */
-  private pendingVramOomRetry: (() => Promise<void>) | null = null;
-  /** VRAM不足ダイアログ承認時に設定する並列処理数（段階的: 24→20→16→12→8→4→2→1）。 */
-  private pendingVramOomTargetNp = 1;
-
-  /**
-   * エラーが VRAM 不足を示し、かつ並列処理数をまだ下げられる場合に、
-   * 「並列処理数を下げて再実行」の確認ダイアログを出す。出したら true を返す
-   * （呼び出し側は赤字エラー表示を抑制してよい）。
-   * 下げ方は段階的（24→20、20→16、16→12、12→8、8→4、4→2、2→1）。自動(0)設定時は直近に試行された実効値を Rust から取得する。
-   * CUDA(local_gguf) 経路のみ並列処理数が効くため、それ以外は false。
-   */
-  private async maybePromptLowerParallelOnOom(errorMsg: string, retry: () => Promise<void>): Promise<boolean> {
-    if (!this.isTauriRuntime()) return false;
-    if (this.llmBackendMode() !== 'local_gguf') return false;
-    if (!isVramOomErrorValue(errorMsg)) return false;
-    const manual = this.selectedLlmParallel();
-    let cur = manual;
-    if (cur <= 0) {
-      // 自動(0): 直近の CUDA 起動で試行した -np を取得（OOM失敗時も試行値が残る）
-      try {
-        cur = await invoke<number>('get_llm_attempted_parallel');
-      } catch {
-        cur = 0;
-      }
-    }
-    if (cur <= 1) return false; // これ以上下げられない（無限ループ防止も兼ねる）
-    const target = cur > 20 ? 20 : cur > 16 ? 16 : cur > 12 ? 12 : cur > 8 ? 8 : cur > 4 ? 4 : cur > 2 ? 2 : 1;
-    this.pendingVramOomRetry = retry;
-    this.pendingVramOomTargetNp = target;
-    const curLabel = manual > 0 ? `${manual}` : `自動(${cur})`;
-    this.openConfirmDialog({
-      actionKind: 'lowerLlmParallelOnOom',
-      title: 'VRAMが不足した可能性があります',
-      message: `AI校正でGPUメモリ(VRAM)が不足した可能性があります。\n並列処理数（現在: ${curLabel}）を${target}に下げて、もう一度実行しますか？`,
-      confirmLabel: `${target}に下げて再実行`,
-      cancelLabel: 'キャンセル',
-      confirmColor: 'primary',
-      cancelColor: null,
-    });
-    return true;
-  }
-
-  async startLlm(silent = false, proofreadTier?: 'e4b' | '12b'): Promise<void> {
-    if (this.vulkanBuild()) {
-      this.llmServerStatus.set('not_installed');
-      this.llmLoadedDevice.set('stopped');
-      return;
-    }
-    if (!this.isTauriRuntime()) return;
-    this.llmLastError = '';
-    this.llmServerStatus.set('starting');
-    try {
-      const llmDevIdx = this.selectedLlmHipDeviceIndex();
-      const llmPar = this.selectedLlmParallel();
-      const llmCtxVal = this.llmNCtx();
-      await invoke('start_llm_server', {
-        hipDeviceIndex: llmDevIdx >= 0 ? llmDevIdx : null,
-        llmParallel: llmPar > 0 ? llmPar : null,
-        llmCtx: llmCtxVal > 0 ? llmCtxVal : null,
-        proofreadTier: proofreadTier ?? null
-      });
-      this.llmServerStatus.set('running');
-      void this.refreshLlmLoadedDevice();
-    } catch (e) {
-      this.llmLastError = this.normalizeErrorMessage(e);
-      // silent=true の自動起動は、GPUランタイムやモデルが未整備のフレッシュインストール直後に
-      // 高確率で「想定内」の失敗をする。その失敗を文字起こしタブの赤字エラーに昇格させず、
-      // 停止状態に戻すだけにする（手動起動・校正実行など明示操作の経路は従来どおり赤字表示）。
-      if (silent) {
-        this.llmServerStatus.set('stopped');
-        this.llmLoadedDevice.set('stopped');
-        console.warn('AI校正エンジンの自動起動を見送りました:', this.normalizeErrorMessage(e));
-      } else {
-        this.llmServerStatus.set('error');
-        this.llmLoadedDevice.set('error');
-        this.error.set(this.normalizeErrorMessage(e));
-      }
-    }
-  }
-
-  async stopLlm(): Promise<void> {
-    if (!this.isTauriRuntime()) return;
-    try {
-      await invoke('stop_llm_server');
-      this.llmServerStatus.set('stopped');
-      this.llmLoadedDevice.set('stopped');
-    } catch { }
-  }
-
-  private async refreshLlmLoadedDevice(): Promise<void> {
-    if (this.vulkanBuild() || !this.isTauriRuntime()) return;
-    if (this.llmServerStatus() !== 'running') {
-      this.llmLoadedDevice.set('stopped');
-      return;
-    }
-    try {
-      const device = await invoke<string>('get_llm_loaded_device');
-      const normalized = (device ?? '').trim().toLowerCase();
-      if (normalized === 'gpu' || normalized === 'cpu' || normalized === 'stopped') {
-        this.llmLoadedDevice.set(normalized);
-      } else {
-        this.llmLoadedDevice.set('unknown');
-      }
-    } catch {
-      this.llmLoadedDevice.set('error');
-    }
-  }
-
-  private getDefaultForCurrentPromptType(): string {
-    if (this.llmPromptType() === 'original') {
-      return this.defaultProofreadSystemPrompt() || this.fallbackOriginalTypeSystemPrompt;
-    }
-    return this.fixedProofreadSystemPrompt() || this.fallbackDefaultProofreadSystemPrompt;
-  }
-
-  private applyProofreadSystemPromptForSelectedModel(): void {
-    if (this.proofreadSystemPromptReadonly()) {
-      this.proofreadSystemPrompt.set(this.fixedProofreadSystemPrompt());
-      return;
-    }
-    this.proofreadSystemPrompt.set(this.getStoredProofreadSystemPrompt());
-  }
-
-  private applyStoredLlmPromptTypeForSelectedModel(): void {
-    if (this.llmBackendMode() === 'local_gguf') return;
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target) return;
-    const stored = getStoredLlmPromptTypeValue(this.appSettings, target.key);
-    if (stored !== undefined) {
-      this.llmPromptType.set(stored);
-    }
-  }
-
-  private persistLlmPromptTypeForModel(): void {
-    if (this.llmBackendMode() === 'local_gguf') return;
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target) return;
-    this.appSettings = updateStoredLlmPromptTypeValue(
-      this.appSettings,
-      target.key,
-      this.llmPromptType()
-    );
-    this.persistAppSettings();
-  }
-
-  private getStoredProofreadSystemPrompt(): string {
-    const fallback = this.getDefaultForCurrentPromptType();
-    const target = buildLlmScopedSettingsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput(),
-      this.llmModelPath()
-    );
-    if (!target) return fallback;
-    const field = target.scope === 'backend'
-      ? 'systemPromptsByBackend'
-      : 'systemPromptsByModelFileName';
-    return getStoredLlmStringSettingValue(this.appSettings, field, target.key) ?? fallback;
-  }
-
-  private getSelectedProofreadSystemPromptForRun(): string | null {
-    if (this.llmPromptType() === 'original') {
-      // オリジナルフォーマット: textareaの内容を常にシステムプロンプトとして送信する
-      const value = this.proofreadSystemPrompt().trim();
-      return value ? value : null;
-    }
-    if (this.proofreadSystemPromptReadonly()) {
-      return null;
-    }
-    const value = this.proofreadSystemPrompt().trim();
-    return value ? value : null;
-  }
-
-  private buildLlmInferenceParamsKey(): string {
-    return buildLlmInferenceParamsKeyValue(
-      this.llmBackendMode(),
-      this.activeOpenAiModelInput()
-    );
-  }
-
-  private normalizeLlmNCtx(value: number): number {
-    return normalizeLlmNCtxValue(value);
-  }
-
-  private normalizeLlmMaxBatch(value: number): number {
-    return normalizeLlmMaxBatchValue(value);
-  }
-
-  private normalizeLlmParallel(value: number): number {
-    return normalizeLlmParallelValue(value);
-  }
-
-  private getStoredLlmInferenceParams(): { nCtx: number; maxBatch: number } {
-    return getStoredLlmInferenceParamsValue(
-      this.appSettings,
-      this.buildLlmInferenceParamsKey()
-    );
-  }
-
-  private applyLlmInferenceParamsForSelectedModel(): void {
-    const { nCtx, maxBatch } = this.getStoredLlmInferenceParams();
-    this.llmNCtx.set(nCtx);
-    this.llmMaxBatch.set(maxBatch);
-  }
-
-  private persistLlmInferenceParams(): void {
-    const key = this.buildLlmInferenceParamsKey();
-    this.appSettings = updateStoredLlmInferenceParamsValue(this.appSettings, key, {
-      nCtx: this.llmNCtx(),
-      maxBatch: this.llmMaxBatch()
-    });
-    this.persistAppSettings();
-  }
-
-  onLlmNCtxChange(raw: number | string): void {
-    const n = typeof raw === 'number' ? raw : parseFloat(raw as string);
-    this.llmNCtx.set(this.normalizeLlmNCtx(Number.isFinite(n) ? n : 0));
-    this.persistLlmInferenceParams();
-  }
-
-  onLlmMaxBatchChange(raw: string): void {
-    const n = parseFloat(raw);
-    this.llmMaxBatch.set(this.normalizeLlmMaxBatch(Number.isFinite(n) ? n : 40));
-    this.persistLlmInferenceParams();
-  }
-
-  resetLlmInferenceParams(): void {
-    this.llmNCtx.set(0); // コンテキスト長を「自動（VRAMで判定）」に戻す
-    this.llmMaxBatch.set(40);
-    this.selectedLlmParallel.set(0); // 並列処理数を「自動（VRAMで判定）」に戻す
-    const key = this.buildLlmInferenceParamsKey();
-    this.appSettings = updateStoredLlmInferenceParamsValue(this.appSettings, key, null, true);
-    this.persistAppSettings();
-  }
-
-  private async probeAndPersistDevEmulationState(): Promise<void> {
-    if (!this.isTauriRuntime()) {
-      return;
-    }
-    try {
-      const status = await invoke<DevEmulationStatusResponse>('get_dev_emulation_status');
-      this.appSettings = {
-        ...this.appSettings,
-        devEmulation: {
-          mode: normalizeDevEmulationModeValue(status.mode),
-          noCuda: status.noCuda === true,
-          missingCommunity1: status.missingCommunity1 === true,
-          capturedAt: Date.now()
-        }
-      };
-      this.persistAppSettings();
-      this.updateDevEmulationLabelFromSettings();
-    } catch {
-      // ignore
-    }
-  }
-
-  private updateDevEmulationLabelFromSettings(): void {
-    const emu = this.appSettings.devEmulation;
-    if (!emu) {
-      this.devEmulationLabel.set('');
-      return;
-    }
-    const mode = normalizeDevEmulationModeValue(emu.mode);
-    if (mode === 'no_cuda') {
-      this.devEmulationLabel.set('開発用エミュレーション: CUDAなしをエミュレート中');
-      return;
-    }
-    if (mode === 'missing_community1') {
-      this.devEmulationLabel.set('開発用エミュレーション: community-1未配置をエミュレート中');
-      return;
-    }
-    const flags: string[] = [];
-    if (emu.noCuda === true) {
-      flags.push('CUDAなしをエミュレート中');
-    }
-    if (emu.missingCommunity1 === true) {
-      flags.push('community-1未配置をエミュレート中');
-    }
-    if (flags.length === 0) {
-      this.devEmulationLabel.set('');
-      return;
-    }
-    this.devEmulationLabel.set(`開発用エミュレーション: ${flags.join(' / ')}`);
   }
 
   devDeleteModels(): void {
-    if (this.devDeleteTarget() === 'python_runtime' || this.devDeleteTarget() === 'all') {
-      const deletesAll = this.devDeleteTarget() === 'all';
+    if (this.devDeleteTarget() === 'all') {
       this.openConfirmDialog({
-        actionKind: 'deletePythonRuntime',
-        title: deletesAll ? 'すべて削除の確認' : 'Pythonランタイム削除の確認',
-        message: deletesAll
-          ? 'すべてのAIモデルと、現在の開発環境のPython依存パッケージを削除します。再び利用するには数GBの再ダウンロードが必要です。続行しますか？'
-          : '現在の開発環境からPython依存パッケージを削除します。再び文字起こし・話者分離を使うには、セットアップタブから数GBの再ダウンロードが必要です。続行しますか？',
-        confirmLabel: deletesAll ? 'すべて削除' : 'ランタイムを削除',
+        actionKind: 'deleteAllModels',
+        title: 'すべて削除の確認',
+        message: 'ダウンロード済みの音声認識モデルと話者分離モデルをすべて削除します。再び利用するには、セットアップから約1.7GBの再ダウンロードが必要です。続行しますか？',
+        confirmLabel: 'すべて削除',
         cancelLabel: 'キャンセル',
         confirmColor: 'warn',
         cancelColor: null
@@ -5415,7 +3124,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async checkEditorVoiceInputPackStatus(): Promise<void> {
     if (!this.isTauriRuntime()) {
-      this.editorVoiceInputPackStatus.set(browserVoiceInputPackStatus(this.runtimeCpuVoiceInputBuild()));
+      this.editorVoiceInputPackStatus.set(browserVoiceInputPackStatus());
       this.editorVoiceInputPackChecked.set(true);
       return;
     }
@@ -5433,26 +3142,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  async checkEditorInstalledMemory(): Promise<void> {
-    if (!this.runtimeCpuVoiceInputBuild() || !this.isTauriRuntime()) {
-      this.editorInstalledMemoryBytes.set(null);
-      this.editorInstalledMemoryChecked.set(true);
-      return;
-    }
-    try {
-      const bytes = await invoke<number | null>('get_installed_memory_bytes');
-      this.ngZone.run(() => {
-        this.editorInstalledMemoryBytes.set(typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : null);
-        this.editorInstalledMemoryChecked.set(true);
-      });
-    } catch {
-      this.ngZone.run(() => {
-        this.editorInstalledMemoryBytes.set(null);
-        this.editorInstalledMemoryChecked.set(true);
-      });
-    }
-  }
-
   private async ensureEditorVoiceInputPackProgressListener(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     await this.voiceInputPackProgressSubscription.ensure(() =>
@@ -5465,36 +3154,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async installEditorVoiceInputPack(): Promise<void> {
     if (this.editorVoiceInputPackInstalling()) return;
-    if (this.runtimeCpuVoiceInputBuild()
-      && this.editorVoiceInputMemoryTier() === 'low'
-      && !this.editorLowMemoryVoiceInputOptIn()) {
-      this.openConfirmDialog({
-        actionKind: 'installVoiceInputPackLowMemory',
-        title: 'メモリ容量の確認',
-        message: 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。それでもダウンロードしますか？',
-        confirmLabel: '理解してダウンロード',
-        cancelLabel: 'キャンセル',
-        confirmColor: 'warn',
-        cancelColor: null,
-      });
-      return;
-    }
     await this.performInstallEditorVoiceInputPack();
-  }
-
-  enableEditorVoiceInputForLowMemory(): void {
-    if (!this.runtimeCpuVoiceInputBuild() || this.editorVoiceInputMemoryTier() !== 'low' || this.editorLowMemoryVoiceInputOptIn()) {
-      return;
-    }
-    this.openConfirmDialog({
-      actionKind: 'enableVoiceInputLowMemory',
-      title: 'メモリ容量の確認',
-      message: 'このPCはメモリが少ないため、音声入力の利用は推奨しません。使用時に処理が遅くなったり、メモリ不足で失敗したりする可能性があります。それでも音声入力を有効にしますか？',
-      confirmLabel: '理解して有効にする',
-      cancelLabel: 'キャンセル',
-      confirmColor: 'warn',
-      cancelColor: null,
-    });
   }
 
   private async performInstallEditorVoiceInputPack(): Promise<void> {
@@ -5522,28 +3182,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
   }
 
-  private loadEditorLowMemoryVoiceInputOptIn(): void {
-    if (!this.runtimeCpuVoiceInputBuild()) return;
-    this.editorLowMemoryVoiceInputOptIn.set(
-      this.browserStorage.readFlagWithLegacy(
-        this.editorLowMemoryVoiceInputOptInStorageKey,
-        LEGACY_EDITOR_LOW_MEMORY_VOICE_INPUT_OPT_IN_STORAGE_KEY
-      )
-    );
-  }
-
-  private persistEditorLowMemoryVoiceInputOptIn(): void {
-    this.editorLowMemoryVoiceInputOptIn.set(true);
-    // 保存できない場合も、現在の起動中は明示的な同意を有効として扱う。
-    this.browserStorage.writeFlag(this.editorLowMemoryVoiceInputOptInStorageKey);
-  }
-
   async devDeleteEditorVoiceInputPack(): Promise<void> {
     if (!this.editorVoiceInputDevControlsVisible() || this.editorVoiceInputPackDeleting()) return;
     const ok = window.confirm(
-      this.runtimeCpuVoiceInputBuild()
-        ? 'llama.cpp CPU バックエンドと mmproj、ダウンロード済み ffmpeg を削除します。Gemma 4 E4B 本体GGUFは削除しません。'
-        : 'mmprojを削除します。Gemma 4 E4B 本体GGUFは削除しません。'
+      'ダウンロード済みのWhisper large-v3-turboモデルと無音検出モデルを削除します。Whisper実行ファイルは削除しません。'
     );
     if (!ok) return;
     this.editorVoiceInputPackDeleting.set(true);
@@ -5608,12 +3250,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   async onRecheckAllSetupStatus(): Promise<void> {
     // 統合セットアップ表示中は上部のGPU再確認ボタンが隠れるため、
-    // この再チェックでもセットアップ完了直後のCUDA/ROCm状態を更新する。
+    // この再チェックでもセットアップ完了直後のGPU状態を更新する。
     await this.checkGpuAvailability(true);
     await this.checkAllSetupStatus();
-    await this.checkTranscriptionRuntimeSupport(
-      this.cudaAvailable() === true || this.rocmAvailable() === true
-    );
+    await this.checkTranscriptionRuntimeSupport();
     this.ngZone.run(() => this.activeTabIndex.set(0));
     // Tauri の invoke 完了は Angular のイベントループ外で解決することがある。
     // 状態値は更新済みでも、eventCoalescing 中にGPU警告やセットアップ行だけが
@@ -5621,152 +3261,29 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.appRef.tick();
   }
 
-  /**
-   * Hugging Face アクセストークンの形式を送信前にチェックする。
-   * 明らかな打ち間違い・貼り付けミス（途中切れ・空白混入・接頭辞違い）を
-   * ダウンロード実行前に弾き、ユーザーが原因を切り分けやすくする。
-   * 問題なければ null、問題があればユーザー向けの説明文字列を返す。
-   */
-  validateHfTokenFormat(rawToken: string): string | null {
-    return validateHfTokenFormatValue(rawToken);
-  }
-
   async runFullSetup(): Promise<void> {
     if (this.setupRunning()) return;
 
-    // 話者分離トークンの形式チェック（送信前に明らかな打ち間違いを弾く）
-    let tokenForValidation = this.diarizationInstallToken().trim();
-    if (tokenForValidation) {
-      const tokenError = this.validateHfTokenFormat(tokenForValidation);
-      if (tokenError) {
-        this.setupProgressMap.set({
-          diarization: setupErrorProgress('diarization', tokenError),
-        });
-        return;
-      }
-    }
-
     this.setupRunning.set(true);
     this.setupProgressMap.set({});
-    let setupTaskSucceeded = false;
     try {
-      const setupTask = invoke<boolean>('run_full_setup', {
-        hfToken: tokenForValidation || null,
-      });
-      // invokeへ渡した直後に入力欄から除去し、長時間のモデル取得中に保持しない。
-      this.diarizationInstallToken.set('');
-      this.diarizationInstallTokenVisible.set(false);
-      tokenForValidation = '';
-      const setupOk = await setupTask;
-      setupTaskSucceeded = setupOk;
-      // Python/package/model setup must finish before attempting the optional
-      // proofreading backend.  Rust returns false for a classified download
-      // failure; continuing here used to hide the root cause behind a second
-      // backend error and made a failed first setup look partially complete.
-      if (!setupOk) {
-        return;
-      }
-
-      // 自動句読点付与で常に内蔵E4Bを使うため、選択中の全体校正バックエンドに
-      // 関係なくGPUバックエンドを準備する。
-      if (!this.vulkanBuild() && this.runtimeAiProofreadBuild() && !this.allSetupStatus()?.llmBackend) {
-        // セットアップ完了直後も、古い起動時判定のままバックエンドを選ばない
-        // ように再確認してから計画を作る。
-        await this.checkGpuAvailability(true);
-        // GPU 種別に応じてバックエンドを選択。NVIDIA/CUDA はアプリ同梱、AMD は ROCm を
-        // 主経路、Vulkan を ROCm 不可時（Windows AMD・system ROCm 無し Linux AMD 等）の
-        // フォールバックとして取得する。
-        // 先頭が主バックエンド（必須）、以降はフォールバック（任意・失敗しても続行）。
-        const backendPlan = llmBackendInstallPlan(
-          this.cudaAvailable(),
-          this.rocmAvailable(),
-          this.buildVariant()
-        );
-
-        // NVIDIA/CUDA版は同梱バイナリが欠落している場合に修復用ダウンロードを行わず、
-        // 再インストールが必要なエラーとして表示する。
-        if (backendPlan.status === 'bundled') {
-          this.setSetupProgress(setupErrorProgress('llm_backend', backendPlan.reason));
-          return;
-        }
-
-        // Full CUDA/ROCm版でGPUを検出できない場合、CPUバックエンドを
-        // 暗黙に選択してダウンロードすることは禁止する。GPUランタイムを
-        // 修復してから再実行できるよう、セットアップ欄に理由を残す。
-        if (backendPlan.status !== 'ready') {
-          this.setSetupProgress(setupErrorProgress('llm_backend', backendPlan.reason));
-          return;
-        }
-
-        this.setSetupProgress({
-          component: 'llm_backend', status: 'downloading', message: 'AI校正エンジンを準備中...'
-        });
-
-        // バックエンド未導入の段階では起動を試さない。CUDA同梱バイナリ、または
-        // AMD向けROCm/Vulkanの取得完了後、校正エンジンは実際の校正実行時に遅延起動する。
-        const unlisten = await listen<{ message: string }>(
-          'llm-backend-install-progress',
-          (ev) => this.setSetupProgress({
-            component: 'llm_backend', status: 'downloading', message: ev.payload.message
-          }),
-        );
-        try {
-          // 主バックエンド（必須）。
-          this.setSetupProgress({
-            component: 'llm_backend',
-            status: 'downloading',
-            message: `${llmBackendLabel(backendPlan.primary)} バックエンドをダウンロード中...`
-          });
-          await invoke('install_llm_backend', { backend: backendPlan.primary });
-          // フォールバック（任意。失敗しても主経路で動くので続行する）。
-          for (const fallback of backendPlan.fallbacks) {
-            try {
-              this.setSetupProgress({
-                component: 'llm_backend',
-                status: 'downloading',
-                message: `${llmBackendLabel(fallback)} バックエンド（フォールバック）をダウンロード中...`
-              });
-              await invoke('install_llm_backend', { backend: fallback });
-            } catch (e) {
-              console.warn(`フォールバックバックエンド ${fallback} の取得に失敗しました（主経路は利用可能）:`, this.normalizeErrorMessage(e));
-            }
-          }
-          this.setSetupProgress({ component: 'llm_backend', status: 'done', message: 'インストール完了' });
-        } catch (e) {
-          this.setSetupProgress(setupErrorProgress('llm_backend', this.normalizeErrorMessage(e)));
-        } finally {
-          unlisten();
-        }
-      }
+      await invoke<boolean>('run_full_setup', { hfToken: null });
     } catch (error) {
       this.setSetupProgress(setupErrorProgress('_error', this.normalizeErrorMessage(error)));
     } finally {
-      // アクセストークンはダウンロード処理にだけ使い、成功・失敗にかかわらず
-      // Angular の状態と入力欄に保持し続けない。
       this.ngZone.run(() => {
-        this.diarizationInstallToken.set('');
         this.setupRunning.set(false);
       });
-      // モデル／バックエンドの導入後にCUDA/ROCm状態も再確認する。
-      // セットアップ直後の一時的なCUDA/ROCm初期化失敗はRust側で限定的に再試行し、
-      // 警告とバックエンド選択を再起動なしで更新する。
+      // モデルの導入後にGPU状態も再確認し、再起動なしで警告を更新する。
       await this.checkGpuAvailability(true);
       await this.checkAllSetupStatus();
-      await this.checkTranscriptionRuntimeSupport(
-        this.cudaAvailable() === true || this.rocmAvailable() === true
-      );
-      if (setupTaskSucceeded) {
-        this.scheduleDelayedGpuRecheckAfterSetup();
-      }
+      await this.checkTranscriptionRuntimeSupport();
       this.ngZone.run(() => {
         this.activeTabIndex.set(0);
       });
       // モデル取得後の最終GPU/セットアップ判定は invoke の外側で signal を更新する
       // ため、再起動やウィンドウ再フォーカスを待たずに画面へ反映する。
       this.appRef.tick();
-      if (this.allSetupStatus()?.gemmaGguf) {
-        await this.initDefaultLlmModelPath();
-      }
     }
   }
 
@@ -5796,11 +3313,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.transcriptionTabVisible.set(false);
       this.transcriptionRuntimeAvailable.set(false);
       this.activeTabIndex.set(0);
-      this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
-        false,
-        null,
-        this.runtimeCpuOnlyBuild()
-      ));
+      this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(false, null));
       return;
     }
 
@@ -5812,11 +3325,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.activeTabIndex.set(0);
         this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
           status.available === true,
-          status.reason,
-          this.runtimeCpuOnlyBuild()
+          status.reason
         ));
       });
-      this.cancelDelayedGpuRecheckIfResolved();
     } catch (error) {
       this.ngZone.run(() => {
         this.transcriptionTabVisible.set(true);
@@ -5824,8 +3335,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.activeTabIndex.set(0);
         this.transcriptionRuntimeReason.set(transcriptionRuntimeReasonValue(
           false,
-          'GPU 確認に失敗したため、文字起こし機能は利用できません。',
-          this.runtimeCpuOnlyBuild()
+          'GPU 確認に失敗したため、文字起こし機能は利用できません。'
         ));
       });
     }
@@ -5834,7 +3344,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onTabIndexChange(index: number): void {
     this.activeTabIndex.set(index);
     if (index === this.getSettingsTabIndex()) {
-      void this.loadLlmModels();
       void this.checkEditorVoiceInputPackStatus();
     }
     requestAnimationFrame(this._refreshSegmentTableInView);
@@ -5842,46 +3351,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private getImportCompletedMessage(): string {
     return getImportCompletedMessageValue(this.canShowTranscriptionTab());
-  }
-
-  async openExternalUrl(url: string): Promise<void> {
-    try {
-      if (this.isTauriRuntime()) {
-        await invoke('open_external_url', { url });
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      }
-    } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
-    }
-  }
-
-  async openDiarizationConsentPage(): Promise<void> {
-    try {
-      if (this.isTauriRuntime()) {
-        await invoke('open_external_url', {
-          url: 'https://huggingface.co/pyannote/speaker-diarization-community-1'
-        });
-      } else {
-        window.open('https://huggingface.co/pyannote/speaker-diarization-community-1', '_blank', 'noopener,noreferrer');
-      }
-    } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
-    }
-  }
-
-  async openHuggingFaceTokenPage(): Promise<void> {
-    try {
-      if (this.isTauriRuntime()) {
-        await invoke('open_external_url', {
-          url: 'https://huggingface.co/settings/tokens'
-        });
-      } else {
-        window.open('https://huggingface.co/settings/tokens', '_blank', 'noopener,noreferrer');
-      }
-    } catch (error) {
-      this.error.set(this.normalizeErrorMessage(error));
-    }
   }
 
   private startRunningTicker(): void {
@@ -5946,25 +3415,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadTicker.stop();
   }
 
-  private startDiarizationTicker(): void {
-    this.diarizationTicker.start(() => {
-      this.diarizationRunningSeconds.set(this.diarizationRunningSeconds() + 1);
-      this.updateDiarizationRunningStatus();
-    }, 1000);
-  }
-
   private stopDiarizationTicker(): void {
     this.diarizationTicker.stop();
-  }
-
-  private startLlmProofreadTicker(): void {
-    this.llmProofreadTicker.start(() => {
-      this.llmProofreadRunningSeconds.set(this.llmProofreadRunningSeconds() + 1);
-    }, 1000);
-  }
-
-  private stopLlmProofreadTicker(): void {
-    this.llmProofreadTicker.stop();
   }
 
   private updateProofreadRunningStatus(): void {
@@ -5975,14 +3427,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadStatus.set(`校正を実行中... ${elapsed}秒`);
   }
 
-  private updateDiarizationRunningStatus(): void {
-    if (!this.diarizationRunning() || this.diarizationCanceling()) {
-      return;
-    }
-    const elapsed = this.diarizationRunningSeconds();
-    this.diarizationStatus.set(`話者分離を実行中... ${elapsed}秒`);
-  }
-
   private async ensureProgressListener(): Promise<void> {
     if (!this.isTauriRuntime()) {
       return;
@@ -5990,88 +3434,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.progressSubscription.ensure(() => listen<{ stage?: string; message?: string; progress?: number; current?: number; total?: number }>(
       'transcription-progress',
       (event) => {
-        if (!this.running() && !this.diarizationRunning() && !this.proofreadRunning() && !this.llmProofreadRunning() && !this.overallProofreadRunning()) {
+        if (!this.running() && !this.diarizationRunning() && !this.proofreadRunning()) {
           return;
         }
         const payload = event.payload ?? {};
         const stage = typeof payload.stage === 'string' ? payload.stage : '';
-
-        if (this.llmProofreadRunning()) {
-          if (stage === 'llm_loading' || stage === 'llm_sidecar_start') {
-            const current = typeof (payload as any).current === 'number' ? (payload as any).current : 0;
-            const total = typeof (payload as any).total === 'number' ? (payload as any).total : 0;
-            if (current > 0 && total > 0) {
-              const displayCurrent = current + this.llmProgressOffset;
-              const displayTotal = total + this.llmProgressOffset;
-              this.llmProofreadStatus.set(`校正中: ${displayCurrent} / ${displayTotal} 行`);
-            } else if (total === 0 && typeof payload.message === 'string' && payload.message.length > 0) {
-              // total なしのメッセージイベント（接続中・モデル読み込み等）のみ表示する。
-              // total > 0 かつ current=0 のケース（バッチ開始直前）は既存の準備中表示を維持する。
-              this.llmProofreadStatus.set(payload.message);
-            }
-            return;
-          } else if (stage === 'batch_start') {
-            const ids: number[] = Array.isArray((payload as any).segmentIds) ? (payload as any).segmentIds : [];
-            const statusMap = { ...this.llmSegmentStatus() };
-            for (const id of ids) statusMap[Number(id)] = 'processing';
-            this.llmSegmentStatus.set(statusMap);
-            return;
-          } else if (stage === 'batch_result') {
-            const items: any[] = Array.isArray((payload as any).items) ? (payload as any).items : [];
-            const current = typeof (payload as any).current === 'number' ? (payload as any).current : 0;
-            const total = typeof (payload as any).total === 'number' ? (payload as any).total : 0;
-            this.applyLlmBatchResult(items);
-            if (current > 0 && total > 0) {
-              const displayCurrent = current + this.llmProgressOffset;
-              const displayTotal = total + this.llmProgressOffset;
-              this.llmProofreadStatus.set(`校正中: ${displayCurrent} / ${displayTotal} 行`);
-            }
-            return;
-          } else if (stage === 'llm_batch_debug') {
-            // const backend = typeof (payload as any).backend === 'string' ? (payload as any).backend : 'unknown';
-            // console.log(`[LLM Batch][${backend}]`, payload);
-            return;
-          } else if (stage === 'llm_batch_raw_preview') {
-            // const backend = typeof (payload as any).backend === 'string' ? (payload as any).backend : 'unknown';
-            // console.warn(`[LLM Batch RAW][${backend}]`, payload);
-            return;
-          } else if (stage === 'llm_sidecar_debug') {
-            // console.log('[LLM Sidecar][DEBUG]', payload);
-            return;
-          }
-          // LLM固有ステージ以外（whisper進捗など）はそのまま通過
-        } else if (this.overallProofreadRunning()) {
-          if (stage === 'overall_proofread') {
-            const total = typeof payload.total === 'number' && Number.isFinite(payload.total)
-              ? Math.floor(payload.total)
-              : null;
-            if (total !== null && total > 0) {
-              const current = typeof payload.current === 'number' && Number.isFinite(payload.current)
-                ? payload.current
-                : this.overallProofreadProgressCurrent;
-              this.overallProofreadProgressCurrent = Math.min(
-                Math.max(0, Math.floor(current)),
-                total,
-              );
-              this.overallProofreadProgressStarted = true;
-              this.overallProofreadStatus.set(
-                formatOverallProofreadProgressValue(this.overallProofreadProgressCurrent, total),
-              );
-            } else if (!this.overallProofreadProgressStarted
-              && typeof payload.message === 'string' && payload.message.length > 0) {
-              // 校正前の会話テーマ要約（「会話のテーマを要約しています（1/2）...」など）
-              this.overallProofreadStatus.set(payload.message);
-            }
-            return;
-          }
-          if (stage === 'llm_loading' && !this.overallProofreadProgressStarted) {
-            if (typeof payload.message === 'string' && payload.message.length > 0) {
-              this.overallProofreadStatus.set(payload.message);
-            }
-          }
-          return;
-        }
-
 
         if (this.proofreadRunning() && !this.running() && !this.diarizationRunning()) {
           if (stage === 'proofread_segment_progress') {
@@ -6125,17 +3492,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         }
 
         if (typeof payload.message === 'string' && payload.message.length > 0) {
-          if (stage === 'compute_plan' || stage === 'compute_switch' || stage.startsWith('sidecar_')) {
-            const matched = payload.message.match(/（(auto|float16|float32|int8_float16|int8)/i);
-            if (matched?.[1]) {
-              this.runningComputeType.set(matched[1].toLowerCase());
-            } else if (stage === 'compute_plan') {
-              const matched2 = payload.message.match(/計算方式:\s*(auto|float16|float32|int8_float16|int8)/i);
-              if (matched2?.[1]) {
-                this.runningComputeType.set(matched2[1].toLowerCase());
-              }
-            }
-          }
           const retrySuffix = isRetryStage ? '（再試行中）' : '';
           const doneLike = stage.endsWith('_done') || payload.message.includes('完了');
           const message = doneLike && this.hadRetryInCurrentRun()
@@ -6662,17 +4018,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     return getEditableTextFromMapValue(segment, map);
   }
 
-  private applyEditedTextsToResultSegments(textsBySegmentId: Record<number, string>): void {
-    const current = this.result();
-    if (!current) {
-      return;
-    }
-    const updated = applyTextUpdates(current.segments, textsBySegmentId);
-    if (updated.changed) {
-      this.result.set({ ...current, segments: updated.rows });
-    }
-  }
-
   private getEditableTextById(segmentId: number): string {
     const map = this.editedSegmentTextMap();
     const found = map[segmentId];
@@ -7039,7 +4384,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     this.voiceInputProcessingSegmentId.set(segmentId);
     this.voiceInputFeedbackSegmentId.set(segmentId);
-    if (this.vulkanBuild()) {
+    const whisperVoiceInputBuild = this.vulkanBuild() || this.editorOnlyBuild;
+    if (whisperVoiceInputBuild) {
       this.voiceInputStatus.set('文字起こし中...');
     } else {
       const modelLoaded = await this.isVoiceInputModelLoaded();
@@ -7049,7 +4395,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     this.voiceInputError.set('');
     try {
-      const context = this.vulkanBuild() ? null : this.buildVoiceInputContext(segmentId);
+      const context = whisperVoiceInputBuild ? null : this.buildVoiceInputContext(segmentId);
       const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
         request: { wavBase64: prepared.wavBase64, maxCandidates: 3, ...(context ? { context } : {}) },
       });
@@ -7058,7 +4404,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         const message = '候補を生成できませんでした。';
         this.voiceInputError.set(message);
         this.voiceInputCandidates.set(null);
-        this.showAmdGpuProcessingFailure('音声入力', message);
       } else {
         this.voiceInputCandidates.set({ segmentId, candidates });
         this.voiceInputStatus.set('');
@@ -7069,7 +4414,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.voiceInputStatus.set('');
       const message = normalizeVoiceInputErrorMessage(error);
       this.voiceInputError.set(message);
-      this.showAmdGpuProcessingFailure('音声入力', message);
     } finally {
       this.voiceInputProcessingSegmentId.set(null);
     }
@@ -7284,17 +4628,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
   private openConfirmDialog(dialog: ConfirmDialogState): void {
     this.pendingConfirmDialog.set(dialog);
-  }
-
-  closeAmdGpuFailureDialog(): void {
-    this.amdGpuFailureDialog.set(null);
-  }
-
-  private showAmdGpuProcessingFailure(operation: string, message: string): void {
-    if (this.buildVariant() !== 'rocm') return;
-    const normalized = String(message ?? '').trim() || `${operation}に失敗しました。`;
-    if (/中止しました|cancel(?:led|ed)?/i.test(normalized)) return;
-    this.amdGpuFailureDialog.set({ operation, message: normalized });
   }
 
   confirmDialogButtonClass(color: ConfirmDialogColor, role: 'confirm' | 'cancel'): string {

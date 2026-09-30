@@ -3,22 +3,13 @@
   "private": true,
   "version": "0.9.9",
   "scripts": {
-    "setup": "npm install && npm --prefix frontend install && py python_sidecar/setup_venv_cli.py python_sidecar/requirements-runtime.txt",
+    "setup": "npm install && npm --prefix frontend install",
     "frontend:dev": "npm --prefix frontend run start",
-    "frontend:dev:amd": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4201 --build-target lott:build:development",
-    "frontend:dev:cpu": "npm --prefix frontend run start -- --host 127.0.0.1 --port 4202 --build-target lott:build:development,cpu",
     "frontend:build": "npm --prefix frontend run build",
     "frontend:build:editor": "cmd /c npm --prefix frontend run build -- --configuration editorProduction",
-    "frontend:build:cpu": "cmd /c npm --prefix frontend run build -- --configuration cpuProduction",
     "tauri:dev": "tauri dev",
-    "tauri:dev:amd": "cmd /c scripts\\run-dev-amd.bat",
-    "tauri:dev:cpu": "cmd /c scripts\\run-dev-cpu.bat",
-    "tauri:build": "tauri build",
-    "tauri:build:nvidia": "tauri build --bundles nsis --config tauri.nvidia.windows.override.json",
-    "tauri:build:nvidia:local-llm-apps": "tauri build --bundles nsis --features local-llm-apps --config tauri.nvidia.windows.override.json",
-    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json",
-    "tauri:build:cpu": "tauri build --bundles nsis --config tauri.cpu.windows.override.json",
-    "tauri:build:editor:local-llm-apps": "tauri build --bundles nsis --features local-llm-apps --config tauri.editor.windows.override.json"
+    "tauri:build": "tauri build --bundles nsis",
+    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

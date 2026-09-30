@@ -2,13 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildDiarizationEditedTextMapValue,
   buildExportTranscriptionPayloadValue,
   buildImportedTranscriptionStateValue,
   buildProofreadHintValue,
   buildSensitiveEntityProofreadHintValue,
   compactProofreadHintTextValue,
-  describeProofreadDiffReasonValue,
   getSensitiveEntityHighlightLevelValue,
   isPunctuationOnlyProofreadReasonValue,
   mergeConsecutiveSpeakerSegmentsValue,
@@ -217,14 +215,6 @@ test('getSensitiveEntityHighlightLevelValue preserves red, yellow, and none rule
   assert.equal(getSensitiveEntityHighlightLevelValue({ hasSensitiveEntity: true, kinds: [] }), 'none');
 });
 
-test('describeProofreadDiffReasonValue reports only actual punctuation changes', () => {
-  assert.equal(describeProofreadDiffReasonValue('今日は晴れ', '今日は、晴れ。'), '、。を追加');
-  assert.equal(describeProofreadDiffReasonValue('今日は、晴れ。', '今日は晴れ！'), '句読点・記号の調整');
-  assert.equal(describeProofreadDiffReasonValue('今日は晴れ', '今日は雨'), '');
-  assert.equal(describeProofreadDiffReasonValue('同じ', '同じ'), '');
-  assert.equal(describeProofreadDiffReasonValue('a b', 'a\tb'), '句読点・記号の調整');
-});
-
 test('punctuation reason and compact text helpers preserve existing display rules', () => {
   assert.equal(isPunctuationOnlyProofreadReasonValue(' 文末句点の補完 '), true);
   assert.equal(isPunctuationOnlyProofreadReasonValue('「。」を追加'), true);
@@ -419,35 +409,6 @@ test('reconcileRetranscriptionStateValue preserves current metadata without a pr
   });
   assert.deepEqual(reconciled.proofreadHintBySegmentId, { 5: 'ヒント5' });
   assert.deepEqual(reconciled.proofreadMetadataBySegmentId, { 5: metadata });
-});
-
-test('buildDiarizationEditedTextMapValue keeps edits and initializes only new segments', () => {
-  const previousEdited = {
-    1: '編集済み',
-    2: '',
-    9: '消失したセグメント'
-  };
-  const result = buildDiarizationEditedTextMapValue(
-    [
-      { id: 1, text: '新しい話者分離結果1' },
-      { id: 2, text: '新しい話者分離結果2' },
-      { id: 3, text: '新規セグメント' },
-      { id: 4, text: null }
-    ],
-    previousEdited
-  );
-
-  assert.deepEqual(result, {
-    1: '編集済み',
-    2: '',
-    3: '新規セグメント',
-    4: ''
-  });
-  assert.deepEqual(previousEdited, {
-    1: '編集済み',
-    2: '',
-    9: '消失したセグメント'
-  });
 });
 
 test('parseImportedTranscriptionJsonValue accepts and normalizes a complete export', () => {

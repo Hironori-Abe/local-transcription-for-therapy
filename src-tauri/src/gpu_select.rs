@@ -166,9 +166,27 @@ pub fn resolve_preferred(requested_uuid: Option<&str>) -> Option<VulkanDevice> {
     resolve(&devices, uuid).cloned()
 }
 
+/// 開発用: `LOTT_DEV_FORCE_CPU` の値が「有効」を意味するか（`1` / `true` / `on` / `yes`）。
+fn force_cpu_value_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "on" | "yes")
+    )
+}
+
+/// 開発用: 環境変数 `LOTT_DEV_FORCE_CPU=1` で GPU を無いものとして扱う（CPU 動作の確認用）。
+/// デバッグビルドでだけ有効で、リリースビルドでは環境変数を見ない。
+pub fn dev_force_cpu() -> bool {
+    cfg!(debug_assertions) && force_cpu_value_enabled(std::env::var("LOTT_DEV_FORCE_CPU").ok().as_deref())
+}
+
 /// Vulkan の GPU 一覧を返す。`refresh` が偽ならアプリ起動中の前回結果を使う。
 /// Vulkan ドライバーが無い・列挙に失敗した・タイムアウトした場合は空。
+/// 開発用の CPU 強制（`dev_force_cpu`）中は常に空（GPU が無い PC と同じ扱い）。
 pub fn vulkan_devices(refresh: bool) -> Vec<VulkanDevice> {
+    if dev_force_cpu() {
+        return Vec::new();
+    }
     if !refresh {
         if let Some(cached) = CACHE.lock().ok().and_then(|c| c.clone()) {
             return cached;
@@ -233,6 +251,17 @@ fn parse_listing(stdout: &str) -> Result<Vec<VulkanDevice>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn force_cpu_value_accepts_only_explicit_on_values() {
+        for on in ["1", "true", "TRUE", " on ", "yes"] {
+            assert!(force_cpu_value_enabled(Some(on)), "{on}");
+        }
+        for off in ["", "0", "false", "off", "no", "2"] {
+            assert!(!force_cpu_value_enabled(Some(off)), "{off}");
+        }
+        assert!(!force_cpu_value_enabled(None));
+    }
 
     fn dev(index: u32, kind: DeviceKind, vram_mb: u64) -> VulkanDevice {
         VulkanDevice {

@@ -6870,6 +6870,9 @@ fn execute_ggml_diarization(
         .arg(&paths.diar_model)
         .arg("--device")
         .arg(&device_arg)
+        // 録音ファイル向けに21.12秒単位で処理する。これはCLIの`--offline`とは別のpresetで、長尺音声にも使える。
+        .arg("--preset")
+        .arg("v3-offline")
         .arg("--format")
         .arg("json")
         .arg("-o")

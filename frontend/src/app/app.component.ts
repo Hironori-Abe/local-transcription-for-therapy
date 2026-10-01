@@ -427,7 +427,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly devForceCpu = signal<boolean>(false);
   /** Full 版: 今 CPU で処理する（GPU が見つからない／開発用の CPU 強制）。 */
   readonly speechRunsOnCpu = computed(() => this.vulkanBuild() && this.vulkanAvailable() === false);
-  /** 文字起こし画面に出す「処理装置」の1行（未確認・Editor 版は空）。 */
+  /** 文字起こし画面に出すGPU/CPUの説明行（未確認・Editor 版は空）。 */
   readonly speechDeviceLine = computed(() =>
     this.vulkanBuild()
       ? speechDeviceLineValue({
@@ -1059,7 +1059,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   getEstimatedTimeLabel(): string {
-    return `文字起こし推定所要時間（${this.effectiveSpeechDevice() === 'cpu' ? 'CPU' : 'GPU'}）`;
+    return `推定所要時間（${this.effectiveSpeechDevice() === 'cpu' ? 'CPU' : 'GPU'}）`;
   }
 
   private async updateEstimatedTimeFromPath(path: string): Promise<void> {

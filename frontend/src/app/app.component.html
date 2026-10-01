@@ -181,7 +181,7 @@
 
             <div class="actions-row run-controls-row">
               <p class="estimate-line">
-                音声ファイルの長さ: {{ getAudioDurationMessage() }}
+                音声ファイル: {{ getAudioDurationMessage() }}
                 <ng-container *ngIf="speechDeviceLine()">
                   <span class="estimate-separator"> / </span>
                   <span [class.speech-device-cpu]="speechRunsOnCpu()">{{ speechDeviceLine() }}</span>

@@ -119,7 +119,7 @@ test('estimated time messages preserve pending, insufficient, and ready states',
   );
   assert.equal(
     getEstimatedTimeMessageValue({ ...readyInput, estimateReady: false, sampleCount: 2 }),
-    'まだ時間の推定には十分なデータが集まっていません。（2/3件）'
+    'まだ推定には十分なデータが集まっていません。（2/3件）'
   );
   assert.equal(getEstimatedTimeMessageValue(readyInput), '最低 4 分、概算 6 分');
 });
@@ -382,16 +382,16 @@ test('speech device line reports GPU, CPU and the dev override', () => {
   assert.equal(speechDeviceLineValue({ vulkanAvailable: null, gpuName: '', devForceCpu: false }), '');
   assert.equal(
     speechDeviceLineValue({ vulkanAvailable: true, gpuName: 'RTX 4060', devForceCpu: false }),
-    '処理装置: GPU（RTX 4060）'
+    'GPU（RTX 4060）'
   );
-  assert.equal(speechDeviceLineValue({ vulkanAvailable: true, gpuName: ' ', devForceCpu: false }), '処理装置: GPU');
+  assert.equal(speechDeviceLineValue({ vulkanAvailable: true, gpuName: ' ', devForceCpu: false }), 'GPU');
   assert.equal(
     speechDeviceLineValue({ vulkanAvailable: false, gpuName: '', devForceCpu: false }),
-    '処理装置: CPU（GPUが見つからないため）'
+    'CPU（GPUが見つからないため）'
   );
   assert.equal(
     speechDeviceLineValue({ vulkanAvailable: false, gpuName: '', devForceCpu: true }),
-    '処理装置: CPU（開発オプションでCPU強制）'
+    'CPU（開発オプションでCPU強制）'
   );
 });
 

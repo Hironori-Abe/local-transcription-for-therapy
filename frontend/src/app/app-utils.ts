@@ -254,7 +254,7 @@ export function getEstimatedTimeMessageValue(input: EstimatedTimeMessageValueInp
     return '音声ファイルを選択すると表示されます。';
   }
   if (!input.estimateReady) {
-    return `まだ時間の推定には十分なデータが集まっていません。（${input.sampleCount}/${input.minimumSamples}件）`;
+    return `まだ推定には十分なデータが集まっていません。（${input.sampleCount}/${input.minimumSamples}件）`;
   }
   return `最低 ${formatEstimatedMinutesValue(input.minMinutes)} 分、概算 ${formatEstimatedMinutesValue(input.avgMinutes)} 分`;
 }
@@ -1034,7 +1034,7 @@ export function vulkanGpuAutoLabelValue(list: VulkanGpuList | null): string {
 }
 
 /**
- * 文字起こし画面に出す「処理装置」の1行。CPU で処理するときはその理由も添える。
+ * 文字起こし画面に出すGPU/CPUの説明行。CPU で処理するときはその理由も添える。
  * vulkanAvailable が null（未確認）の間は空文字（表示しない）。
  */
 export function speechDeviceLineValue(input: {
@@ -1045,11 +1045,11 @@ export function speechDeviceLineValue(input: {
   if (input.vulkanAvailable === null) return '';
   if (input.vulkanAvailable) {
     const name = input.gpuName.trim();
-    return name ? `処理装置: GPU（${name}）` : '処理装置: GPU';
+    return name ? `GPU（${name}）` : 'GPU';
   }
   return input.devForceCpu
-    ? '処理装置: CPU（開発オプションでCPU強制）'
-    : '処理装置: CPU（GPUが見つからないため）';
+    ? 'CPU（開発オプションでCPU強制）'
+    : 'CPU（GPUが見つからないため）';
 }
 
 /** 実際に使われる（設定で選ばれた、または自動選択の）GPU の名前。無ければ ''。 */

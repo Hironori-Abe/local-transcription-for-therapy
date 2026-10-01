@@ -166,12 +166,14 @@ import {
   mergeConsecutiveSpeakerSegmentsValue,
   normalizeProofreadMetadataValue,
   parseImportedTranscriptionJsonValue,
+  resolveProofreadLanguageValue,
   reconcileRetranscriptionStateValue,
   type ExportProofreadMetadata,
   type ExportTranscriptionPayload,
   type ProofreadHighlightLevel,
   type SensitiveEntityHighlightInput
 } from './proofread-metadata.utils';
+import { TRANSCRIPTION_LANGUAGE_OPTIONS } from './transcription-language-options';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -660,34 +662,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly findReplaceQuery = signal<string>('');
   readonly findReplaceWith = signal<string>('');
   readonly findReplaceStatus = signal<string>('');
-  readonly whisperModelOptions = computed<ReadonlyArray<{ value: string; label: string }>>(() => this.vulkanBuild() ? [
-    // Vulkan 版は whisper.cpp の turbo だけを配布する（large-v3 の ggml モデルは未提供）。
-    { value: 'turbo', label: 'turbo（高速・既定）' },
-  ] : [
-    { value: 'turbo', label: 'turbo（高速・既定）' },
-    { value: 'large-v3', label: 'large-v3（高精度）' },
-    // { value: 'medium', label: 'medium' },
-    // { value: 'small', label: 'small' },
-    // { value: 'base', label: 'base（最軽量）' },
-  ]);
-  // 文字起こし言語の選択肢。
-  // faster-whisper と Gemma 4 E4B の音声 ASR の両方で対応が明示されている言語に限定する。
-  // Gemma 4 Technical Report の FLEURS ASR 評価では pt-br だが、Whisper の言語コードは pt。
-  // 既定 ja を先頭にし、利用頻度の高い言語を上位へ並べる。
-  readonly transcriptionLanguageOptions: ReadonlyArray<{ value: string; label: string }> = [
-    { value: 'ja', label: '日本語' },
-    { value: 'en', label: '英語' },
-    { value: 'zh', label: '中国語' },
-    { value: 'ko', label: '韓国語' },
-    { value: 'ar', label: 'アラビア語' },
-    { value: 'de', label: 'ドイツ語' },
-    { value: 'es', label: 'スペイン語' },
-    { value: 'fr', label: 'フランス語' },
-    { value: 'hi', label: 'ヒンディー語' },
-    { value: 'it', label: 'イタリア語' },
-    { value: 'pt', label: 'ポルトガル語' },
-    { value: 'ru', label: 'ロシア語' }
-  ];
+  readonly transcriptionLanguageOptions = TRANSCRIPTION_LANGUAGE_OPTIONS;
   readonly locationAreaOptions: ReadonlyArray<{ value: LocationAreaCode; label: string }> = [
     { value: 'hokkaidoTohoku', label: '北海道・東北' },
     { value: 'kanto', label: '関東' },
@@ -2364,12 +2339,17 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         end: segment.end,
         words: segment.words ?? []
       }));
+      const proofreadLanguage = resolveProofreadLanguageValue(
+        current.settings.language,
+        this.transcriptionLanguage()
+      );
 
       const response = await invoke<{ success: boolean; result?: ProofreadResultPayload; errorMessage?: string }>(
         'proofread_transcription',
         {
           request: {
             segments,
+            language: proofreadLanguage,
             chunkSize: fixedChunkSize,
             chunkMaxChars: fixedChunkMaxChars,
             mode,
@@ -2920,7 +2900,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         model: 'imported-json',
         device: 'n/a',
         computeType: 'n/a',
-        language: 'ja',
+        language: imported.language ?? this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
         vadFilter: false,
         wordTimestamps: false
       },
@@ -3084,11 +3064,6 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     } catch {
       // GPU確認失敗時は既存の設定値を維持する
     }
-  }
-
-  onWhisperModelChange(value: string): void {
-    this.whisperModel.set(value);
-    void this.refreshGgmlSpeechStatus();
   }
 
   devDeleteModels(): void {
@@ -4397,7 +4372,12 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       const context = whisperVoiceInputBuild ? null : this.buildVoiceInputContext(segmentId);
       const response = await invoke<EditorVoiceInputResponse>('generate_editor_voice_input_candidates', {
-        request: { wavBase64: prepared.wavBase64, maxCandidates: 3, ...(context ? { context } : {}) },
+        request: {
+          wavBase64: prepared.wavBase64,
+          maxCandidates: 3,
+          language: this.normalizeTranscriptionLanguage(this.transcriptionLanguage()),
+          ...(context ? { context } : {})
+        },
       });
       const candidates = normalizeVoiceInputCandidates(response.candidates);
       if (candidates.length === 0) {

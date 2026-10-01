@@ -582,8 +582,8 @@ fn generate_editor_voice_input_candidates_blocking(
 /// Editor / Vulkan 版の音声入力に使う Whisper モデル（文字起こしの既定と同じ）。
 const VOICE_INPUT_WHISPER_MODEL: &str = "turbo";
 
-/// 文字起こしと同じフィラー例文付きで1回だけ書き起こし、候補1件として返す
-/// （例文を付けると句読点が付き、話し言葉のまま書き起こされる）。
+/// 文字起こしと同じ言語設定で1回だけ書き起こし、候補1件として返す。
+/// 日本語のみフィラー例文を使い、他言語には日本語の例文を渡さない。
 /// 以前は例文なしの2回目も実行して候補を2件にしていたが、待ち時間の短さを優先して1回にした。
 /// 前後行の文脈は使わない（Whisper のプロンプトに入れると、話していない語が紛れ込むため）。
 fn generate_whisper_voice_input_candidates_blocking(
@@ -622,6 +622,7 @@ fn generate_whisper_voice_input_candidates_blocking(
     let use_gpu = !is_editor_build(app)
         && paths.whisper_backend() == Some("vulkan")
         && gpu_select::resolve_preferred(None).is_some();
+    let language = normalize_transcription_language(request.language.as_deref())?;
 
     let text = {
         let out_name = private_temp_name("voice-input-asr");
@@ -632,9 +633,9 @@ fn generate_whisper_voice_input_candidates_blocking(
             &paths.vad_model,
             Path::new(&wav_name),
             Path::new(&out_name),
-            "ja",
+            &language,
             use_gpu,
-            true, // フィラー例文を付ける
+            true, // フィラー保持の単語時刻を出す。日本語のみ例文を付ける。
             threads,
         );
         let mut cmd = Command::new(&paths.whisper_cli);
@@ -678,11 +679,11 @@ fn generate_whisper_voice_input_candidates_blocking(
             .map_err(|e| format!("whisper.cpp の出力を読み込めませんでした: {e}"))?;
         let parsed: Value = serde_json::from_str(&raw)
             .map_err(|e| format!("whisper.cpp の出力 JSON を解析できませんでした: {e}"))?;
-        let (_, text) = ggml_speech::convert_whisper_output(&parsed, "ja", false)?;
+        let (_, text) = ggml_speech::convert_whisper_output(&parsed, &language, false)?;
         text
     };
 
-    let text = normalize_ja_symbol_width(text.trim());
+    let text = normalize_transcription_output_text(text.trim(), &language);
     if text.is_empty() {
         return Err(
             "音声を聞き取れませんでした。マイクの位置や音量を確かめて、もう一度録音してください。"
@@ -1111,19 +1112,10 @@ struct RunTranscriptionResponse {
 }
 
 
-/// 文字起こし言語コードを正規化する。
-///
-/// faster-whisper が受け付けるのは ISO 639-1 系の 2〜3 文字コード（例: `ja` / `en` /
-/// `haw` / `yue`）。pyannote の話者分離は言語非依存なので、対応言語の集合は
-/// faster-whisper のトークナイザー側に委ねる（不正値は sidecar が弾く）。ここでは
-/// 形式チェックのみ行い、空・不正時は既定の `ja` にフォールバックする。
-fn normalize_transcription_language(value: Option<&str>) -> String {
-    let v = value.unwrap_or("ja").trim().to_ascii_lowercase();
-    if (2..=3).contains(&v.len()) && v.chars().all(|c| c.is_ascii_lowercase()) {
-        v
-    } else {
-        "ja".to_string()
-    }
+/// LoTTの文字起こし対象コードを小文字へ正規化する。未指定・空欄は既定の `ja`、
+/// 対象外コードはWhisperへ渡さずエラーにする。
+fn normalize_transcription_language(value: Option<&str>) -> Result<String, String> {
+    ggml_speech::normalize_asr_language(value)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1159,6 +1151,8 @@ struct ProofreadSegmentInput {
 #[serde(rename_all = "camelCase")]
 struct ProofreadTranscriptionRequest {
     segments: Vec<ProofreadSegmentInput>,
+    /// 文字起こし言語。省略時は既存動作との互換性のため日本語として扱う。
+    language: Option<String>,
     chunk_size: Option<i64>,
     chunk_max_chars: Option<i64>,
     /// "entity" | "punct" | "all" (default)
@@ -1722,6 +1716,8 @@ struct EditorVoiceInputPackDeleteResponse {
 #[serde(rename_all = "camelCase")]
 struct EditorVoiceInputRequest {
     wav_base64: String,
+    /// 文字起こし画面で選ばれた言語。旧フロントエンドからの呼び出しは日本語扱い。
+    language: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3751,10 +3747,16 @@ fn proofread_transcription_blocking(
         });
     }
 
+    let language = request
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .unwrap_or("ja");
     let chunk_size = request.chunk_size.unwrap_or(12).clamp(1, 64);
     let chunk_max_chars = request.chunk_max_chars.unwrap_or(1200).clamp(200, 6000);
     let mode = request.mode.as_deref().unwrap_or("all");
-    let run_punct = mode == "all" || mode == "punct";
+    let run_punct = should_run_japanese_punctuation(language, mode);
     let run_entity = mode == "all" || mode == "entity" || mode == "punct";
 
     emit_progress(&app, "proofread_start", "校正を開始します...", Some(96.0));
@@ -3909,6 +3911,18 @@ fn normalize_ja_symbol_width(text: &str) -> String {
         }
     }
     out
+}
+
+fn normalize_transcription_output_text(text: &str, language: &str) -> String {
+    if language.eq_ignore_ascii_case("ja") {
+        normalize_ja_symbol_width(text)
+    } else {
+        text.to_string()
+    }
+}
+
+fn should_run_japanese_punctuation(language: &str, mode: &str) -> bool {
+    language.eq_ignore_ascii_case("ja") && (mode == "all" || mode == "punct")
 }
 
 
@@ -4923,6 +4937,24 @@ mod tests {
     }
 
     #[test]
+    fn transcription_text_normalization_is_japanese_only() {
+        assert_eq!(
+            normalize_transcription_output_text("何が良かったの?", "ja"),
+            "何が良かったの？"
+        );
+        assert_eq!(normalize_transcription_output_text("Why?!", "en"), "Why?!");
+    }
+
+    #[test]
+    fn japanese_punctuation_rules_are_not_applied_to_other_languages() {
+        assert!(should_run_japanese_punctuation("ja", "all"));
+        assert!(should_run_japanese_punctuation("JA", "punct"));
+        assert!(!should_run_japanese_punctuation("en", "all"));
+        assert!(!should_run_japanese_punctuation("fr", "punct"));
+        assert!(!should_run_japanese_punctuation("ja", "entity"));
+    }
+
+    #[test]
     fn ggml_model_table_is_pinned_and_verifiable() {
         for model in ggml_speech::GGML_MODEL_FILES.iter() {
             assert!(matches!(model.component, "whisper_turbo" | "diarization"));
@@ -5771,6 +5803,16 @@ fn run_transcription_blocking(
     set_cancel_requested(RunningTaskKind::Transcription, false);
     // 旧フロントエンドから false が届いても、カウンセリング会話のフィラーは常に保持する。
     let keep_fillers = true;
+    let language = match normalize_transcription_language(request.language.as_deref()) {
+        Ok(language) => language,
+        Err(error_message) => {
+            return Ok(RunTranscriptionResponse {
+                success: false,
+                result: None,
+                error_message: Some(error_message),
+            })
+        }
+    };
     eprintln!(
         "[LoTT][transcription][run_id={run_id}][stage=engine] transcription=ggml diarization=ggml keep_fillers={keep_fillers}"
     );
@@ -5860,9 +5902,7 @@ fn run_transcription_blocking(
         Some(2.0),
     );
 
-    let language = normalize_transcription_language(request.language.as_deref());
     let requested_speaker_count = request.speaker_count.unwrap_or(2).clamp(1, 5);
-
     let use_parallel_diarization = request.parallel_diarization.unwrap_or(false);
 
     // 文字起こしと並行して話者分離を起動する（高速モード時のみ）
@@ -6194,7 +6234,7 @@ CUDA/cuDNN の PATH、GPU割り当て、ドライバ状態を確認してくだ�
             {
                 for segment in segments {
                     if let Some(text) = segment.get("text").and_then(Value::as_str) {
-                        let normalized = normalize_ja_symbol_width(text);
+                        let normalized = normalize_transcription_output_text(text, &language);
                         if normalized != text {
                             segment["text"] = Value::String(normalized);
                         }
@@ -6754,6 +6794,7 @@ fn execute_ggml_transcription(
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("whisper.cpp の出力 JSON を解析できませんでした: {e}"))?;
     let (segments, text) = ggml_speech::convert_whisper_output(&parsed, language, keep_fillers)?;
+    let filler_prompt_applied = ggml_speech::uses_filler_prompt(language, keep_fillers);
     // 長尺安定モードでも探索幅は下げない（ggml_speech::WHISPER_BEAM_SIZE のコメント参照）。
     let beam = ggml_speech::WHISPER_BEAM_SIZE;
     let result = serde_json::json!({
@@ -6774,7 +6815,7 @@ fn execute_ggml_transcription(
                 "keepFillers": keep_fillers,
                 "audioPreprocess": normalized_audio_preprocess(audio_preprocess),
                 // 利用者の追加指示・用語辞書は使わない（話されていない語が出力へ紛れ込むのを防ぐため）。
-                "initialPrompt": if keep_fillers { Value::from(ggml_speech::FILLER_PROMPT) } else { Value::Null },
+                "initialPrompt": if filler_prompt_applied { Value::from(ggml_speech::FILLER_PROMPT) } else { Value::Null },
                 "beamSize": beam,
                 "bestOf": beam,
                 "conditionOnPreviousText": false,

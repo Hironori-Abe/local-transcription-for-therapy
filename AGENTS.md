@@ -37,7 +37,7 @@ CUDA 版・AMD (ROCm) 版・CPU 版、Python サイドカー、faster-whisper、
 
 ## Runtime Defaults
 
-- language: `ja`
+- language: `ja`（既定）。選択可能コードは `ja, en, zh, hi, te, bn, kn, ko, ar, de, es, fr, it, pt, ru, fa, id, tr, vi, th, ur, ta, mr, sw`。自動検出は行わない
 - ASR model: `turbo`（Whisper large-v3-turbo）
 - device: 自動。Vulkan の GPU があれば GPU、無ければ CPU（起動時に CPU 要件を確認し、GPU ドライバーの問題があれば案内する）
 - VAD（Silero）: 有効
@@ -202,7 +202,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 ## Proofreading Policy
 
 - 校正はルールベースで、Tauri/Rust 側で完結する。LLM による校正・全体校正は無い
-- 句読点付与は LLM を使わずルールだけで行う（文字起こし直後・話者分離のやり直し後とも `runProofread(..., 'punct')`）。カウンセリング会話のフィラー・相づちは常に保持する。whisper.cpp には句読点入りの例文（`ggml_speech::FILLER_PROMPT`）を毎回渡しており、Whisper がその書き方をまねて句読点を付けるため（実測で99%以上の行が句読点で終わる）。ルールがするのは、日本語の直後の半角「?」「!」の全角化（`normalize_ja_symbol_width`）と、句読点で終わらない行の末尾の補完だけ。「まあ」「ので」などの後に読点を足す規則（`force_comma_after`）は、句読点を含む行には適用しない
+- 句読点付与は LLM を使わずルールだけで行う（文字起こし直後・話者分離のやり直し後とも `runProofread(..., 'punct')`）。日本語ではカウンセリング会話のフィラー・相づちを残すため、whisper.cpp に日本語の句読点入り例文（`ggml_speech::FILLER_PROMPT`）を毎回渡し、Whisper がその書き方をまねて句読点を付ける（実測で99%以上の行が句読点で終わる）。他言語には日本語例文を渡さず、日本語の句読点補正・記号幅変換を適用しない。日本語のルールがするのは、日本語の直後の半角「?」「!」の全角化（`normalize_ja_symbol_width`）と、句読点で終わらない行の末尾の補完だけ。「まあ」「ので」などの後に読点を足す規則（`force_comma_after`）は、句読点を含む行には適用しない
 - ルールベース校正定義: `src-tauri/resources/proofread/punctuation_rules/`
 - 校正・推論のために会話データを PC 外へ送る経路を作らない。将来ローカル推論を再導入する場合も、loopback限定バリデーションを必須とする（Non-Negotiable Constraints 参照）
 
@@ -217,7 +217,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 編集画面の各行の編集欄右側（matSuffix）にあるマイクボタンで最大15秒録音し、編集欄へ挿入する候補を作る。Full 版・Editor 版とも whisper.cpp を使い、Gemma / llama-server / mmproj は使わない。
 
 - 実装: `generate_whisper_voice_input_candidates_blocking`（`src-tauri/src/lib.rs`）。モデルは `VOICE_INPUT_WHISPER_MODEL = turbo`（文字起こしの既定と同じ）
-- フィラー例文（`FILLER_PROMPT`）付きの**1回だけ**実行し、候補は**1件**。以前は例文なしの2回目も実行して候補2件にしていたが、待ち時間を優先して1回にした。前後行の文脈は渡さない（Whisper のプロンプトに入れると、話していない語が紛れ込むため）
+- 選択中の言語で1回だけ実行し、候補は**1件**。日本語のみフィラー例文（`FILLER_PROMPT`）を付ける。他言語へ日本語例文や前後行の文脈を渡さない（話していない語が紛れ込むおそれがあるため）
 - **Full 版**: セットアップ済みの文字起こし用 whisper.cpp を使う。GPU（Vulkan）が選べれば GPU、無ければ `-ng` で CPU 実行する。文字起こしモデルが未準備ならセットアップ完了を案内する。追加パックは不要
 - **Editor 版**: 同じ whisper.cpp の Vulkan ビルドを `-ng` 付きで常に CPU 実行し、GPU 列挙や Vulkan ドライバーに依存しない。開発版では `python_sidecar/speech-engines/whisper/`、Windows リリース版では同梱 `resources/speech-engines/whisper/` を使う。設定タブの「音声入力パック」は Whisper large-v3-turbo と Silero VAD（約1.6GB）のみを固定 revision・SHA-256検証・中断再開で取得し、モデルは `app_local_data_dir()/models/` に置く。Editor 版に NeMo・Python・llama-server・ffmpeg は同梱しない
 - 音声入力は `WHISPER_VOICE_INPUT_ACTIVE` で同時実行を1つに制限する

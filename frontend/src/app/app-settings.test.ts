@@ -7,9 +7,10 @@ import type {
 import {
   resolveGeneralAppSettingsValue
 } from './app-utils.ts';
+import { TRANSCRIPTION_LANGUAGE_OPTIONS } from './transcription-language-options.ts';
 
 const options = {
-  transcriptionLanguageOptions: [{ value: 'ja' }, { value: 'en' }],
+  transcriptionLanguageOptions: TRANSCRIPTION_LANGUAGE_OPTIONS,
   playbackRateOptions: [0.75, 1, 1.25]
 };
 
@@ -77,4 +78,24 @@ test('general app settings preserve language fallback and proofread defaults', (
     diarizationDevice: 'cuda',
     speakerCount: 1
   });
+});
+
+test('general app settings accept every catalog language and preserve normalized selection', () => {
+  assert.deepEqual(
+    TRANSCRIPTION_LANGUAGE_OPTIONS.map(({ value }) => value),
+    ['ja', 'en', 'zh', 'hi', 'te', 'bn', 'kn', 'ko', 'ar', 'de', 'es', 'fr', 'it', 'pt', 'ru', 'fa', 'id', 'tr', 'vi', 'th', 'ur', 'ta', 'mr', 'sw']
+  );
+  assert.equal(new Set(TRANSCRIPTION_LANGUAGE_OPTIONS.map(({ value }) => value)).size, 24);
+  assert.ok(TRANSCRIPTION_LANGUAGE_OPTIONS.slice(0, 7).every(({ diarizationSupported }) => diarizationSupported));
+  assert.ok(TRANSCRIPTION_LANGUAGE_OPTIONS.slice(7).every(({ diarizationSupported, label }) =>
+    !diarizationSupported && label.endsWith('（話者分離非対応）')
+  ));
+
+  for (const language of TRANSCRIPTION_LANGUAGE_OPTIONS) {
+    assert.equal(
+      resolveGeneralAppSettingsValue({ transcription: { language: ` ${language.value.toUpperCase()} ` } }, options)
+        .transcriptionLanguage,
+      language.value
+    );
+  }
 });

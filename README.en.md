@@ -11,14 +11,14 @@ The application is not intended to produce perfect verbatim transcripts automati
 
 ## Current Language Scope
 
-LoTT currently assumes Japanese-language use. The primary UI labels, screenshots, setup flow, proofreading rules, transcript editing workflow, and output conventions are centered on Japanese clinical and counseling transcription. This English README is provided as a reference, but Japanese remains the main operating language of the app.
+Japanese remains LoTT's primary and default transcription language. The UI labels, screenshots, proofreading rules, transcript editing workflow, and output conventions are centered on Japanese clinical and counseling transcription. The transcription language can also be selected in Settings.
 
 ## Features
 
 - **Fully local operation** - No internet connection is required during normal use. Conversation and audio data are not sent to internet-hosted APIs
-- **Japanese transcription** - whisper.cpp (Whisper large-v3-turbo + Silero VAD). It uses NVIDIA / AMD / Intel GPUs through Vulkan and runs on the CPU on PCs without a GPU. Optional audio adjustment before transcription (low-frequency noise removal, noise reduction, loudness normalization) is available (it can lower accuracy on good-quality recordings)
+- **Transcription** - whisper.cpp (Whisper large-v3-turbo + Silero VAD), with Japanese as the default and 24 selectable languages. Diarization still runs for options labeled "speaker diarization unsupported." It uses NVIDIA / AMD / Intel GPUs through Vulkan and runs on the CPU on PCs without a GPU. Optional audio adjustment before transcription (low-frequency noise removal, noise reduction, loudness normalization) is available (it can lower accuracy on good-quality recordings)
 - **Speaker diarization** - Automatic speaker identification with NeMo-Speech.cpp + Nemotron-3-Diarization, using default labels such as Th / Cl / IP
-- **Proofreading** - Punctuation is added automatically with local rules. The app also highlights possible personal identifiers such as names and place names. There is no AI (LLM) proofreading or overall proofreading
+- **Proofreading** - Japanese transcript punctuation is added automatically with local rules. The app also highlights possible personal identifiers such as names and place names. There is no AI (LLM) proofreading or overall proofreading
 - **Voice input** - Record up to 15 seconds from the microphone on any transcript row; the local whisper.cpp transcribes it and suggests 1 candidate (the Full edition uses the GPU when available and the CPU otherwise; Editor always uses the CPU)
 - Segment-table editing, splitting by Japanese punctuation, and per-segment audio playback
 - Save as Word (.docx), Excel (.xlsx), SRT subtitles, or JSON. SRT can optionally be stored in an AES-256 encrypted ZIP with a password
@@ -94,8 +94,8 @@ Use the button at the left of the tab row to cycle among System (default), Light
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material
 - Transcription: whisper.cpp (large-v3-turbo, Silero VAD; Vulkan build bundled) / Speaker diarization: NeMo-Speech.cpp + Nemotron-3-Diarization (Vulkan build bundled) / Audio decoding: LGPL-configured ffmpeg CLI
-- Punctuation: local rules in Rust. No LLM is used
-- Voice input: whisper.cpp (one transcription pass with a filler-example prompt, giving 1 candidate; context from surrounding lines is not sent)
+- Punctuation: local Rust rules for Japanese. No LLM is used
+- Voice input: whisper.cpp (one transcription pass in the selected language, giving 1 candidate; a filler-example prompt is used for Japanese, and context from surrounding lines is not sent)
 - Python is neither bundled nor used
 
 ## Documentation

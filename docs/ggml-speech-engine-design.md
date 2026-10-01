@@ -40,7 +40,7 @@
 |---|---|
 | whisper.cpp（Vulkan、VAD、beam 3、`-mc 0`） | 50分音声 43.6秒・0.9GB。faster-whisper（ROCm）は74.9秒・4.6GB。既存出力との差は5.1%（faster-whisper再実行は10.8%） |
 | Nemotron-3-Diarization（Vulkan） | 10分音声 7.3秒、50分音声 59.4秒。既存（pyannote）との話者一致率は10分 94%、50分 84% |
-| 日本語 | Nemotron の対応言語一覧に日本語は無いが、実用的に動作した |
+| 日本語 | Nemotron の公式モデルカードは網羅的な対応言語一覧を示していない。日本語は既存アプリで実用動作を確認済み。公式学習資料にある他6言語名はLoTTでの精度検証を意味しない（5.1参照） |
 | 反復ハルシネーション | faster-whisper（ROCm）の50分出力で「お金」×15 のループが起き、約12秒分の発話が消えた。whisper.cpp では発生しなかった |
 | Nemotron 3.5 ASR | 日本語の精度・速度ともに whisper.cpp に劣るため不採用 |
 | NeMo の ASR+話者分離統合モード | 日本語では単語が発話単位の塊になり、話者付けに使えないため不採用 |
@@ -160,15 +160,19 @@ Windows 固有の問題（いずれも対処済み。7.1・8章）:
 
 | 現行（faster-whisper） | whisper.cpp | 備考 |
 |---|---|---|
-| `language=ja` | `-l ja` | |
+| `language`（既定 `ja`） | `-l <code>` | LoTT の文字起こし対象は `ja, en, zh, hi, te, bn, kn, ko, ar, de, es, fr, it, pt, ru, fa, id, tr, vi, th, ur, ta, mr, sw`。whisper.cpp 自体の全言語を選択肢にせず、未対応コードは実行前に拒否する。自動検出は行わない |
 | `vad_filter=true`、threshold 0.5 / min_speech 200ms / min_silence 800ms / speech_pad 400ms（既定） | `--vad -vm ggml-silero-v6.2.0.bin -vt 0.5 -vspd 200 -vsd 800 -vp 400` | whisper.cpp の既定値は faster-whisper と異なる（speech_pad 30ms など）。**必ず明示する** |
 | `beam_size=3, best_of=3`（低メモリモードでは1/1） | `-bs 3 -bo 3`（**低メモリモードでも 3/3 のまま**） | whisper-cli の既定値は 5/5。5.4 参照 |
 | `condition_on_previous_text=False` | `-mc 0` | whisper.cpp は既定で直前のテキストを引き継ぐ。雪崩型ハルシネーション防止の方針に合わせて無効化する |
-| `initial_prompt`（用語辞書・利用者の追加指示） | **渡さない**。フィラー・相づちは常に保持し、固定の中立例文を `--prompt` `--carry-initial-prompt` `-mc 56` で毎回の窓に付ける | 5.2 参照 |
+| `initial_prompt`（用語辞書・利用者の追加指示） | **渡さない**。日本語は固定の中立例文を `--prompt` `--carry-initial-prompt` `-mc 56` で毎回の窓に付ける。他言語には日本語の例文を渡さず `-mc 0` にする | 5.2 参照 |
 | `log_prob_threshold=-1.0` | `-lpt -1.0` | 既定値と同じだが明示する |
-| `word_timestamps=false` | 指定しない（`-ojf` は不要） | |
+| 話者交代位置のトークン時刻 | フィラー保持を有効にして `-ojf` を付ける | 日本語は固定例文とともに使い、他言語では例文なしでトークン時刻だけを出す |
 | `compute_type=auto` | 該当なし | モデルファイルの量子化で決まる |
 | 出力 | `-oj -of <一時パス>` | JSON をファイルに出力し、Rust で読む |
+
+言語設定は画面から文字起こし・音声入力へ渡す。文字起こしの言語コードは大文字小文字を正規化し、未指定・空欄だけを既定の `ja` とする。日本語以外では日本語フィラープロンプトと日本語句読点補正を適用しない。校正では日本語以外の本文を句読点ルールで変更せず、固有名詞などの注意喚起は従来どおり行う。句読点補正とフィラープロンプトの実績値は日本語に対する評価である。話者分離は言語にかかわらず従来どおり実行する。UI の「話者分離非対応」表示は言語別の実績に関する注意であり、処理をスキップ・拒否する制御には使わない。
+
+文字起こし言語のUI選択肢は24言語。Nemotronの公式モデルカードは網羅的な対応言語一覧を公開していない。日本語は既存アプリで実用動作を確認済み。英語・Mandarin・Hindi・Kannada・Telugu・Bengaliは公式学習資料に言語名があるが、LoTTでの個別精度検証はしていない。残る17言語は公式資料で対応を確認できていないためUIに「話者分離非対応」ラベルを付けるが、話者分離処理は24言語すべてで実行する。このラベルは対応確認の根拠がないことを案内し、Nemotronが当該言語で技術的に動作しないという断定ではない。
 
 ### 5.2 初期プロンプトの扱い
 
@@ -189,7 +193,7 @@ PoC で次のことが分かった。
 
 これを受けて次のように決めた（2026-09-25）。
 
-- **ggml 経路**: フィラー・相づちは常に保持する。臨床内容・固有名詞を含まない固定の例文（`ggml_speech::FILLER_PROMPT`、55トークン）を毎回の窓に付ける。`-mc` を例文のトークン数 + 1 にして、直前テキストは引き継がない
+- **ggml 経路**: 日本語ではフィラー・相づちを出力しやすくするため、臨床内容・固有名詞を含まない固定の例文（`ggml_speech::FILLER_PROMPT`、55トークン）を毎回の窓に付ける。`-mc` を例文のトークン数 + 1 にして、直前テキストは引き継がない。他言語には日本語の例文を渡さず、`-mc 0` で直前テキストの引き継ぎを切る
 - **用語辞書（頻出語）は ggml 経路に渡さない**。毎回の窓に付けると、話されていない臨床用語が出力される
 - **標準経路**: 用語辞書 `glossary.json` から、臨床内容（「眠れてない」「薬も合わない」等）を含む例文を削除した。faster-whisper では最初の30秒窓にしか効かず、削除前後で認識結果は同一だった
   - 残る標準プロンプト（「以下は日本語の会話です。」＋頻出語70語）も314トークンあり、先頭側は切り捨てられている。扱いは未決
@@ -215,7 +219,7 @@ PoC で次のことが分かった。
 | `ggml-large-v3-turbo.bin` | 約1.6GB | `ggerganov/whisper.cpp`（Hugging Face） |
 | `ggml-silero-v6.2.0.bin` | 約0.9MB | `ggml-org/whisper-vad`（Hugging Face） |
 
-量子化版（q5_0 / q8_0）は容量と精度のトレードオフを別途評価する。large-v3 を選べる現行 UI との対応も、同じく別途決める。
+量子化版（q5_0 / q8_0）は容量と精度のトレードオフを別途評価する。現行UIではモデル選択を表示せず、large-v3-turbo を使う。
 
 #### 2026-10-01: Arc 140T の文字起こし設定比較
 
@@ -409,7 +413,7 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 - Full 版（identifier `net.gakkousya.lott`）。文字起こし・話者分離は常に ggml で、Python 経路は持たない（Cargo feature `vulkan` は廃止）
 - ビルド: Vulkan は `scripts\setup-build-tools.bat --vulkan` → `scripts\prepare-vulkan-bundle-windows.ps1`（音声エンジン約109MB）。Windows Editor は `scripts\setup-build-tools.bat --editor` が同じ準備スクリプトを whisper のみで実行し、`resources/speech-engines/whisper` と whisper.cpp / ggml のライセンスを収集する。Editor のバンドルに NeMo は含めない。どちらも Python と llama-server は同梱しない
 - 初回セットアップ: whisper.cpp の文字起こしモデル・VAD・Nemotron を `ggml_speech::GGML_MODEL_FILES` から取得する。固定 revision・SHA-256・サイズを使い、`.part` から再開して配置直前に検証する。Gemma 4 E4B / 12B の取得はなく、LLM 校正・全体校正も提供しない
-- マイク音声入力: Full 版と Editor 版はセットアップ済み whisper.cpp（`generate_whisper_voice_input_candidates_blocking`）を使う。フィラー例文付きの1回だけ実行し、候補1件を返す（当初は例文なしの2回目も実行して候補2としていたが、待ち時間を優先して1回にした）。Editor は常に `-ng` で CPU 実行し、音声入力パックで Whisper turbo と VAD（約1.6GB）を取得する。Gemma 音声 mmproj は不要。前後行の文脈はプロンプトに渡さない（話していない語が混ざるため）
+- マイク音声入力: Full 版と Editor 版はセットアップ済み whisper.cpp（`generate_whisper_voice_input_candidates_blocking`）を使う。文字起こし画面で選択中の言語を使い、日本語ではフィラー例文を付けて1回だけ実行し、候補1件を返す（非日本語では日本語の例文を渡さない）。当初は例文なしの2回目も実行して候補2としていたが、待ち時間を優先して1回にした。Editor は常に `-ng` で CPU 実行し、音声入力パックで Whisper turbo と VAD（約1.6GB）を取得する。Gemma 音声 mmproj は不要。前後行の文脈はプロンプトに渡さない（話していない語が混ざるため）
 - GPU: 設定タブの1つの欄で、文字起こし・話者分離・whisper.cpp による音声入力に同じ GPU を使う（`set_preferred_vulkan_gpu`）。GPU が無いときは CPU で動き、その旨を表示する
 
 未完了（次の作業）:
@@ -467,7 +471,7 @@ resources/speech-engines/nemo/<backend>/nemo-speech(.exe)   + ggml ライブラ�
 | NVIDIA を Vulkan に統一する場合の校正速度 | 過去の実測（2.3）: E4B で約2割、12B で約1割遅い。Gemma音声入力の測定値も記載 | 2026-09-28の決定により LoTT Vulkan 版は LLM 校正・全体校正・Gemma 音声入力を搭載しない。現行の音声エンジン構成と配布サイズを評価する |
 | Vulkan on NVIDIA | NVIDIA では Vulkan が CUDA より遅いことが多い | NVIDIA は CUDA 版を当面の本命とする |
 | Nemotron の成熟度 | 2026-09-23 公開、NeMo-Speech.cpp 対応は 09-24 マージ（v0.1.0）。レビューで「話者ラベル・タイムスタンプが誤る可能性」が指摘されている | commit を固定し、更新は検証後に行う |
-| 日本語の話者分離 | 対応言語に日本語が無い | 実際のカウンセリング音声で DER を測る |
+| 日本語の話者分離 | 公式資料に網羅的な対応言語一覧がない。既存アプリでは実用動作を確認 | 実際のカウンセリング音声で DER を測る |
 | 短い発話の話者 | 1.5秒未満の発話で既存との一致率が低い（78.5%） | 正解ラベルでどちらが正しいかを判定する |
 | 話者数の指定 | モデル側で指定できない | 6.2 の後処理。精度が不足すれば C API の確率を使う方式へ進む |
 | 長尺の話者分離時間・preset品質 | 2026-10-01 Arc 140T実測: 11.7分音声は `v3-streaming` 64秒 / `v3-offline` 8.4秒、58分音声は `v3-offline` 32.8秒（`v3-streaming` 未測定）。preset間で話者結果が異なり、品質未評価 | `v3-offline` を採用（6.1）。話者結果の品質を評価する |

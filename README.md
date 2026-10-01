@@ -12,9 +12,9 @@
 ## 特徴
 
 - **完全ローカル実行** — 運用時はインターネット接続不要。会話・音声データを PC 外の API へ送信しません
-- **日本語の文字起こし** — whisper.cpp（Whisper large-v3-turbo + Silero VAD）。NVIDIA / AMD / Intel の GPU を Vulkan で使い、GPU が無い PC では CPU で動作します。必要に応じて文字起こし前の音声調整（低域ノイズ除去・ノイズ除去・音量の正規化）を選べます（良質な録音では、かえって精度が下がることがあります）
+- **文字起こし** — whisper.cpp（Whisper large-v3-turbo + Silero VAD）。既定は日本語で、設定から24言語を選べます。「話者分離非対応」ラベルの言語も話者分離処理を実行します。NVIDIA / AMD / Intel の GPU を Vulkan で使い、GPU が無い PC では CPU で動作します。必要に応じて文字起こし前の音声調整（低域ノイズ除去・ノイズ除去・音量の正規化）を選べます（良質な録音では、かえって精度が下がることがあります）
 - **話者分離** — NeMo-Speech.cpp + Nemotron-3-Diarization による話者の自動識別（既定ラベル: Th / Cl / IP …）
-- **校正** — ローカルルールによる句読点の自動付与。氏名・地名など個人の特定につながりうる語も警告表示。AI（LLM）による校正・全体校正はありません
+- **校正** — 日本語の文字起こしにローカルルールで句読点を自動付与します。氏名・地名など個人の特定につながりうる語も警告表示します。AI（LLM）による校正・全体校正はありません
 - **音声入力** — 編集画面の各行でマイク録音（最大15秒）すると、ローカルの whisper.cpp で文字起こしを行い候補を1件提示（Full 版は GPU があれば GPU、無ければ CPU。Editor 版は常に CPU）
 - セグメント表の編集・句点での分割・セグメント単位の音声再生
 - Word（.docx）/ Excel（.xlsx）/ SRT字幕 / JSON形式での保存。SRTは任意のパスワードでAES-256暗号化ZIPとしても保存可能
@@ -90,8 +90,8 @@ Full 版は、Vulkan に対応した GPU が見つからない場合、自動的
 
 - Desktop: Tauri 2 (Rust) / Frontend: Angular 21 + Angular Material
 - 文字起こし: whisper.cpp（large-v3-turbo・Silero VAD、Vulkan ビルドを同梱） / 話者分離: NeMo-Speech.cpp + Nemotron-3-Diarization（Vulkan ビルドを同梱） / 音声デコード: LGPL 構成 ffmpeg CLI
-- 句読点付与: Rust のローカルルール。LLM は使用しません
-- 音声入力: whisper.cpp（フィラー例文付きで1回文字起こしし、候補1件。前後行の文脈は渡さない）
+- 句読点付与: 日本語に対する Rust のローカルルール。LLM は使用しません
+- 音声入力: whisper.cpp（選択中の言語で1回文字起こしし、候補1件。日本語ではフィラー例文を付け、前後行の文脈は渡さない）
 - Python は同梱・使用しません
 
 ## ドキュメント

@@ -18,6 +18,28 @@ pub(crate) const VAD_MODEL_FILE: &str = "ggml-silero-v6.2.0.bin";
 pub(crate) const DIAR_MODELS_SUBDIR: &str = "nemotron-3-diarization";
 pub(crate) const DIAR_MODEL_FILE: &str = "Nemotron-3-Diarization.q8_0.gguf";
 
+/// LoTT がUIから受け付ける言語コード。whisper.cpp全言語の一覧ではなく、製品側の対応言語ポリシー。
+pub(crate) const ASR_SUPPORTED_LANGUAGES: &[&str] = &[
+    "ja", "en", "zh", "hi", "te", "bn", "kn", "ko", "ar", "de", "es", "fr", "it", "pt", "ru", "fa",
+    "id", "tr", "vi", "th", "ur", "ta", "mr", "sw",
+];
+
+pub(crate) fn normalize_asr_language(value: Option<&str>) -> Result<String, String> {
+    let value = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ja")
+        .to_ascii_lowercase();
+    if ASR_SUPPORTED_LANGUAGES.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(
+            "この言語はLoTTの文字起こし対象外です。設定画面から対応言語を選んでください。"
+                .to_string(),
+        )
+    }
+}
+
 /// Vulkan 版のセットアップでダウンロードするモデル。revision を commit で固定し、SHA-256 で検証する
 /// （scripts/setup-ggml-speech-windows.ps1 / setup-ggml-speech-linux.sh と同じ値。変えるときは揃える）。
 /// どれも利用規約への同意やトークンなしで取得できる。
@@ -110,6 +132,10 @@ pub(crate) const FILLER_PROMPT: &str = "以下は日本語の会話です。 え
 /// `-mc` をこの値 + 1 にすると、例文だけを毎回付け、直前テキストは引き継がない
 /// （引き継ぎは雪崩型ハルシネーションの原因になるため、アプリでは常に切っている）。
 pub(crate) const FILLER_PROMPT_TOKENS: u32 = 55;
+
+pub(crate) fn uses_filler_prompt(language: &str, keep_fillers: bool) -> bool {
+    keep_fillers && language.eq_ignore_ascii_case("ja")
+}
 
 /// これより短い行は、隣の同じ話者の行へつなぐ（1秒未満の行は再生しても聞き取れないため）。
 const SHORT_ROW_SECONDS: f64 = 1.0;
@@ -259,9 +285,11 @@ pub(crate) fn whisper_cli_args(
     threads: usize,
 ) -> Vec<OsString> {
     let beam = WHISPER_BEAM_SIZE.to_string();
+    let use_filler_prompt = uses_filler_prompt(language, keep_fillers);
     // 直前テキストの引き継ぎは常に切る（condition_on_previous_text=False 相当）。
-    // フィラーを残す場合は例文だけを毎回付けるため、文脈長を例文のトークン数 + 1 に合わせる。
-    let max_context = if keep_fillers {
+    // 日本語では検証済みの例文だけを毎回付けるため、文脈長を例文のトークン数 + 1 に合わせる。
+    // 他言語に日本語の例文を渡さない。
+    let max_context = if use_filler_prompt {
         (FILLER_PROMPT_TOKENS + 1).to_string()
     } else {
         "0".to_string()
@@ -301,11 +329,12 @@ pub(crate) fn whisper_cli_args(
         "-pp".into(),
     ];
     if keep_fillers {
-        // 例文を付けるとセグメントが長くまとまるため、話者交代位置で分割できるよう
-        // トークン単位の時刻（-ojf）も出力する。
-        args.extend(
-            ["--prompt", FILLER_PROMPT, "--carry-initial-prompt", "-ojf"].map(OsString::from),
-        );
+        // 日本語では例文を付ける。例文の有無にかかわらず、フィラー保持を有効にする場合は
+        // 話者交代位置で分割できるようトークン単位の時刻（-ojf）も出力する。
+        if use_filler_prompt {
+            args.extend(["--prompt", FILLER_PROMPT, "--carry-initial-prompt"].map(OsString::from));
+        }
+        args.push("-ojf".into());
     }
     if !use_gpu {
         args.push("-ng".into());
@@ -879,6 +908,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn language_policy_accepts_only_the_configured_asr_languages() {
+        assert_eq!(ASR_SUPPORTED_LANGUAGES.len(), 24);
+        assert_eq!(normalize_asr_language(None).unwrap(), "ja");
+        assert_eq!(normalize_asr_language(Some(" EN ")).unwrap(), "en");
+        for language in ASR_SUPPORTED_LANGUAGES {
+            assert_eq!(normalize_asr_language(Some(language)).unwrap(), *language);
+        }
+        for unsupported in ["haw", "yue", "la", "fo", "auto", "english"] {
+            assert!(
+                normalize_asr_language(Some(unsupported)).is_err(),
+                "{unsupported}"
+            );
+        }
+    }
+
+    #[test]
     fn model_file_mapping() {
         assert_eq!(whisper_model_file("turbo"), Some("ggml-large-v3-turbo.bin"));
         assert_eq!(whisper_model_file("large-v3"), Some("ggml-large-v3.bin"));
@@ -1169,6 +1214,38 @@ mod tests {
         assert!(s.contains(&"--carry-initial-prompt".to_string()));
         assert!(s.contains(&"-ojf".to_string()));
         assert!(s.contains(&FILLER_PROMPT.to_string()));
+    }
+
+    #[test]
+    fn filler_prompt_is_only_used_for_japanese() {
+        assert!(uses_filler_prompt("ja", true));
+        assert!(uses_filler_prompt("JA", true));
+        assert!(!uses_filler_prompt("en", true));
+        assert!(!uses_filler_prompt("ja", false));
+    }
+
+    #[test]
+    fn whisper_args_for_non_japanese_keep_word_timestamps_without_japanese_prompt() {
+        let args = whisper_cli_args(
+            Path::new("/m/model.bin"),
+            Path::new("/m/vad.bin"),
+            Path::new("/t/in.wav"),
+            Path::new("/t/out"),
+            "en",
+            true,
+            true,
+            8,
+        );
+        let s: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let s = s.join(" ");
+        assert!(s.contains("-mc 0"));
+        assert!(s.contains("-ojf"));
+        assert!(!s.contains("--prompt"));
+        assert!(!s.contains("--carry-initial-prompt"));
+        assert!(!s.contains(FILLER_PROMPT));
     }
 
     /// 評価用: 既に実行した whisper-cli / nemo-speech の出力 JSON を、アプリと同じ変換・後処理で最終行へ変換する。

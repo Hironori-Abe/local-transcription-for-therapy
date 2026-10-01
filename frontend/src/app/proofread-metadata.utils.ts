@@ -50,6 +50,10 @@ export interface ExportTranscriptionDatasetRow {
 
 export interface ExportTranscriptionPayload {
   audioFileName: string;
+  /** Older engine exports may include language metadata; only language is restored on import. */
+  settings?: {
+    language?: string;
+  };
   speakerDataset: ExportSpeakerDatasetRow[];
   transcriptionDataset: ExportTranscriptionDatasetRow[];
   proofreadCompleted: boolean;
@@ -122,6 +126,7 @@ export interface ImportedTranscriptionSegment {
 
 export interface ImportedTranscriptionState {
   text: string;
+  language?: string;
   segments: ImportedTranscriptionSegment[];
   editedTextBySegmentId: Record<number, string>;
   speakerBySegmentId: Record<number, string>;
@@ -373,8 +378,11 @@ export function buildImportedTranscriptionStateValue(
     if (key && !speakerAliasMap[key]) speakerAliasMap[key] = key;
   }
 
+  const language = normalizeImportedLanguageCodeValue(payload.settings?.language);
+
   return {
     text: segments.map((segment) => segment.text).join(' ').trim(),
+    ...(language ? { language } : {}),
     segments,
     editedTextBySegmentId,
     speakerBySegmentId,
@@ -384,6 +392,23 @@ export function buildImportedTranscriptionStateValue(
     llmSegmentStatus,
     proofreadCompleted: payload.proofreadCompleted === true
   };
+}
+
+/** Retain only compact ASCII language codes from imported result metadata. */
+export function normalizeImportedLanguageCodeValue(valueRaw: unknown): string | undefined {
+  if (typeof valueRaw !== 'string') return undefined;
+  const value = valueRaw.trim().toLowerCase();
+  return /^[a-z]{2,3}$/.test(value) ? value : undefined;
+}
+
+/** Prefer result metadata, then the current setting, and finally Japanese for proofreading. */
+export function resolveProofreadLanguageValue(
+  resultLanguageRaw: unknown,
+  configuredLanguageRaw: unknown
+): string {
+  return normalizeImportedLanguageCodeValue(resultLanguageRaw)
+    ?? normalizeImportedLanguageCodeValue(configuredLanguageRaw)
+    ?? 'ja';
 }
 
 export function reconcileRetranscriptionStateValue(
@@ -578,6 +603,12 @@ export function parseImportedTranscriptionJsonValue(
     return { ok: false, error: 'proofreadCompleted は真偽値である必要があります。' };
   }
 
+  const settingsRaw = obj['settings'];
+  const settingsObject = settingsRaw && typeof settingsRaw === 'object' && !Array.isArray(settingsRaw)
+    ? settingsRaw as Record<string, unknown>
+    : null;
+  const language = normalizeImportedLanguageCodeValue(settingsObject?.['language']);
+
   const speakerDataset: ExportSpeakerDatasetRow[] = [];
   for (let i = 0; i < obj['speakerDataset'].length; i += 1) {
     const row = obj['speakerDataset'][i];
@@ -667,6 +698,7 @@ export function parseImportedTranscriptionJsonValue(
     ok: true,
     value: {
       audioFileName: obj['audioFileName'],
+      ...(language ? { settings: { language } } : {}),
       speakerDataset,
       transcriptionDataset,
       proofreadCompleted: obj['proofreadCompleted'] === true

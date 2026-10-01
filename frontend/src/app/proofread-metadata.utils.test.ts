@@ -11,10 +11,12 @@ import {
   isPunctuationOnlyProofreadReasonValue,
   mergeConsecutiveSpeakerSegmentsValue,
   mergeSegmentTextValue,
+  normalizeImportedLanguageCodeValue,
   normalizeLintIssuesValue,
   normalizeProofreadMetadataValue,
   normalizeSensitiveEntityMetadataValue,
   parseImportedTranscriptionJsonValue,
+  resolveProofreadLanguageValue,
   reconcileRetranscriptionStateValue
 } from './proofread-metadata.utils.ts';
 
@@ -484,6 +486,26 @@ test('parseImportedTranscriptionJsonValue preserves optional field defaults', ()
   assert.equal(parsed.value.proofreadCompleted, false);
   assert.equal(parsed.value.transcriptionDataset[0]?.proofread, undefined);
   assert.equal(parsed.value.transcriptionDataset[0]?.llmProofread, undefined);
+});
+
+test('imported language metadata reaches proofreading without being limited by current ASR choices', () => {
+  const parsed = parseImportedTranscriptionJsonValue(JSON.stringify({
+    audioFileName: 'english-session.wav',
+    settings: { language: ' FR ' },
+    speakerDataset: [],
+    transcriptionDataset: [{ startTime: 0, endTime: 1, speakerValue: '', content: 'bonjour' }]
+  }));
+
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const imported = buildImportedTranscriptionStateValue(parsed.value);
+  assert.equal(imported.language, 'fr');
+  assert.equal(resolveProofreadLanguageValue(imported.language, 'ja'), 'fr');
+  assert.equal(resolveProofreadLanguageValue(undefined, 'YUE'), 'yue');
+  assert.equal(resolveProofreadLanguageValue(undefined, undefined), 'ja');
+  assert.equal(normalizeImportedLanguageCodeValue('  KNN  '), 'knn');
+  assert.equal(normalizeImportedLanguageCodeValue('zh-Hant'), undefined);
 });
 
 test('parseImportedTranscriptionJsonValue preserves import validation messages', () => {

@@ -236,6 +236,9 @@ test('speaker color classes accept canonical keys and cap the palette at five co
 test('playback shortcut matching prefers physical codes and preserves key fallbacks', () => {
   assert.equal(matchPlaybackShortcutCodeValue('KeyA', 'x'), 'KeyA');
   assert.equal(matchPlaybackShortcutCodeValue('Space', 'Process'), 'Space');
+  assert.equal(matchPlaybackShortcutCodeValue('KeyP', 'Process'), 'KeyP');
+  assert.equal(matchPlaybackShortcutCodeValue('', 'p'), 'KeyP');
+  assert.equal(matchPlaybackShortcutCodeValue('Unidentified', 'P'), 'KeyP');
   assert.equal(matchPlaybackShortcutCodeValue('', 'A'), 'KeyA');
   assert.equal(matchPlaybackShortcutCodeValue('Unknown', 'd'), 'KeyD');
   assert.equal(matchPlaybackShortcutCodeValue(undefined, 'E'), 'KeyE');

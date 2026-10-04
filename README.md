@@ -81,7 +81,7 @@ Full 版は、Vulkan に対応した GPU が見つからない場合、自動的
 1. 音声ファイルを選択して文字起こしを実行
 2. 音声ファイルを聞きながら、結果の会話内容・話者を編集（話者ラベル既定値: `SPEAKER_00 → Th`、`SPEAKER_01 → Cl` など）
    - 編集中は、セットアップ済み（Editor 版は音声入力パック導入済み）の whisper.cpp モデルで、マイク音声の候補を挿入できます
-   - `Ctrl+Shift+Space`（連続再生 / 停止）、`Ctrl+Shift+A` / `D`（5秒戻す / 進める）、`Ctrl+Shift+E`（話者切替）、`Ctrl+Shift+M`（音声入力）を利用できます
+   - `Ctrl+Shift+Space` または `Ctrl+Shift+P`（連続再生 / 一時停止 / 再開）、`Ctrl+Shift+A` / `D`（5秒戻す / 進める）、`Ctrl+Shift+E`（話者切替）、`Ctrl+Shift+M`（音声入力）を利用できます。IMEがSpaceの操作を使用する環境では `Ctrl+Shift+P` をお使いください
 3. Word / Excel / SRT字幕 / JSON形式で保存
 
 表示テーマはタブ行左端のボタンで「システムに合わせる」（初期値）/ ライト / ダークを切り替えられ、選択内容は次回起動時にも引き継がれます。

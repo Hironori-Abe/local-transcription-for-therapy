@@ -85,7 +85,7 @@ On a PC where an older edition was installed, the Settings tab of the Full editi
 1. Select an audio file and run transcription
 2. Listen to the audio while editing the conversation text and speaker labels. Default speaker labels include `SPEAKER_00 -> Th` and `SPEAKER_01 -> Cl`
    - While editing, you can insert microphone-input candidates produced by the installed whisper.cpp model (for Editor, after installing the voice input pack)
-   - Shortcuts include `Ctrl+Shift+Space` (continuous playback / pause), `Ctrl+Shift+A` / `D` (seek back / forward 5 seconds), `Ctrl+Shift+E` (change speaker), and `Ctrl+Shift+M` (voice input)
+   - Shortcuts include `Ctrl+Shift+Space` or `Ctrl+Shift+P` (continuous playback / pause / resume), `Ctrl+Shift+A` / `D` (seek back / forward 5 seconds), `Ctrl+Shift+E` (change speaker), and `Ctrl+Shift+M` (voice input). Use `Ctrl+Shift+P` when your IME uses the Space shortcut
 3. Save as Word, Excel, SRT subtitles, or JSON
 
 Use the button at the left of the tab row to cycle among System (default), Light, and Dark themes. The selection is preserved across launches.

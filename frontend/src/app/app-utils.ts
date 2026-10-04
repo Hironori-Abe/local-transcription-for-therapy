@@ -17,7 +17,7 @@ export function isBuildVariantValue(value: unknown): value is BuildVariant {
 
 export type NormalizedThemeMode = 'system' | 'light' | 'dark';
 export type NormalizedTranscriptionDevice = 'cuda' | 'cpu';
-export type PlaybackShortcutCode = 'Space' | 'KeyA' | 'KeyD' | 'KeyE';
+export type PlaybackShortcutCode = 'Space' | 'KeyP' | 'KeyA' | 'KeyD' | 'KeyE';
 export type LocationDetectionMode = 'commonOnly' | 'selectedRegions';
 export type LocationAreaCode =
   | 'hokkaidoTohoku'
@@ -182,7 +182,7 @@ export function matchPlaybackShortcutCodeValue(
   codeRaw: string | null | undefined,
   keyRaw: string | null | undefined
 ): PlaybackShortcutCode | null {
-  const knownCodes: ReadonlyArray<PlaybackShortcutCode> = ['Space', 'KeyA', 'KeyD', 'KeyE'];
+  const knownCodes: ReadonlyArray<PlaybackShortcutCode> = ['Space', 'KeyP', 'KeyA', 'KeyD', 'KeyE'];
   const code = codeRaw as PlaybackShortcutCode;
   if (knownCodes.includes(code)) {
     return code;
@@ -191,6 +191,8 @@ export function matchPlaybackShortcutCodeValue(
     case ' ':
     case 'spacebar':
       return 'Space';
+    case 'p':
+      return 'KeyP';
     case 'a':
       return 'KeyA';
     case 'd':

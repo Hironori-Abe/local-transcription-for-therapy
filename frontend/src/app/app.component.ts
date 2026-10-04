@@ -539,7 +539,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly playbackRate = signal<number>(1.0);
   readonly shortcutHints: ReadonlyArray<string> = [
     'Ctrl+Shift+F（置換）',
-    'Ctrl+Shift+Space（連続再生 / 一時停止 / 再開）',
+    'Ctrl+Shift+Space or P（連続再生 / 一時停止 / 再開）',
     'Ctrl+Shift+A（5秒戻す）',
     'Ctrl+Shift+D（5秒進める）',
     'Ctrl+Shift+E（話者を切替）',
@@ -1481,6 +1481,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     event.stopPropagation();
     switch (code) {
       case 'Space':
+      case 'KeyP':
         this.handlePlaybackToggleShortcut();
         break;
       case 'KeyA':
@@ -1554,7 +1555,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     await this.toggleVoiceInputForSegment(targetSegment.id, textarea);
   }
 
-  /** Ctrl+Shift+Space: 連続再生の再生 / 一時停止をトグルする。 */
+  /** Ctrl+Shift+Space / P: 連続再生の再生 / 一時停止 / 再開をトグルする。 */
   private handlePlaybackToggleShortcut(): void {
     if (this.isPlaybackDisabled() || !this.selectedAudioPath()) {
       this.snackBar.open('音声ファイルが読み込まれていません', undefined, { duration: 2200 });

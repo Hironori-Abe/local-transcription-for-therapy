@@ -58,6 +58,7 @@ bash scripts/run-dev-editor.sh
 - `setup-dev.sh` のオプション: `-y`（確認なしで導入）/ `--skip-apt` / `--skip-rust` / `--only-rust` / `--skip-engines` / `--skip-models` / `--editor`。Python の venv・pip・PyTorch・llama.cpp は使いません（`python3` は ffmpeg 取得スクリプトを動かすためだけに使います）。
 - 導入するのは Tauri / WebKitGTK / GStreamer（再生用）/ Vulkan ヘッダーと `glslc` / ビルドツール、npm 依存、Rustup です。`sudo` が必要です。権限昇格を禁止した端末（Codex / VS Code の統合端末など）では `NoNewPrivs=1` で止まるため、独立した端末で実行してください。
 - 音声エンジンは `scripts/setup-ggml-speech-linux.sh` が固定 commit から Vulkan でビルドし、`python_sidecar/speech-engines/{whisper,nemo}/` へ配置します（オプション: `--backend vulkan|cpu`、`--engines-dir`、`--skip-nemo`、`--skip-models`）。モデルは固定 revision・SHA-256 検証で `python_sidecar/models/` へ取得します。詳細は [ggml-speech-engine-design.md](ggml-speech-engine-design.md) を参照してください。
+- 単体で音声エンジンのセットアップを実行する場合も `patchelf` は必須です（Ubuntu: `sudo apt-get install patchelf`、Arch / CachyOS: `sudo pacman -S --needed patchelf`）。未導入時はビルド開始前に終了します。以前の警告で RUNPATH 設定・libgomp 同梱を省略したエンジンは、導入後に `bash scripts/setup-ggml-speech-linux.sh --finalize-only` で補修できます。再コンパイル・モデル取得は行いません。Editor 用は `--skip-nemo`、配置先を変更した場合は `--engines-dir DIR` も指定してください。
 - `run-dev.sh` は Angular dev server（`127.0.0.1:4200`）と `tauri dev`（`tauri.dev.linux.override.json`）を起動します。`run-dev-editor.sh` は `127.0.0.1:4203` と `tauri.editor.linux.override.json` + `tauri.editor.dev.linux.override.json` で起動します。
 - 実行時には、ホストの `libvulkan.so.1`（Ubuntu では `libvulkan1`）と、GPU 用の Vulkan ドライバー（Mesa または NVIDIA）が必要です。GPU が見えない場合は CPU で処理します（[トラブルシューティング](troubleshooting.md)）。
 - 配布物（deb / AppImage）のビルドは [release-build-linux.md](release-build-linux.md) を参照してください。
@@ -155,3 +156,10 @@ Python のコードは持ちません。`python_sidecar/` の名前は、開発�
 - 配布ビルド（Windows NSIS）: [release-build-windows.md](release-build-windows.md)
 - トラブルシューティング: [troubleshooting.md](troubleshooting.md)
 - 安定領域・検討課題・コーディング規約: [AGENTS.md](../AGENTS.md)
+
+## 再生状態と旧データ案内
+
+- 行の連続再生・ループ再生、再生ショートカット、下部の再生コントロールは `PlaybackSession`（`frontend/src/app/playback-state.ts`）の状態を共有します。再生中は一時停止、一時停止中は同じ位置から再開します。行ボタンのアイコン・ツールチップと下部コントロールもこの状態から決めます。
+- 完全停止は音声の変更・行削除・再生エラーなどで行い、再生対象・キューを解除します。非同期の読み込み／シーク／play 完了は世代で照合し、停止済みの要求から再生を始めません。WebKitGTK の非同期 seek 待ちと Windows の再生経路を維持しています。
+- 旧データの検出は、容量が確認できた空の項目を通知から除きます。小容量は B / KB 単位、読み取り失敗やリンクなど測定できない項目は「容量不明」と表示します。容量の `null` を 0 と扱わず、削除対象は引き続き Rust 側で決めます。
+- 回帰確認は `cd frontend && npm test` と、開発用 Linux override を指定した `cargo test --manifest-path src-tauri/Cargo.toml legacy_data`。Full / Editor のフロントビルドでもテンプレートと型を確認します。Textarea フォーカス中のショートカット受付問題は別途調査対象です。

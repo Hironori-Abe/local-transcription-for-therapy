@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ggml 音声エンジン（whisper.cpp + NeMo-Speech.cpp / Nemotron-3-Diarization）を開発環境へ準備する。
 #
-#   bash scripts/setup-ggml-speech-linux.sh [--backend vulkan|cpu] [--engines-dir DIR] [--skip-build] [--skip-models] [--skip-nemo]
+#   bash scripts/setup-ggml-speech-linux.sh [--backend vulkan|cpu] [--engines-dir DIR] [--skip-build] [--skip-models] [--skip-nemo] [--finalize-only]
 #
 # - 固定 commit からソースビルドし、既定では python_sidecar/speech-engines/<engine>/ へ配置する
 #   （--engines-dir でリリースビルド用の src-tauri/resources/speech-engines などへ変更できる）
 # - --skip-nemo: NeMo-Speech.cpp のビルドと Nemotron モデル取得を省く（Editor 版は whisper.cpp のみ）
+# - --finalize-only: 配置済みエンジンの RUNPATH・libgomp・ライセンスを補修する（ビルド・モデル取得なし）
 # - モデルは固定 revision から取得し、SHA-256 を検証して python_sidecar/models/ へ配置する
 # - ネットワークを使うのはこのセットアップ時だけ。アプリの実行時は通信しない
 # - システムに無いビルド依存（SPIRV-Headers / sentencepiece）はビルドキャッシュ内の prefix へ入れる（sudo 不要）
@@ -15,6 +16,7 @@ BACKEND="vulkan"
 SKIP_BUILD=0
 SKIP_MODELS=0
 SKIP_NEMO=0
+FINALIZE_ONLY=0
 ENGINES_DIR_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,6 +24,7 @@ while [ $# -gt 0 ]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-models) SKIP_MODELS=1; shift ;;
     --skip-nemo) SKIP_NEMO=1; shift ;;
+    --finalize-only) FINALIZE_ONLY=1; SKIP_BUILD=1; SKIP_MODELS=1; shift ;;
     --engines-dir) ENGINES_DIR_ARG="${2:-}"; [ -n "$ENGINES_DIR_ARG" ] || { echo "--engines-dir にはディレクトリを指定してください" >&2; exit 2; }; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -96,32 +99,74 @@ build_deps() {
 # 実行ファイルと同じディレクトリのライブラリを RUNPATH=$ORIGIN で読ませ、OpenMP ランタイム（libgomp）を隣へ置く。
 # システムの libvulkan.so.1 は同梱しない（GPU ドライバーの ICD はホストのローダーが解決する）。
 # Windows 版が VC++ ランタイム（OpenMP 含む）を exe の隣へ置くのと同じ考え方で、libgomp が無い最小構成のホストでも動かす。
-finalize_engine_bin() { # bin_dir
-  local bin="$1" f
-  if command -v patchelf >/dev/null 2>&1; then
-    local gomp
-    gomp="$( (ldd "$bin"/* 2>/dev/null || true) | awk '/libgomp[.]so/ && $3 ~ /^\// { print $3; exit }' || true)"
-    if [ -n "$gomp" ] && [ ! -e "$bin/$(basename "$gomp")" ]; then
-      cp -L "$gomp" "$bin/"
-      log "libgomp を同梱: $(basename "$gomp")"
-      # 同梱するならライセンス（GPL-3.0 + GCC Runtime Library Exception）の本文も添える
-      local gomp_copyright
-      gomp_copyright="$(ls /usr/share/doc/libgomp1/copyright 2>/dev/null || true)"
-      if [ -z "$gomp_copyright" ]; then
-        echo "libgomp のライセンス本文（/usr/share/doc/libgomp1/copyright）が見つかりません" >&2
-        exit 1
-      fi
-      cp "$gomp_copyright" "$bin/LICENSE-libgomp.txt"
+bundle_gomp_license() { # bin_dir
+  local bin="$1" exception="" gpl="" f
+  if [ -r /usr/share/doc/libgomp1/copyright ]; then
+    # Debian の copyright は GPLv3 本文を common-licenses へ参照するだけなので、本文も添える。
+    if [ ! -r /usr/share/common-licenses/GPL-3 ]; then
+      echo "libgomp の GPLv3 本文（/usr/share/common-licenses/GPL-3）が見つかりません" >&2
+      exit 1
     fi
-    for f in "$bin"/*; do
-      [ -f "$f" ] && [ ! -L "$f" ] && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-    done
+    cat /usr/share/doc/libgomp1/copyright /usr/share/common-licenses/GPL-3 >"$bin/LICENSE-libgomp.txt"
   else
-    log "警告: patchelf が無いため RUNPATH の設定と libgomp の同梱を省きました（配布ビルドでは必須）"
+    # Arch / CachyOS（gcc-libs から libgomp へ分割された構成も含む）。
+    for f in /usr/share/licenses/{libgomp,gcc-libs,gcc}/RUNTIME.LIBRARY.EXCEPTION; do
+      if [ -r "$f" ]; then exception="$f"; break; fi
+    done
+    for f in /usr/share/licenses/spdx/GPL-3.0-or-later.txt /usr/share/licenses/common/GPL3/license.txt; do
+      if [ -r "$f" ]; then gpl="$f"; break; fi
+    done
+    if [ -z "$exception" ] || [ -z "$gpl" ]; then
+      echo "libgomp の GPLv3 本文・GCC Runtime Library Exception が見つかりません（Arch: licenses / libgomp または gcc-libs を確認）" >&2
+      exit 1
+    fi
+    cat "$gpl" "$exception" >"$bin/LICENSE-libgomp.txt"
   fi
+}
+
+finalize_engine_bin() { # bin_dir
+  local bin="$1" f gomp deps missing
+  local elf_files=()
+  for f in "$bin"/*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    [ "$(head -c 4 "$f")" = $'\177ELF' ] || continue
+    elf_files+=("$f")
+  done
+  if [ "${#elf_files[@]}" -eq 0 ]; then
+    echo "ELF ファイルがありません: $bin" >&2
+    exit 1
+  fi
+  deps="$(LD_LIBRARY_PATH="$bin" ldd "${elf_files[@]}" 2>/dev/null || true)"
+  if grep -q 'libgomp[.]so' <<<"$deps"; then
+    gomp="$(awk '/libgomp[.]so[.]1 =>/ && $3 ~ /^\// { if (!path) path=$3 } END { print path }' <<<"$deps")"
+    if [ -z "$gomp" ] || [ ! -r "$gomp" ]; then
+      echo "libgomp.so.1 が見つかりません: $bin" >&2
+      exit 1
+    fi
+    bundle_gomp_license "$bin"
+    if [ ! -e "$bin/libgomp.so.1" ]; then
+      cp -L "$gomp" "$bin/libgomp.so.1"
+      elf_files+=("$bin/libgomp.so.1")
+      log "libgomp を同梱: libgomp.so.1"
+    fi
+  fi
+  # ライセンスなどのテキストは除外し、ELF の失敗は必ず検出する。
+  for f in "${elf_files[@]}"; do
+    if ! patchelf --set-rpath '$ORIGIN' "$f"; then
+      echo "RUNPATH の設定に失敗しました: $f" >&2
+      exit 1
+    fi
+    if [ "$(patchelf --print-rpath "$f")" != '$ORIGIN' ]; then
+      echo "RUNPATH の検証に失敗しました: $f" >&2
+      exit 1
+    fi
+  done
   # 隣のライブラリで解決できない依存を検査する（libvulkan.so.1 だけはホスト側で解決する前提）
-  local deps missing
-  deps="$(LD_LIBRARY_PATH="$bin" ldd "$bin"/* 2>/dev/null || true)"
+  deps="$(env -u LD_LIBRARY_PATH ldd "${elf_files[@]}" 2>/dev/null || true)"
+  if [ -z "$deps" ]; then
+    echo "共有ライブラリの検査に失敗しました: $bin" >&2
+    exit 1
+  fi
   missing="$(awk '/not found/ && !/libvulkan[.]so[.]1/ { print $1 }' <<<"$deps" | sort -u | paste -sd' ' -)"
   if [ -n "$missing" ]; then
     echo "解決できない共有ライブラリがあります: $missing" >&2
@@ -130,6 +175,21 @@ finalize_engine_bin() { # bin_dir
   if [ "$BACKEND" = "vulkan" ] && ! grep -q 'libvulkan[.]so[.]1' <<<"$deps"; then
     echo "警告: Vulkan ビルドなのに libvulkan.so.1 へ依存していません: $bin" >&2
   fi
+}
+
+finalize_existing_engine() { # engine executable
+  local dest="$ENGINES_DIR/$1"
+  if [ ! -f "$dest/bin/$2" ]; then
+    echo "補修対象のエンジンがありません: $dest/bin/$2" >&2
+    exit 1
+  fi
+  # 補修失敗時にも既存エンジンを残す。
+  rm -rf "$dest.tmp"
+  cp -a "$dest" "$dest.tmp"
+  finalize_engine_bin "$dest.tmp/bin"
+  rm -rf "$dest"
+  mv "$dest.tmp" "$dest"
+  log "補修完了: $1（RUNPATH・libgomp・ライセンス検査済み）"
 }
 
 build_whisper() {
@@ -194,6 +254,19 @@ download_models() {
   done
 }
 
+if [ "$SKIP_BUILD" -eq 0 ] || [ "$FINALIZE_ONLY" -eq 1 ]; then
+  if ! command -v patchelf >/dev/null 2>&1; then
+    echo "patchelf が必要です。Ubuntu: sudo apt-get install patchelf / Arch・CachyOS: sudo pacman -S --needed patchelf。導入後に再実行してください。" >&2
+    exit 1
+  fi
+  need ldd
+fi
+if [ "$FINALIZE_ONLY" -eq 1 ]; then
+  finalize_existing_engine whisper whisper-cli
+  [ "$SKIP_NEMO" -eq 1 ] || finalize_existing_engine nemo nemo-speech
+  log "補修完了（ビルド・モデル取得なし）"
+  exit 0
+fi
 need git; need curl; need sha256sum
 mkdir -p "$WORK/src" "$WORK/build" "$LOGS" "$ENGINES_DIR"
 if [ "$SKIP_BUILD" -eq 0 ]; then

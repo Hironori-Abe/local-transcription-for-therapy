@@ -66,6 +66,7 @@ custom-protocol = ["tauri/custom-protocol"]
 
 # WebView2 のクラッシュダンプが Microsoft へ自動送信されないよう、
 # EnvironmentOptions を設定する最小パッチを適用した Wry。
+# WebKitGTK の JavaScript 実行は非推奨 API を evaluate_javascript に置換（詳細は vendor/wry/LOTT_PATCH.md）。
 # 上流で同等の設定が公開されたら crates.io 版へ戻す。
 [patch.crates-io]
 wry = { path = "../vendor/wry" }

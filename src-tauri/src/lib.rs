@@ -4809,6 +4809,40 @@ mod tests {
     }
 
     #[test]
+    fn legacy_data_notice_ignores_empty_items_but_keeps_small_files() {
+        let root = env::temp_dir().join(private_temp_name("legacy-data-test"));
+        fs::create_dir_all(root.join("empty-dir/nested")).unwrap();
+        fs::write(root.join("empty-file"), b"").unwrap();
+        fs::write(root.join("small-file"), b"x").unwrap();
+        let candidates = ["empty-dir", "empty-file", "small-file", "missing"]
+            .into_iter().map(|name| (name.to_string(), root.join(name))).collect();
+        let items = existing_legacy_data_items(candidates);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "small-file");
+        assert_eq!(items[0].bytes, Some(1));
+        assert_eq!(dir_size_bytes(&root.join("missing")), None);
+        let unknown = serde_json::to_value(LegacyDataItem {
+            label: "unknown".into(), path: "not-read".into(), bytes: None,
+        }).unwrap();
+        assert!(unknown["bytes"].is_null());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_data_does_not_follow_links_or_report_them_as_empty() {
+        let root = env::temp_dir().join(private_temp_name("legacy-link-test"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("target"), b"keep").unwrap();
+        std::os::unix::fs::symlink(root.join("target"), root.join("link")).unwrap();
+        let items = existing_legacy_data_items(vec![("link".into(), root.join("link"))]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].bytes, None);
+        assert_eq!(dir_size_bytes(&root), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn editor_legacy_data_candidates_exclude_current_speech_models() {
         let candidates = editor_legacy_data_candidates(
             Some(Path::new("app-data/models")),
@@ -5059,6 +5093,38 @@ mod tests {
         assert!(decide(&[("LOTT_ENABLE_DMABUF_RENDERER", "0")], true));
         assert!(!decide(&[("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "0")], true));
         assert!(!decide(&[("WEBKIT_DISABLE_DMABUF_RENDERER", "1")], true));
+    }
+
+    #[test]
+    fn webkit_shm_overrides_keep_compositing_on_ubuntu_nvidia() {
+        use std::collections::HashMap;
+        let decide = |vars: &[(&str, &str)], nvidia: bool| {
+            let env: HashMap<String, String> = vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            webkit_shm_env_overrides(|name| env.get(name).cloned(), nvidia)
+        };
+        assert_eq!(
+            decide(&[], true),
+            vec![
+                ("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1"),
+                ("WEBKIT_FORCE_DMABUF_RENDERER", "1"),
+            ]
+        );
+        // Ubuntu の NVIDIA 判定だけを回避する追加値も、ユーザー指定を上書きしない。
+        assert_eq!(
+            decide(&[("WEBKIT_FORCE_DMABUF_RENDERER", "0")], true),
+            vec![("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1")]
+        );
+        for vars in [
+            vec![("LOTT_ENABLE_DMABUF_RENDERER", "1")],
+            vec![("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "0")],
+            vec![("WEBKIT_DISABLE_DMABUF_RENDERER", "1")],
+        ] {
+            assert!(decide(&vars, true).is_empty());
+        }
+        assert!(decide(&[], false).is_empty());
     }
 
     #[test]
@@ -6415,14 +6481,35 @@ where
     nvidia_present
 }
 
+/// Ubuntu の disable-nvidia-dmabuf.patch は SHM を追加する前に NVIDIA 判定で戻る。
+/// FORCE_DMABUF はこの判定だけを回避し、FORCE_SHM と必ず組み合わせて hardware transport を避ける。
+/// 参照: https://bugs.debian.org/1142771（修正前の Ubuntu 24.04 WebKitGTK も同じパッチ）。
+#[cfg(any(target_os = "linux", test))]
+fn webkit_shm_env_overrides<F>(read_env: F, nvidia_present: bool) -> Vec<(&'static str, &'static str)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if !should_force_webkit_shm(&read_env, nvidia_present) {
+        return Vec::new();
+    }
+    let mut overrides = vec![("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1")];
+    if read_env("WEBKIT_FORCE_DMABUF_RENDERER").is_none() {
+        overrides.push(("WEBKIT_FORCE_DMABUF_RENDERER", "1"));
+    }
+    overrides
+}
+
 /// `run()` の最初に呼ぶ。GTK / WebKit の初期化前でないと効かない。
 #[cfg(target_os = "linux")]
 fn configure_webkit_dmabuf_workaround() {
     let nvidia_present = Path::new("/proc/driver/nvidia/version").exists();
-    if should_force_webkit_shm(|name| env::var(name).ok(), nvidia_present) {
-        env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+    let overrides = webkit_shm_env_overrides(|name| env::var(name).ok(), nvidia_present);
+    if !overrides.is_empty() {
+        for (name, value) in &overrides {
+            env::set_var(name, value);
+        }
         eprintln!(
-            "NVIDIA ドライバーを検出したため WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 を設定しました（無効化: LOTT_ENABLE_DMABUF_RENDERER=1）"
+            "NVIDIA ドライバー向けの WebKit SHM 合成器設定を適用しました: {overrides:?}（無効化: LOTT_ENABLE_DMABUF_RENDERER=1）"
         );
     }
 }
@@ -7016,27 +7103,21 @@ struct VulkanGpuList {
 struct LegacyDataItem {
     label: String,
     path: String,
-    bytes: u64,
+    bytes: Option<u64>,
 }
 
-fn dir_size_bytes(path: &Path) -> u64 {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return 0;
-    };
+// Do not follow links outside the old-data directory. Unreadable entries are unknown.
+fn dir_size_bytes(path: &Path) -> Option<u64> {
+    let meta = fs::symlink_metadata(path).ok()?;
     if meta.is_file() {
-        return meta.len();
+        return Some(meta.len());
     }
     if !meta.is_dir() {
-        return 0;
+        return None;
     }
-    fs::read_dir(path)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| dir_size_bytes(&e.path()))
-                .sum()
-        })
-        .unwrap_or(0)
+    fs::read_dir(path).ok()?.try_fold(0_u64, |sum, entry| {
+        sum.checked_add(dir_size_bytes(&entry.ok()?.path())?)
+    })
 }
 
 /// Editor / Vulkan 版で使わなくなった旧版データ。
@@ -7164,10 +7245,17 @@ fn existing_legacy_data_items(candidates: Vec<(String, PathBuf)>) -> Vec<LegacyD
     candidates
         .into_iter()
         .filter(|(_, path)| path.exists())
-        .map(|(label, path)| LegacyDataItem {
-            label,
-            bytes: dir_size_bytes(&path),
-            path: path.to_string_lossy().into_owned(),
+        .filter_map(|(label, path)| {
+            let bytes = dir_size_bytes(&path);
+            // Empty old directories cannot free space and do not need a cleanup notice.
+            if bytes == Some(0) {
+                return None;
+            }
+            Some(LegacyDataItem {
+                label,
+                bytes,
+                path: path.to_string_lossy().into_owned(),
+            })
         })
         .collect()
 }

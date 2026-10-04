@@ -79,3 +79,66 @@ test('shortcut target prioritizes visible playing, focused, then first row', () 
   assert.equal(resolveShortcutTarget(rows, 99, 88)?.id, 10);
   assert.equal(resolveShortcutTarget([], 20, 30), null);
 });
+
+import { PlaybackSession, playbackActionFor, type PlaybackSnapshot } from './playback-state.ts';
+
+test('pause and resume keep the row, mode and a single shared button action', () => {
+  const changes: PlaybackSnapshot[] = [];
+  const session = new PlaybackSession(state => changes.push(state));
+  for (const loop of [false, true]) {
+    const loading = session.start(20, loop);
+    assert.equal(session.actionFor(20, loop), 'pause');
+    session.playing(loading);
+    session.pause();
+    assert.deepEqual(session.snapshot, { status: 'paused', segmentId: 20, loop });
+    assert.equal(playbackActionFor(session.snapshot, 20, loop), 'resume');
+    assert.equal(session.canPlay(loading), false);
+    const resumed = session.resume();
+    session.playing(resumed);
+    assert.deepEqual(session.snapshot, { status: 'playing', segmentId: 20, loop });
+    assert.equal(session.actionFor(20, loop), 'pause');
+    assert.equal(session.actionFor(30, loop), 'start');
+    assert.equal(session.actionFor(20, !loop), 'start');
+    session.stop();
+    assert.equal(session.actionFor(20, loop), 'start');
+  }
+  assert.ok(changes.some(state => state.status === 'paused'));
+});
+
+test('pausing during loading and stopping invalidate pending seek/play completion', () => {
+  const session = new PlaybackSession();
+  const first = session.start(10, false);
+  session.pause();
+  session.playing(first);
+  assert.equal(session.snapshot.status, 'paused');
+  const resumed = session.resume();
+  const replacement = session.start(20, true);
+  session.playing(resumed);
+  assert.equal(session.snapshot.status, 'loading');
+  session.playing(replacement);
+  session.selectSegment(30);
+  assert.equal(session.snapshot.segmentId, 30);
+  session.stop();
+  session.playing(replacement);
+  assert.deepEqual(session.snapshot, { status: 'idle', segmentId: null, loop: false });
+});
+
+test('paused unfinished metadata/seek cannot be treated as a ready resume position', () => {
+  const session = new PlaybackSession();
+  const loading = session.start(20, false);
+  session.pause();
+  session.seekCompleted(loading);
+  assert.equal(session.positionReady, false);
+  const replacement = session.start(20, false);
+  session.seekCompleted(replacement);
+  session.playing(replacement);
+  session.pause();
+  assert.equal(session.positionReady, true);
+  session.resume();
+  const seek = session.beginSeek();
+  session.pause();
+  session.seekCompleted(seek);
+  assert.equal(session.positionReady, false);
+  session.stop();
+  assert.equal(session.positionReady, false);
+});

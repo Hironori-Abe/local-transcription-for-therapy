@@ -2,13 +2,15 @@ import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_SNACK_BAR_DATA } from '@angular/material/snack-bar';
+import { type PlaybackSnapshot } from './playback-state';
 import { Signal } from '@angular/core';
 
 export interface PlaybackSnackbarData {
   playbackRateOptions: number[];
   playbackRate: Signal<number>;
   onRateChange: (rate: number) => void;
-  onPause: () => void;
+  state: Signal<PlaybackSnapshot>;
+  onToggle: () => void;
   isLoop?: boolean;
 }
 
@@ -36,7 +38,7 @@ const ICON_BASE_STYLE = `
   template: `
     <div class="playback-snackbar-container">
       <span class="snackbar-sym" [class.snackbar-sym-rotate]="!data.isLoop">{{ data.isLoop ? 'repeat' : 'arrow_shape_up_stack_2' }}</span>
-      <span class="playback-snackbar-label">{{ data.isLoop ? 'ループ再生中' : '連続再生中' }}</span>
+      <span class="playback-snackbar-label">{{ data.state().status === 'paused' ? '一時停止中' : data.state().status === 'loading' ? '読み込み中' : data.isLoop ? 'ループ再生中' : '連続再生中' }}</span>
       <select class="playback-snackbar-rate-select"
         (change)="onRateChange($event)">
         <option *ngFor="let rate of data.playbackRateOptions"
@@ -45,9 +47,9 @@ const ICON_BASE_STYLE = `
           ×{{ rate.toFixed(1) }}
         </option>
       </select>
-      <button mat-flat-button color="warn" class="playback-snackbar-pause-btn" (click)="pause()">
-        <span class="snackbar-sym">pause</span>
-        一時停止
+      <button mat-flat-button color="warn" class="playback-snackbar-pause-btn" (click)="data.onToggle()">
+        <span class="snackbar-sym">{{ data.state().status === 'paused' ? 'play_arrow' : 'pause' }}</span>
+        {{ data.state().status === 'paused' ? '再開' : '一時停止' }}
       </button>
     </div>
   `,
@@ -108,9 +110,5 @@ export class PlaybackControlSnackbarComponent {
   onRateChange(event: Event): void {
     const rate = parseFloat((event.target as HTMLSelectElement).value);
     this.data.onRateChange(rate);
-  }
-
-  pause(): void {
-    this.data.onPause();
   }
 }

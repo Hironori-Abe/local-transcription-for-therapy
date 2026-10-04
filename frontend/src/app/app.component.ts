@@ -28,8 +28,12 @@ import {
   RUNTIME_ESTIMATE_STORAGE_KEY
 } from './storage-keys';
 import { replaceAllInRows, replaceFirstInRows } from './find-replace';
+import { formatLegacyDataSize, groupLegacyData, legacyDataTotalLabel, type LegacyDataItem } from './legacy-data';
 import { AsyncCleanupSlot, OneShotTimer, RepeatingTimer } from './lifecycle-resources';
 import {
+  PlaybackSession,
+  playbackActionFor,
+  type PlaybackSnapshot,
   buildPlaybackQueue,
   clampPlaybackTarget,
   clampTargetToRange,
@@ -440,24 +444,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       : ''
   );
   /** Vulkan 版: CUDA 版から上書きしたときに残った不要データ（リリース版のみ。無ければ空）。 */
-  readonly legacyCudaData = signal<{ label: string; path: string; bytes: number }[]>([]);
+  readonly legacyCudaData = signal<LegacyDataItem[]>([]);
   readonly legacyCudaDataConfirming = signal<boolean>(false);
   /** セットアップ画面で開いているライセンス本文（Nemotron。空なら閉じている）。 */
   readonly setupLicenseText = signal<string>('');
   readonly legacyCudaDataDeleting = signal<boolean>(false);
   readonly legacyCudaDataMessage = signal<string>('');
-  readonly legacyCudaDataTotalLabel = computed(() => {
-    const bytes = this.legacyCudaData().reduce((sum, item) => sum + item.bytes, 0);
-    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  });
-  /** 画面表示用: 同じ種類（label）のデータを1行にまとめる。削除は Rust 側がパスごとに行う。 */
-  readonly legacyCudaDataGroups = computed(() => {
-    const groups = new Map<string, number>();
-    for (const item of this.legacyCudaData()) {
-      groups.set(item.label, (groups.get(item.label) ?? 0) + item.bytes);
-    }
-    return Array.from(groups, ([label, bytes]) => ({ label, bytes }));
-  });
+  readonly legacyCudaDataTotalLabel = computed(() => legacyDataTotalLabel(this.legacyCudaData()));
+  readonly legacyCudaDataGroups = computed(() => groupLegacyData(this.legacyCudaData()));
+  readonly formatLegacyDataSize = formatLegacyDataSize;
   /** Rustが返す実行OS。GPU導入案内をLinux/Windowsで分離するために使う。 */
   readonly runtimePlatform = signal<'windows' | 'linux' | 'macos' | 'other' | 'unknown'>('unknown');
   readonly proofreadProgressText = signal<string>('');
@@ -537,12 +532,14 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly selectedSpeakerBySegmentId = signal<Record<number, string>>({});
   readonly editedSegmentTextMap = signal<Record<number, string>>({});
   private readonly segmentTextHistory = new SegmentTextHistoryStore();
-  readonly playingSegmentId = signal<number | null>(null);
+  readonly playbackState = signal<PlaybackSnapshot>({ status: 'idle', segmentId: null, loop: false });
+  private readonly playbackSession = new PlaybackSession(state => this.playbackState.set(state));
+  readonly playingSegmentId = computed(() => this.playbackState().segmentId);
   readonly playbackRateOptions = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6 /*, 1.8, 2.0 */];
   readonly playbackRate = signal<number>(1.0);
   readonly shortcutHints: ReadonlyArray<string> = [
     'Ctrl+Shift+F（置換）',
-    'Ctrl+Shift+Space（連続再生 / 停止）',
+    'Ctrl+Shift+Space（連続再生 / 一時停止 / 再開）',
     'Ctrl+Shift+A（5秒戻す）',
     'Ctrl+Shift+D（5秒進める）',
     'Ctrl+Shift+E（話者を切替）',
@@ -750,21 +747,20 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   private readonly voiceInputMaxRecordingSeconds = 15;
   private previewAudio: HTMLAudioElement | null = null;
   private lastLoadedAudioSrc: string | null = null;
-  // Ctrl+Shift+Space による一時停止状態。stop（完全停止）とは別に扱う。
-  private previewPaused = false;
+  private get previewPaused(): boolean { return this.playbackState().status === 'paused'; }
   private readonly shortcutSeekSeconds = 5;
   private readonly shortcutFocusRetryTimer = new OneShotTimer();
   private readonly findReplaceFocusTimer = new OneShotTimer();
   private readonly segmentCursorFocusTimer = new OneShotTimer();
   private readonly timeEditFocusTimer = new OneShotTimer();
   private sequenceSnackBarRef: MatSnackBarRef<PlaybackControlSnackbarComponent> | null = null;
-  private previewLoopEnabled = false;
+  private get previewLoopEnabled(): boolean { return this.playbackState().loop; }
   private previewSequenceSegmentIds: number[] = [];
   private previewSequenceIndex = -1;
 
   private previewStartSeconds: number | null = null;
   private previewEndSeconds: number | null = null;
-  private seekPlayGeneration = 0;
+  private get seekPlayGeneration(): number { return this.playbackSession.generation; }
   private pendingImportedPayload: ExportTranscriptionPayload | null = null;
   // undefined = 未取得, null = 存在しない, string = パス
   private devDemoDataDir: string | null | undefined = undefined;
@@ -1564,18 +1560,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       this.snackBar.open('音声ファイルが読み込まれていません', undefined, { duration: 2200 });
       return;
     }
-    const audio = this.previewAudio;
-    const playingId = this.playingSegmentId();
-    if (playingId !== null && audio && !audio.paused) {
-      this.pauseSegmentPlayback(false);
-      return;
-    }
-    if (playingId !== null && this.previewPaused && audio) {
-      this.previewPaused = false;
-      // 一時停止中に手動で閉じられたり、別の通知に置き換えられたりした場合は
-      // 再開と同時に連続再生コントロールも復元する。
-      this.openPlaybackSnackbar(this.previewLoopEnabled);
-      void audio.play();
+    if (this.playingSegmentId() !== null) {
+      this.toggleActivePlayback();
       return;
     }
     const segment = this.resolveShortcutTargetSegment();
@@ -1718,7 +1704,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     }
     this.previewEndSeconds = null;
     // 進行中の advanceSequencePlayback や別の seek 処理を打ち切るための世代カウンタ。
-    const gen = ++this.seekPlayGeneration;
+    const gen = this.playbackSession.beginSeek();
     try {
       await waitForAudioSeek(audio, targetSeconds);
     } catch {
@@ -1730,8 +1716,9 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.previewEndSeconds = segment
       ? Math.max((this.previewStartSeconds ?? 0) + 0.1, segment.end)
       : previousEnd;
+    this.playbackSession.seekCompleted(gen);
     if (wasPlaying && !this.previewPaused) {
-      void audio.play();
+      void this.playPreviewAudio(audio, gen);
     }
   }
 
@@ -2053,7 +2040,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   async refreshLegacyCudaData(): Promise<void> {
     if (!this.isTauriRuntime()) return;
     try {
-      const items = await invoke<{ label: string; path: string; bytes: number }[]>('list_legacy_cuda_data');
+      const items = await invoke<LegacyDataItem[]>('list_legacy_cuda_data');
       this.ngZone.run(() => this.legacyCudaData.set(items));
     } catch {
       this.ngZone.run(() => this.legacyCudaData.set([]));
@@ -2065,7 +2052,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.legacyCudaDataDeleting.set(true);
     this.legacyCudaDataConfirming.set(false);
     try {
-      const remaining = await invoke<{ label: string; path: string; bytes: number }[]>('delete_legacy_cuda_data');
+      const remaining = await invoke<LegacyDataItem[]>('delete_legacy_cuda_data');
       this.ngZone.run(() => {
         this.legacyCudaData.set(remaining);
         this.legacyCudaDataMessage.set(remaining.length === 0
@@ -3557,11 +3544,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   }
 
   isSegmentLooping(segmentId: number): boolean {
-    return this.isSegmentPlaying(segmentId) && this.previewLoopEnabled;
+    return this.isSegmentPlaying(segmentId) && this.previewLoopEnabled && !this.previewPaused;
   }
 
   isSegmentSinglePlaying(segmentId: number): boolean {
-    return this.isSegmentPlaying(segmentId) && !this.previewLoopEnabled;
+    return this.isSegmentPlaying(segmentId) && !this.previewLoopEnabled && !this.previewPaused;
   }
 
   async playSegment(
@@ -3589,35 +3576,31 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
 
-    this.previewPaused = false;
+    const action = this.playbackSession.actionFor(segment.id, loopEnabled);
+    if (action !== 'start') {
+      this.toggleActivePlayback();
+      return;
+    }
+    this.stopSegmentPlayback();
+    const gen = this.playbackSession.start(segment.id, loopEnabled);
     const audio = this.getOrCreatePreviewAudio();
-    // 再生用の変換（Linux の AAC 等）が失敗しうるため、ここで止めて理由を出す。
     let src: string;
     try {
       src = await this.resolvePlayableAudioSrc(path);
     } catch (e) {
-      this.error.set(`音声を再生できませんでした: ${this.normalizeErrorMessage(e)}`);
+      if (this.playbackSession.canPlay(gen)) {
+        this.stopSegmentPlayback();
+        this.error.set(`音声を再生できませんでした: ${this.normalizeErrorMessage(e)}`);
+      }
       return;
     }
-    // 1行の繰り返し再生では、相づちなど短い行も聞き取れるよう前後を足す（行の時刻は変えない）。
-    // 「ここから再生」は次の行へ続けて流れるので広げない（次の行の頭を二重に流さないため）。
+    if (!this.playbackSession.canPlay(gen)) return;
     const baseRange = normalizePlaybackRange(segment);
     const range = loopEnabled ? expandShortPlaybackRange(baseRange) : baseRange;
     const { start, end } = range;
-    const currentPlayingId = this.playingSegmentId();
-
-    if (currentPlayingId !== null && currentPlayingId !== segment.id) {
-      this.stopSegmentPlayback();
-    }
-
-    if (this.isSegmentPlaying(segment.id) && this.previewLoopEnabled === loopEnabled) {
-      this.stopSegmentPlayback();
-      return;
-    }
 
     textInputEl?.focus();
 
-    this.previewLoopEnabled = loopEnabled;
     const queue = buildPlaybackQueue(this.segmentRows, segment.id, loopEnabled);
     this.previewSequenceSegmentIds = queue.segmentIds;
     this.previewSequenceIndex = queue.index;
@@ -3627,8 +3610,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.openPlaybackSnackbar(loopEnabled);
     this.error.set('');
 
-    const gen = ++this.seekPlayGeneration;
     const seekAndPlay = async (): Promise<void> => {
+      if (!this.playbackSession.canPlay(gen)) return;
       try {
         // Wait for seek to complete before play().
         // On Linux WebKitGTK, currentTime assignment is asynchronous and play()
@@ -3636,7 +3619,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         await waitForAudioSeek(audio, start);
         // GStreamer sometimes fires 'seeked' before the pipeline actually moves.
         // Retry up to 3 times until position is within 0.5 s of the target.
-        for (let i = 0; i < 3 && start > 0.5 && Math.abs(audio.currentTime - start) > 0.5; i++) {
+        for (let i = 0; i < 3 && this.playbackSession.canPlay(gen) && start > 0.5 && Math.abs(audio.currentTime - start) > 0.5; i++) {
           await waitForAudioSeek(audio, start);
         }
       } catch {
@@ -3644,17 +3627,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
       // Abort if stop() was called or a newer play() request was issued while seeking.
       if (gen !== this.seekPlayGeneration) return;
-      try {
-        audio.playbackRate = this.playbackRate();
-        await audio.play();
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
-          // Expected when pause() races play() — not a user-visible error.
-          return;
-        }
-        this.resetPlaybackState();
-        this.error.set(this.normalizeErrorMessage(e));
-      }
+      this.playbackSession.seekCompleted(gen);
+      await this.playPreviewAudio(audio, gen);
     };
 
     if (this.lastLoadedAudioSrc !== src) {
@@ -3693,38 +3667,84 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.persistAppSettings();
   }
 
-  private pauseSegmentPlayback(dismissControls: boolean): void {
+  segmentPlaybackLabel(segmentId: number, loop: boolean): string {
+    const action = playbackActionFor(this.playbackState(), segmentId, loop);
+    return action === 'pause' ? '一時停止' : action === 'resume' ? '再開' : loop ? 'ループ再生' : '連続再生';
+  }
+
+  segmentPlaybackIcon(segmentId: number, loop: boolean): string {
+    const action = playbackActionFor(this.playbackState(), segmentId, loop);
+    return action === 'pause' ? 'pause' : action === 'resume' ? 'play_arrow' : loop ? 'repeat' : 'arrow_shape_up_stack_2';
+  }
+
+  private toggleActivePlayback(): void {
+    const audio = this.previewAudio;
+    if (!audio || this.playingSegmentId() === null) return;
+    if (!this.previewPaused) {
+      this.pauseSegmentPlayback();
+      return;
+    }
+    // Loading/seek cancellation may leave the source or range unfinished: restart that row.
+    if (!this.playbackSession.positionReady || audio.readyState < 1 || this.previewEndSeconds === null) {
+      const segment = this.segmentRows.find(row => row.id === this.playingSegmentId());
+      const loop = this.previewLoopEnabled;
+      this.stopSegmentPlayback();
+      if (segment) void this.startSegmentPlayback(segment, loop);
+      return;
+    }
+    const gen = this.playbackSession.resume();
+    this.openPlaybackSnackbar(this.previewLoopEnabled);
+    void (async () => {
+      if (audio.seeking) {
+        try { await waitForAudioSeek(audio, audio.currentTime); } catch { /* keep the current position */ }
+      }
+      await this.playPreviewAudio(audio, gen);
+    })();
+  }
+
+  private async playPreviewAudio(audio: HTMLAudioElement, generation: number): Promise<void> {
+    if (!this.playbackSession.canPlay(generation)) return;
+    try {
+      audio.playbackRate = this.playbackRate();
+      await audio.play();
+      this.playbackSession.playing(generation);
+    } catch (e) {
+      if (!this.playbackSession.canPlay(generation)) return;
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        this.pauseSegmentPlayback();
+        return;
+      }
+      this.stopSegmentPlayback();
+      this.error.set(this.normalizeErrorMessage(e));
+    }
+  }
+
+  private pauseSegmentPlayback(): void {
     const playingId = this.playingSegmentId();
     if (playingId === null || !this.previewAudio) return;
 
     // 読み込み・seek中の遅延playも無効化し、現在位置と連続再生キューは保持する。
-    ++this.seekPlayGeneration;
+    this.playbackSession.pause();
     this.previewAudio.pause();
-    this.previewPaused = true;
-    if (dismissControls) {
-      this.sequenceSnackBarRef?.dismiss();
-      this.sequenceSnackBarRef = null;
-    }
     // 一時停止した行をそのまま直せるようにキャレットを末尾へ置く。
     this.focusSegmentTextareaById(playingId);
   }
 
   stopSegmentPlayback(): void {
-    ++this.seekPlayGeneration;
+    this.playbackSession.invalidatePendingPlay();
     this.sequenceSnackBarRef?.dismiss();
     this.sequenceSnackBarRef = null;
-    this.previewPaused = false;
     if (!this.previewAudio) {
       this.resetPlaybackState();
       return;
     }
+    this.previewAudio.onloadedmetadata = null;
     this.previewAudio.pause();
     this.resetPlaybackState();
   }
 
   private resetPlaybackState(): void {
-    this.setActivePlayingSegment(null, false);
-    this.previewLoopEnabled = false;
+    this.playbackSession.stop();
     this.previewSequenceSegmentIds = [];
     this.previewSequenceIndex = -1;
     this.previewStartSeconds = null;
@@ -3738,7 +3758,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         playbackRateOptions: this.playbackRateOptions,
         playbackRate: this.playbackRate,
         onRateChange: (rate: number) => this.onPlaybackRateChange(rate),
-        onPause: () => this.pauseSegmentPlayback(true),
+        state: this.playbackState,
+        onToggle: () => this.toggleActivePlayback(),
         isLoop,
       },
       duration: 0,
@@ -3762,6 +3783,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     const audio = new Audio();
     audio.preload = 'auto';
     audio.ontimeupdate = () => {
+      if (this.previewPaused) return;
       if (
         this.playingSegmentId() !== null
         && this.previewStartSeconds !== null
@@ -3785,10 +3807,11 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     };
     audio.onended = () => {
+      if (this.previewPaused) return;
       if (this.playingSegmentId() !== null && this.previewLoopEnabled && this.previewStartSeconds !== null) {
         try {
           audio.currentTime = this.previewStartSeconds;
-          void audio.play();
+          void this.playPreviewAudio(audio, this.seekPlayGeneration);
           return;
         } catch {
           // ignore restart issue
@@ -3801,7 +3824,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       }
     };
     audio.onerror = () => {
-      this.resetPlaybackState();
+      this.stopSegmentPlayback();
       this.error.set('音声の再生に失敗しました。ファイル形式やパスを確認してください。');
     };
     this.previewAudio = audio;
@@ -3833,7 +3856,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     void waitForAudioSeek(audio, newStart).then(() => {
       if (gen !== this.seekPlayGeneration) return;
       this.previewEndSeconds = newEnd;
-      void audio.play();
+      this.playbackSession.seekCompleted(gen);
+      void this.playPreviewAudio(audio, gen);
     }).catch(() => {
       if (gen === this.seekPlayGeneration) this.stopSegmentPlayback();
     });
@@ -3842,7 +3866,8 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
 
 
   private setActivePlayingSegment(segmentId: number | null, autoScroll = true): void {
-    this.playingSegmentId.set(segmentId);
+    if (segmentId === null) this.playbackSession.stop();
+    else this.playbackSession.selectSegment(segmentId);
     if (segmentId === null || !autoScroll) {
       return;
     }

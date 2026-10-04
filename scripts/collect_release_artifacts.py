@@ -153,7 +153,8 @@ def install_artifact(source: Path, destination: Path) -> str:
             shutil.copy2(source, temp_path)
             method = "copy"
         os.replace(temp_path, destination)
-        temp_path = None
+        # source/destination が同じ inode の場合、POSIX rename は何もせず temp のリンクが残る。
+        # finally で常に残った一時リンクを回収する（通常の rename 後は FileNotFoundError）。
         return method
     finally:
         if temp_path is not None:

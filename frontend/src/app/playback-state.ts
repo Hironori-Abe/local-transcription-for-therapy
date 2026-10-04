@@ -139,3 +139,86 @@ export function resolveShortcutTarget<T extends PlaybackSegment>(
   }
   return rows[0];
 }
+
+export type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused';
+export interface PlaybackSnapshot {
+  status: PlaybackStatus;
+  segmentId: number | null;
+  loop: boolean;
+}
+export type PlaybackAction = 'start' | 'pause' | 'resume';
+
+export function playbackActionFor(state: PlaybackSnapshot, segmentId: number, loop: boolean): PlaybackAction {
+  if (state.segmentId !== segmentId || state.loop !== loop) return 'start';
+  return state.status === 'paused' ? 'resume' : 'pause';
+}
+
+/** Shared state for row buttons, keyboard controls and the playback snackbar. */
+export class PlaybackSession {
+  snapshot: PlaybackSnapshot = { status: 'idle', segmentId: null, loop: false };
+  generation = 0;
+  positionReady = false;
+
+  private readonly changed: (state: PlaybackSnapshot) => void;
+
+  constructor(changed: (state: PlaybackSnapshot) => void = () => {}) {
+    this.changed = changed;
+  }
+
+  actionFor(segmentId: number, loop: boolean): PlaybackAction {
+    return playbackActionFor(this.snapshot, segmentId, loop);
+  }
+
+  start(segmentId: number, loop: boolean): number {
+    const generation = this.beginSeek();
+    this.update({ status: 'loading', segmentId, loop });
+    return generation;
+  }
+
+  resume(): number {
+    const generation = this.invalidatePendingPlay();
+    if (this.snapshot.segmentId !== null) this.update({ ...this.snapshot, status: 'loading' });
+    return generation;
+  }
+
+  pause(): void {
+    this.invalidatePendingPlay();
+    if (this.snapshot.segmentId !== null) this.update({ ...this.snapshot, status: 'paused' });
+  }
+
+  stop(): void {
+    this.invalidatePendingPlay();
+    this.positionReady = false;
+    this.update({ status: 'idle', segmentId: null, loop: false });
+  }
+
+  selectSegment(segmentId: number): void {
+    this.positionReady = false;
+    this.update({ ...this.snapshot, segmentId });
+  }
+
+  beginSeek(): number {
+    this.positionReady = false;
+    return this.invalidatePendingPlay();
+  }
+
+  seekCompleted(generation: number): void {
+    if (generation === this.generation && this.snapshot.segmentId !== null) this.positionReady = true;
+  }
+
+  invalidatePendingPlay(): number { return ++this.generation; }
+
+  canPlay(generation: number): boolean {
+    return generation === this.generation && this.snapshot.segmentId !== null
+      && this.snapshot.status !== 'paused';
+  }
+
+  playing(generation: number): void {
+    if (this.canPlay(generation)) this.update({ ...this.snapshot, status: 'playing' });
+  }
+
+  private update(state: PlaybackSnapshot): void {
+    this.snapshot = state;
+    this.changed(state);
+  }
+}

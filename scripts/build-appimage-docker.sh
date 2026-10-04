@@ -123,6 +123,8 @@ docker run --rm \
   --volume lott-ubuntu-ggml-speech-build:/root/.cache/lott-ggml-speech-build \
   --workdir /workspace \
   --env CARGO_TARGET_DIR=/workspace/src-tauri/target-ubuntu24 \
+  --env JOBS \
+  --env CARGO_BUILD_JOBS \
   --env "LOTT_BUILD_LINE_OPTION=$BUILD_OPTION" \
   --env HOST_UID="$HOST_UID" \
   --env HOST_GID="$HOST_GID" \

@@ -36,6 +36,8 @@ bash scripts/build-appimage-docker.sh --dry-run
 
 `build-appimage-docker.sh` は `scripts/Dockerfile.appimage-ubuntu24` のイメージ（`lott-appimage-builder:ubuntu24`）を作り、コンテナ内で `scripts/setup-build-tools-linux.sh` を実行します。ビルド用ターゲットは `src-tauri/target-ubuntu24` です。
 
+空きメモリが少ない場合は `JOBS=6 CARGO_BUILD_JOBS=6 bash scripts/build-appimage-docker.sh` のように並列数を制限できます。`JOBS` は音声エンジン、`CARGO_BUILD_JOBS` は Rust ビルドへコンテナ内でも引き継ぎます。
+
 `setup-build-tools-linux.sh` の手順は次のとおりです。
 
 1. ggml 音声エンジンを Vulkan でビルドし、`src-tauri/resources/speech-engines/` へ配置する（`scripts/setup-ggml-speech-linux.sh --backend vulkan --engines-dir ... --skip-models`。Editor は `--skip-nemo` も付ける）
@@ -63,7 +65,9 @@ bash scripts/build-appimage-docker.sh --dry-run
 - **`libvulkan*` と `vulkan/icd.d/*` の検査**をします。許可するのは `.../speech-engines/vulkan-loader/libvulkan.so.1` のちょうど1ファイルだけで、それ以外の `libvulkan*` や ICD（`vulkan/icd.d`）があればビルドを落とします（ホストの ICD・新しいローダーと組み合わさって不整合を起こすため）。フォールバックローダーが無い場合も失敗します。
 - `whisper-cli` の存在を検査し、Full は `nemo-speech` の存在、Editor は `nemo` ディレクトリが無いことも検査します。
 - エンジンは `RUNPATH=$ORIGIN` を設定し（patchelf）、隣の ggml ライブラリと `libgomp` を読みます。`libgomp`（OpenMP ランタイム）は実行ファイルの隣へ同梱します（Windows 版が VC++ ランタイムを exe の隣へ置くのと同じ考え方）。
+- `patchelf` 不在、ELF の RUNPATH 設定・検証失敗、libgomp の解決・ライセンス取得失敗はエラー終了します。libgomp のライセンスは Debian / Ubuntu の copyright、または Arch / CachyOS の GPLv3 本文と GCC Runtime Library Exception を同梱します。既存エンジンの補修には `setup-ggml-speech-linux.sh --finalize-only --engines-dir DIR` を使えます（Editor は `--skip-nemo`）。配布ビルドには上記の Ubuntu 24.04 Docker 経路を使用してください。
 - アプリ側は、AppImage から起動する子プロセス（エンジンを含む）に対して `apply_host_command_env` を適用し、AppRun が設定した `LD_LIBRARY_PATH` などを取り除きます。
+- CachyOS 等に必要な補正・再梱包は必須です。対象 AppDir やツール/runtime が無い場合、GTK の Wayland/X11・IME 補正を確認できない場合、再梱包に失敗した場合はエラー終了し、配布成果物へ集約しません。
 
 ## ホスト（利用者の PC）の前提
 
@@ -75,7 +79,9 @@ bash scripts/build-appimage-docker.sh --dry-run
 - Linux の起動時 CPU 確認（GPU が使えない場合の最低要件: RAM 16GB以上、AVX2、8論理スレッド以上）は Linux でも動きます（RAM は `/proc/meminfo`）。
 - GPU ドライバーの導入・更新を案内するバナー（`gpu_driver.rs`）は Windows のみです。Linux では表示しません。
 - 同梱の Vulkan ローダーへのフォールバックは Windows・Linux の両方にあります。Linux ではホストの `libvulkan.so.1` を `dlopen` で確認し、無い場合だけ同梱ディレクトリを `LD_LIBRARY_PATH` へ足します（AppImage の `apply_host_command_env` は、この登録済みディレクトリだけ除去対象から外します）。
-- 起動時に NVIDIA プロプライエタリドライバー（`/proc/driver/nvidia/version`）を検出すると `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定します（ユーザー指定があればそれを尊重、`LOTT_ENABLE_DMABUF_RENDERER=1` で無効化）。
+- 起動時に NVIDIA プロプライエタリドライバー（`/proc/driver/nvidia/version`）を検出すると、GTK / WebKit 初期化前に `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` と `WEBKIT_FORCE_DMABUF_RENDERER=1` を組み合わせて設定します（ユーザー指定があればそれを尊重、`LOTT_ENABLE_DMABUF_RENDERER=1` で無効化）。後者は Ubuntu の NVIDIA 判定による早期終了を回避するためで、前者により実際の hardware DMA-BUF transport は有効になりません。`WEBKIT_DISABLE_DMABUF_RENDERER=1` は既定にしません。
+
+Ubuntu 24.04 の WebKitGTK 2.52.6 の `disable-nvidia-dmabuf.patch` は NVIDIA を検出すると SHM の追加前に戻るため、`FORCE_SHM` 単独では合成器を維持できません。[Debian #1142771](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1142771) と [同じパッチの公式ソース](https://sources.debian.org/patches/webkit2gtk/2.52.6-1/disable-nvidia-dmabuf.patch/) を確認し、2つの設定を組み合わせます。上流の [AcceleratedBackingStore.cpp](https://github.com/WebKit/WebKit/blob/webkitgtk-2.52.6/Source/WebKit/UIProcess/gtk/AcceleratedBackingStore.cpp) では SHM を追加してから `FORCE_SHM` を判定するので、hardware transport を避けながら合成器を利用できる構成です。実際の描画性能はホストの EGL / GTK GL 初期化、ドライバー、デスクトップ環境にも依存し、実機での確認が必要です。
 
 ## 成果物名
 
@@ -112,13 +118,62 @@ WSL の最小構成の Ubuntu には、通常のデスクトップ環境なら�
 - `libGLESv2.so.2`（Ubuntu: `libgles2`）
 - 日本語フォント（例: `fonts-noto-cjk`）。無いと画面の日本語が □ になる
 
+## CachyOS 上での Full 版ビルド・静的検証（2026-10-04）
+
+Ubuntu 24.04 Docker 経路で v0.9.9 の Full 版 AppImage / deb を作成しました。検証ホストは CachyOS / AMD GPU で、NVIDIA 実機の画面操作・GPU 推論は行っていません。
+
+| 確認対象 | 結果 |
+| --- | --- |
+| 最終 AppImage の展開と SHA-256 | AppImage / deb とも `SHA256SUMS.txt` が一致 |
+| NVIDIA の描画設定 | 同梱 WebKitGTK 2.52.6 とアプリに2つの設定が存在。Rust の設定判定2テストが通過。Ubuntu の早期終了回避と SHM 合成器維持をソースで確認 |
+| ホストのグラフィックスとの分離 | Wayland / EGL / GL / GBM / DRM / NVIDIA ライブラリを同梱せず、ホストのものを使う。ICD は0件、Vulkan ローダーは専用フォールバックの1ファイルのみ |
+| 音声エンジン | Whisper の ELF 2ファイル、NeMo の ELF 17ファイルで `RUNPATH=$ORIGIN`。ローカルの libgomp を読み、CachyOS 上で両エンジンの `--help` が成功。GPLv3 本文・GCC Runtime Library Exception も収録 |
+| 音声再生の同梱物 | GStreamer 106プラグイン、必要な13プラグインの存在・禁止プラグインの不在・専用 registry を確認。同梱 LGPL ffmpeg で合成音声の AAC → 16bit FLAC 変換が成功 |
+| GTK の表示・IME 設定 | 最終 AppImage の hook と cache を使い、Wayland / X11 / 未同梱 fcitx 指定の救済 / 同梱 module 指定の尊重 / ユーザーの表示バックエンド指定の計7条件を確認 |
+| 失敗時の配布防止 | 一時 fixture で再梱包の正常系・ツール失敗・runtime 不在・GTK hook 不在・AppDir 不在を検証。失敗時は成果物集約へ進まない |
+| ホストコマンドの環境分離 | AppDir の環境除去・空 PATH の救済・専用 Vulkan ローダーの保持の既存 Rust テストが通過 |
+
+最終 AppImage の SHA-256: `010cfbc65746fa1dc3bf98ad9f11fae429fc6b38629ede1da5c0c963f0efeaa6`。生成先は `dist/v0.9.9/LoTT-v0.9.9-linux-x64-vulkan.AppImage`（162,093,560 bytes）です。実機の起動・スクロール速度、物理操作での日本語入力、GPU での文字起こし・話者分離は下記の確認事項に残ります。
+
+## Ubuntu 24.04 Docker での実行検証（2026-10-04）
+
+上記と同じ v0.9.9 Full AppImage を、ビルド用イメージとは別の Ubuntu 24.04.4 LTS コンテナーで実行しました。`--network none` で通信を遮断し、GPU デバイスは渡していません。モデルはホストから読み取り専用で渡し、会話データではなく espeak-ng で生成した約10.6秒の英文音声を使いました。
+
+| 確認対象 | 結果 |
+| --- | --- |
+| AppImage の画面起動 | Xvfb の X11 仮想画面で、初回セットアップ画面・CPU 案内バナー・日本語の正常表示をスクリーンショットで確認。LoTT / WebKitWebProcess の生存も確認 |
+| CPU 文字起こし | 同梱 whisper.cpp + large-v3-turbo + Silero VAD で JSON 出力まで完了。生成した3文と文字起こしが完全一致。初回実行のエンジン計測は約9.7秒 |
+| CPU 話者分離 | 同梱 NeMo-Speech.cpp + Nemotron を `--device cpu --preset v3-offline` で実行し JSON 出力まで完了。1話者の合成音声について、0〜10.189秒の区間を出力 |
+| 同梱 GStreamer | WAV / MP3 / FLAC / OGG と、同梱 LGPL ffmpeg で AAC から変換した16bit FLACを `decodebin ! audioconvert ! fakesink` で正常デコード |
+| ホストの Vulkan / OpenMP 不在 | 検証専用イメージからホストの `libvulkan.so.1` / `libgomp.so.1` を除去。AppImage の同梱ローダー自動追加ログ、画面表示、両エンジンの CPU 推論、音声デコードを確認。`ldd` で専用 Vulkan ローダーと各エンジン隣の libgomp を使用 |
+
+AppImage は Docker の FUSE を必要としない `APPIMAGE_EXTRACT_AND_RUN=1` で起動しました。仮想画面の描画には検証環境だけで `LIBGL_ALWAYS_SOFTWARE=1` を設定し、配布アプリの既定値や WebKit の sandbox は変更していません。コンテナーには WebKitGTK を別途インストールせず、AppImage の同梱版を使っています。通常の Ubuntu デスクトップにあるフォント・描画ライブラリは検証環境に用意しました。最小構成では `libfribidi0` / `libharfbuzz0b` / `libwayland-cursor0` / `libwayland-egl1` も必要でした。
+
+検証用 Dockerfile・スクリプト・JSON・ログ・画面画像は `src-tauri/target-ubuntu24/ubuntu-runtime-validation-v0.9.9/` に保存しています（Git 管理外）。これらの確認は GUI 起動とエンジン単体実行・デコードまでで、画面操作による一連の文字起こし、音声出力、NVIDIA GPU 実行、Wayland / IME / スクロール性能の検証ではありません。
+
+## deb の Ubuntu 24.04 Docker 実行検証（2026-10-04）
+
+`dist/v0.9.9/LoTT-v0.9.9-linux-x64-vulkan.deb` を、クリーンな `ubuntu:24.04` に `apt-get install --no-install-recommends /tmp/lott.deb` でインストールしました。パッケージは `local-transcription-for-therapy`、バージョンは `0.9.9`、アーキテクチャは `amd64` です。
+
+| 確認対象 | 結果 |
+| --- | --- |
+| インストールと依存関係 | `apt-get check` が成功。検証用ツールを追加する前に `/usr/bin/lott` の `ldd` で不足が無いことを確認。依存関係から WebKitGTK 2.52.6、GTK 3、libvulkan1 と GStreamer base / good プラグインが導入された |
+| 配置と整合性 | `dpkg --verify local-transcription-for-therapy` が差分なし。デスクトップエントリーの `Exec=lott`、アプリ・同梱 ffmpeg・両エンジンの配置と実行権限を確認 |
+| 画面起動 | インストール済み `/usr/bin/lott` を Xvfb の X11 仮想画面で起動。初回セットアップ・CPU 案内バナー・日本語の正常表示と LoTT / WebKitWebProcess の生存を確認 |
+| CPU 文字起こし・話者分離 | `/usr/lib/Local Transcription for Therapy/resources/` の同梱エンジンで約10.6秒の合成英文音声を処理し、両方の JSON 出力が成功。文字起こしは生成した3文と完全一致。話者分離は1話者の0〜10.189秒の区間を出力 |
+| ライブラリの解決 | `LD_LIBRARY_PATH` を指定せず、両エンジンの `ldd` で各エンジン隣の同梱 libgomp とシステムの `/lib/x86_64-linux-gnu/libvulkan.so.1` を使用。共有ライブラリ不足は無し |
+| 音声デコード | システムの GStreamer base / good で WAV / MP3 / FLAC / OGG と、同梱 LGPL ffmpeg で AAC から変換した16bit FLACを正常デコード |
+| アンインストール | 別の使い捨てコンテナーで `apt-get remove local-transcription-for-therapy` と `apt-get check` が成功。アプリ実行ファイルと資源ディレクトリが除去され、システム WebKitGTK が維持されることを確認 |
+
+依存関係・検証ツールの導入時だけ通信し、起動・推論・デコード・アンインストールは `--network none`、GPU デバイスなしで実行しました。モデルは読み取り専用マウント、音声は espeak-ng の合成音声です。GUI の検証環境だけで `LIBGL_ALWAYS_SOFTWARE=1` を設定し、配布アプリや WebKit の sandbox は変更していません。デコードは `fakesink` までの確認で、音声出力や画面操作による一連の処理は未検証です。
+
+検証用 Dockerfile・スクリプト・JSON・ログ・画面画像は `src-tauri/target-ubuntu24/deb-runtime-validation-v0.9.9/` に保存しています（Git 管理外）。SHA-256 は `d9b8008f18fae77995eb954a95f411c169dcce74cf8ccf6df84368c7b88f9d0b` で、配布済みの `SHA256SUMS.txt` と一致しています。成果物の変更・再ビルドはしていません。
+
 ## 未検証事項
 
 実機で次を確認してください。
 
 - AppImage / deb の、実機のデスクトップ環境での起動、ファイル選択（ポータル）、音声の再生（wav / mp3 / flac / ogg / m4a）
 - `libvulkan.so.1` がある環境で、GPU（Mesa / NVIDIA）でエンジンが動くこと（WSL には GPU 用の Vulkan ドライバーが無く、CPU でしか確認できていない）
-- `libvulkan.so.1` が無い環境の AppImage で、同梱フォールバックにより CPU 実行でエンジンが起動すること（起動ログに `同梱の libvulkan.so.1 を LD_LIBRARY_PATH に追加しました` が出ること）
 - NVIDIA プロプライエタリドライバー環境で、ビルドログの `libwebkit2gtk-4.1-0` の版が `WEBKIT_DMABUF_RENDERER_FORCE_SHM` に対応し、起動・スクロールが問題ないこと
 - Wayland / X11 と日本語入力（fcitx5 など）
-- `libgomp` が最小構成のホストでも読まれること（`ldd` / `readelf -d` で RUNPATH を確認）

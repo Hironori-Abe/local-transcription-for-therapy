@@ -208,7 +208,7 @@ tr '\0' '\n' < /proc/$(pgrep -n lott)/environ | grep -E 'GDK_BACKEND|GTK_IM_MODU
 
 ## Linux / CachyOS NVIDIA: 結果一覧のスクロールがカクつく（原因確定済み）
 
-> **注記:** この節は CUDA 版と Arch / CachyOS 向けホストパッケージ（`packaging/arch`）があった当時の調査記録です。Arch パッケージは削除済みで、以下に出てくるランチャー（`packaging/arch/lott`）の設定 `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` は削除済みです。現在はアプリ自身が、NVIDIA プロプライエタリカーネルドライバー（`/proc/driver/nvidia/version`）を検出したときに起動冒頭で `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定します（AppImage / deb 共通。ユーザーが `WEBKIT_DMABUF_RENDERER_FORCE_SHM` / `WEBKIT_DISABLE_DMABUF_RENDERER` を設定済みなら尊重し、`LOTT_ENABLE_DMABUF_RENDERER=1` なら設定しません）。`WEBKIT_DISABLE_DMABUF_RENDERER=1` は既定にしないでください。同梱 WebKitGTK が FORCE_SHM に対応する版かは、ビルドログの `libwebkit2gtk-4.1-0` の版で確認します（対応版は未確認）。
+> **注記:** この節は CUDA 版と Arch / CachyOS 向けホストパッケージ（`packaging/arch`）があった当時の調査記録です。Arch パッケージは削除済みで、以下に出てくるランチャー（`packaging/arch/lott`）の設定 `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` は削除済みです。現在はアプリ自身が、NVIDIA プロプライエタリカーネルドライバー（`/proc/driver/nvidia/version`）を検出したときに起動冒頭で `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定します。Ubuntu の WebKitGTK が SHM まで無効化する NVIDIA 判定を回避するため、未指定の `WEBKIT_FORCE_DMABUF_RENDERER=1` も組み合わせて設定します（hardware DMA-BUF transport は `FORCE_SHM` により除外。AppImage / deb 共通）。ユーザーの既存設定は尊重し、`LOTT_ENABLE_DMABUF_RENDERER=1` なら設定しません。手動で SHM を指定する場合も、Ubuntu の同梱 WebKitGTK では2つを組み合わせてください（[配布ビルドの説明](release-build-linux.md#ホスト利用者の-pcの前提)）。`WEBKIT_DISABLE_DMABUF_RENDERER=1` は既定にしないでください。2026-10-04 の Full 版ビルドでは、同梱 WebKitGTK 2.52.6 の実ライブラリに両方の設定が含まれることを確認しました。起動・スクロールの実機確認は別途必要です。
 
 > **結論から読む場合:** 原因と恒久対策は本節末尾の[原因の確定と恒久対策](#原因の確定と恒久対策2026-08-28確定)にあります。以下は確定に至るまでの履歴で、当時「可能性が低い」と判断した候補の記録として残しています。
 

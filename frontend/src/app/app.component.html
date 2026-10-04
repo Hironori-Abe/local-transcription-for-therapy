@@ -402,12 +402,12 @@
               <div *ngIf="legacyCudaData().length > 0 || legacyCudaDataMessage()" class="legacy-data-block">
                 <ng-container *ngIf="legacyCudaData().length > 0">
                   <p class="estimate-line">
-                    以前の版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使わないため、削除してディスクを空けられます。
+                    以前の版で使っていたデータが残っています（合計 {{ legacyCudaDataTotalLabel() }}）。この版では使いません。不要であれば削除できます。
                     <ng-container *ngIf="editorOnlyBuild">現在のWhisper音声入力モデルは削除しません。</ng-container>
                     <ng-container *ngIf="vulkanBuild()">この版の音声認識・話者分離モデルは削除しません。</ng-container>
                   </p>
                   <ul class="legacy-data-list">
-                    <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ item.bytes >= 107374182 ? (item.bytes / 1073741824).toFixed(1) + ' GB' : (item.bytes / 1048576).toFixed(0) + ' MB' }}）</li>
+                    <li *ngFor="let item of legacyCudaDataGroups()">{{ item.label }}（{{ formatLegacyDataSize(item.bytes) }}）</li>
                   </ul>
                   <div class="actions-row">
                     <button *ngIf="!legacyCudaDataConfirming()" mat-stroked-button color="warn"
@@ -721,19 +721,20 @@
               </div>
               <div class="segment-col-play">
                 <div class="segment-play-controls">
-                  <button mat-stroked-button class="segment-play-btn" aria-label="セグメントをループ再生"
-                    matTooltip="ループ再生"
+                  <button mat-stroked-button class="segment-play-btn" [attr.aria-label]="segmentPlaybackLabel(segment.id, true)"
+                    [matTooltip]="segmentPlaybackLabel(segment.id, true)"
                     [disabled]="isPlaybackDisabled()" (click)="playSegment(segment, segmentTextInput)">
                     <span class="material-symbols-outlined segment-play-icon" aria-hidden="true">
-                      {{ isSegmentLooping(segment.id) ? 'stop' : 'repeat' }}
+                      {{ segmentPlaybackIcon(segment.id, true) }}
                     </span>
                   </button>
-                  <button mat-stroked-button class="segment-play-btn" aria-label="セグメントを連続再生"
-                    matTooltip="連続再生"
+                  <button mat-stroked-button class="segment-play-btn" [attr.aria-label]="segmentPlaybackLabel(segment.id, false)"
+                    [matTooltip]="segmentPlaybackLabel(segment.id, false)"
                     [disabled]="isPlaybackDisabled()" (click)="playSegmentOnce(segment, segmentTextInput)">
-                    <span class="material-symbols-outlined segment-play-icon segment-play-icon-rotated"
+                    <span class="material-symbols-outlined segment-play-icon"
+                      [class.segment-play-icon-rotated]="segmentPlaybackIcon(segment.id, false) === 'arrow_shape_up_stack_2'"
                       aria-hidden="true">
-                      {{ isSegmentSinglePlaying(segment.id) ? 'stop' : 'arrow_shape_up_stack_2' }}
+                      {{ segmentPlaybackIcon(segment.id, false) }}
                     </span>
                   </button>
                 </div>

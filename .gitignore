@@ -67,3 +67,5 @@ src-tauri/resources/ffmpeg/FFMPEG_BUILD_INFO.txt
 
 # Rust ビルド成果物（誤コミット防止）
 *.rlib
+
+packaging/*

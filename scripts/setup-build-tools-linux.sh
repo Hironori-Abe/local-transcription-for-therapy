@@ -497,6 +497,10 @@ fi' "$gtk_hook"
           echo "[INFO] GTK hook に GDK_BACKEND=x11 の強制がないため IME rewrite をスキップします"
         fi
       fi
+      if [[ ! -f "$gtk_hook" ]] || ! grep -q 'LOTT_GTK_BACKEND_IME_POLICY' "$gtk_hook"; then
+        echo "[ERROR] GTK の Wayland/X11・IME 対策を確認できません: $gtk_hook" >&2
+        exit 1
+      fi
 
       # ホストの基本コマンドが動的リンクするライブラリを同梱していると、同じ経路で
       # 別の undefined symbol を踏みうる。除去はせず、把握のために一覧だけ出す。
@@ -538,18 +542,27 @@ fi' "$gtk_hook"
 
       ln -sfn "$product.png" "$appdir/.DirIcon"
       echo "[INFO] $(basename "$out"): libwayland-* を $removed 個除去し再パッケージ"
-      ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" --appimage-extract-and-run \
-        --runtime-file "$APPIMAGE_RUNTIME" "$appdir" "$out" \
-        && echo "[OK] 再パッケージ完了: $(basename "$out")" \
-        || echo "[WARN] 再パッケージに失敗しました。生成 AppImage は新しめのホストで EGL クラッシュするおそれ。" >&2
+      repacked_out="${out%.AppImage}.repacked.tmp"
+      if ! ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" --appimage-extract-and-run \
+        --runtime-file "$APPIMAGE_RUNTIME" "$appdir" "$repacked_out"; then
+        rm -f "$repacked_out"
+        echo "[ERROR] CachyOS 等への対策を含む AppImage の再パッケージに失敗しました。成果物の集約を中止します。" >&2
+        exit 1
+      fi
+      mv "$repacked_out" "$out"
+      echo "[OK] 再パッケージ完了: $(basename "$out")"
     done
     if [[ "$selected_appdir_count" -eq 0 ]]; then
-      echo "[INFO] 今回の配布ラインに再梱包できる AppDir はありません。"
+      echo "[ERROR] 今回の配布ラインに再梱包できる AppDir がありません。" >&2
+      exit 1
     fi
   else
-    echo "[WARN] appimagetool を取得できませんでした。libwayland-* 除去をスキップします。" >&2
-    echo "[WARN] 生成 AppImage は CachyOS 等の新しめホストで EGL クラッシュするおそれがあります。" >&2
+    echo "[ERROR] AppImage の再梱包ツール/runtime を取得できませんでした。CachyOS 等への対策を適用できないため中止します。" >&2
+    exit 1
   fi
+else
+  echo "[ERROR] AppImage の再梱包に必要な AppDir がありません。" >&2
+  exit 1
 fi
 
 list_new_artifacts() {

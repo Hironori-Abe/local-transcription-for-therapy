@@ -169,6 +169,17 @@ AppImage は Docker の FUSE を必要としない `APPIMAGE_EXTRACT_AND_RUN=1` 
 
 検証用 Dockerfile・スクリプト・JSON・ログ・画面画像は `src-tauri/target-ubuntu24/deb-runtime-validation-v0.9.9/` に保存しています（Git 管理外）。SHA-256 は `d9b8008f18fae77995eb954a95f411c169dcce74cf8ccf6df84368c7b88f9d0b` で、配布済みの `SHA256SUMS.txt` と一致しています。成果物の変更・再ビルドはしていません。
 
+## Full 版の再ビルド（2026-10-05）
+
+v0.9.9 の AppImage / deb を Ubuntu 24.04 Docker 経路で再ビルドしました。再生状態の共有化、旧データの容量表示修正、`Ctrl+Shift+P` の追加と5秒ごとのヒントの `Ctrl+Shift+Space or P` 表示を含みます。
+
+- AppImage: `da8edbc1d51e977ca495dfc3d015b5232f5908a1309c6dce46814e3d73ed718e`（162,097,656 bytes）
+- deb: `df3c990bf0ce54e96294f54564d34cfbd0ac92d19f8b012581c6875fb9e58255`（118,088,222 bytes）
+
+成果物は `dist/v0.9.9/` に配置し、旧成果物は同ディレクトリの `previous-builds/20261005-014625/` に退避しました。ビルド時の GTK/IME・GStreamer・Vulkan ローダー等の検査と SHA-256 の照合が成功しました。通信を遮断した Ubuntu 24.04 コンテナで新 AppImage と新 deb の画面起動・日本語表示を確認し、deb のインストール・ファイル整合性・共有ライブラリの解決も確認しました。今回、NVIDIA 実機での IME 操作・GPU 実行や音声推論は再検証していません。
+
+検証ログ・画面画像・スクリプトは `src-tauri/target-ubuntu24/linux-rebuild-validation-20261005/`（Git 管理外）にあります。ISO プロジェクトの AppImage 入力や manifest は変更していません。新しい ISO へ取り込む場合は、今回の AppImage とその SHA-256 を入力として更新してください。
+
 ## 未検証事項
 
 実機で次を確認してください。

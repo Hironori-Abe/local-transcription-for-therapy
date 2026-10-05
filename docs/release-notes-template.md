@@ -11,10 +11,10 @@
 | ファイル | 対象 | 備考 |
 | --- | --- | --- |
 | `LoTT-vX.Y.Z-windows-x64-vulkan-setup.exe` | Windows x64・NVIDIA / AMD / Intel GPU（GPU が無ければ CPU で動作） | Full 版・主配布 |
-| `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | 校正中心の軽量版（文字起こし・話者分離なし） |
+| `LoTT-vX.Y.Z-windows-x64-editor-setup.exe` | GPU 不要 | JSONの読込・編集・書き出しに特化した軽量版（文字起こし・話者分離なし） |
+| `LoTT-vX.Y.Z-linux-x64-vulkan.AppImage` / `.deb` | Linux x86-64・NVIDIA / AMD / Intel GPU（GPU が無ければ CPU で動作） | Full 版・試験的 |
+| `LoTT-vX.Y.Z-linux-x64-editor.AppImage` / `.deb` | Linux x86-64・GPU 不要 | Editor 版・試験的 |
 | `SHA256SUMS.txt` | — | 各配布ディレクトリ内のファイルに対応するSHA-256チェックサム |
-
-<!-- Linux 版は Stage 3 で対応予定。対応後にアセット名を追記する。 -->
 
 ダウンロード後の検証（任意）:
 
@@ -40,14 +40,14 @@ sha256sum -c SHA256SUMS.txt
 
 ### Full 版
 
-- Windows 10 / 11 (x64)
-- GPU 利用時: NVIDIA / AMD / Intel の GPU と、Vulkan 対応の最新ドライバー
+- Windows 10 / 11 (x64)、または Linux x86-64（試験的）
+- GPU 利用時: NVIDIA / AMD / Intel の GPU（VRAM 4GB 以上が目安）と、Vulkan 対応の最新ドライバー
 - GPU が無い場合（CPU 処理）: RAM 16GB 以上、AVX2 対応 CPU、8論理スレッド以上
-- ディスク空き容量: 約 XX GB（モデルダウンロード含む）
+- ディスク空き容量: アプリ本体に加えて、モデル用に約1.7GB
 
 ### Editor 版
 
-- Windows 10 / 11 (x64)
+- Windows 10 / 11 (x64)、または Linux x86-64（試験的）
 - 音声入力を使う場合は、音声入力パック（約1.6GB）の空き容量
 
 ## インストールと初回セットアップ

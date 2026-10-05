@@ -104,6 +104,19 @@
 - 20秒以上の欠落・反復ハルシネーションは無し。強制終了で VRAM は即座に解放される
 - **Vulkan のデバイス番号は iGPU が 0、RTX 4060 が 1**。この測定時点のバイナリはデバイスを指定せず、whisper-cli（既定 = 0）も nemo-speech（`--device auto`）も **iGPU を選んだ**。現在の LoTT Vulkan 版は Rust 側で選択した GPU を `GGML_VK_VISIBLE_DEVICES`（whisper-cli）と `--device vulkan:N`（nemo-speech）で指定する（6.5）。
 
+### 2.2.1 現行設定での最大 VRAM（2026-10-05、同じ PC、NVIDIA ドライバー 576.57）
+
+v0.9.9 の動作要件（VRAM の目安）を決めるため、開発用に配置した Vulkan ビルド（whisper.cpp `d09f61a`）を、アプリと同じ引数（turbo・beam 3・VAD・フィラー例文・`-ojf`・8スレッド / `--preset v3-offline`）で RTX 4060 Laptop（`GGML_VK_VISIBLE_DEVICES=1`）に限定して実行した。`nvidia-smi --query-gpu=memory.used` を0.1秒間隔で読み、開始前（0MiB。画面は iGPU が出力）からの最大値を取った。時間はモデル読み込みを含み、音声変換を含まない。
+
+| 音声 | 文字起こし | 話者分離 |
+|---|---|---|
+| 10分デモ（11.7分） | 1,879MiB / 18.3秒 | 150MiB / 3.0秒 |
+| 50分デモ（58分） | 1,879MiB / 74.5秒 | 150MiB / 13.9秒 |
+
+- 最大 VRAM は音声の長さに依存しない。話者分離は `v3-offline` にしたことで 2.2 の約0.2GB からさらに減った
+- アプリは文字起こしと話者分離を順に実行する（並行実行の「高速モード」は UI から選べない）。同時に必要なのは約1.9GB
+- これを受けて README・リリースノートの目安を「VRAM 4GB 以上」とした（画面出力や他アプリの使用分を見込んだ値）。4GB / 6GB の実機、AMD / Intel の単体 GPU での最大 VRAM は未測定。計測スクリプトはセッションの一時領域で使い、リポジトリには置いていない
+
 ### 2.3 校正（llama.cpp llama-server）の CUDA 版と Vulkan 版（2026-09-25、同じ PC）
 
 この節は2026-09-25時点の比較測定記録であり、現行 LoTT Vulkan 版の構成を示すものではない。NVIDIA 向けも Vulkan に揃えられるかを見るため、同梱の CUDA 版 b10075 と公式 Vulkan 版 b10075（`llama-b10075-bin-win-vulkan-x64.zip`、RTX 4060 を `GGML_VK_VISIBLE_DEVICES=1` で指定）を、当時のアプリと同じ起動引数で比べた。依頼は校正用システムプロンプト（`gemma4_system.txt`）＋10分音声の書き起こし80行（入力926トークン）。プロンプトキャッシュは無効、各2回。E4B と Gemma 音声入力の値は過去の測定として残している。2026-09-28 の決定により、現在の LoTT Vulkan 版は `llama-server` を同梱せず、LLM 校正・全体校正・Gemma 音声入力を提供しない。マイク音声入力は whisper.cpp を使う。

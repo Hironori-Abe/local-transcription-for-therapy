@@ -9,37 +9,61 @@
 
 ## [Unreleased]
 
-音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換え、Python サイドカーと LLM 校正、CUDA / AMD (ROCm) / CPU 版を廃止して、配布を Full 版と Editor 版の2つ（Windows と Linux）に整理したリリース。
+## [0.9.9] - 未リリース
+
+音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換えたリリース。Python サイドカー、Gemma 4 による AI 校正・全体校正、CUDA / AMD (ROCm) / CPU 版を廃止し、配布を Full 版と Editor 版の2つ（Windows と Linux）に整理した。校正は「Whisper に句読点付きの書き方をまねさせる」方式と、日本語のローカルルール、氏名・地名の注意喚起の組み合わせになった。
 
 ### 追加
 
-- 文字起こしを faster-whisper から whisper.cpp（Whisper large-v3-turbo + Silero VAD）へ、話者分離を pyannote.audio から NeMo-Speech.cpp + Nemotron-3-Diarization へ切り替えた。どちらも Vulkan ビルドを同梱し、NVIDIA / AMD / Intel の GPU を1つのインストーラーで扱う。Hugging Face のアカウントやトークンは不要で、モデルは固定 revision・SHA-256 検証・中断再開で取得する。
-- Vulkan の GPU が無い PC では CPU で動作するようにした。CPU 実行のときだけ起動時に最低要件（RAM 16GB以上、AVX2、論理スレッド8以上）を確認し、処理時間の注意を毎回表示する。
-- 文字起こし画面に「処理装置: GPU（名前）/ CPU（理由）」を常時表示し、CPU 処理中は状況表示にも明示するようにした。話者分離が GPU 失敗で CPU に切り替わったときは、結果画面に案内する。開発ビルドには `--cpu` オプションを追加した。
-- 複数 GPU の PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動選択し、設定タブから変更できるようにした。
+- 文字起こしを faster-whisper から whisper.cpp（Whisper large-v3-turbo + Silero VAD）へ、話者分離を pyannote.audio から NeMo-Speech.cpp + Nemotron-3-Diarization へ切り替えた。どちらも Vulkan ビルドを同梱し、NVIDIA / AMD / Intel の GPU を1つのインストーラーで扱う。
+- Vulkan の GPU が無い PC では、Full 版が CPU で処理するようにした。CPU 実行のときだけ起動時に最低要件（RAM 16GB以上、AVX2、論理スレッド8以上）を確認し、処理時間の注意を毎回表示する。
+- 文字起こし画面に、使用する GPU 名、または CPU で処理する理由を常時表示するようにした。CPU 処理中は状況表示にも明示し、話者分離が GPU 失敗で CPU に切り替わったときは結果画面に案内する。
+- 複数 GPU の PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動選択し、設定タブの「音声エンジンの GPU」で変更できるようにした。文字起こし・話者分離・音声入力は同じ GPU を使う。
 - Windows で GPU ドライバーの問題や Vulkan GPU の未検出があるとき、起動時のダイアログとバナーでドライバーの導入・更新を案内するようにした。
-- GPU ドライバーが無く Vulkan ローダーが無い PC でも CPU 実行できるよう、フォールバック用の Vulkan ローダーを同梱した（Windows / Linux）。
-- 文字起こしにフィラー・相づちを残すための句読点入り例文を毎回渡し、1文1行に分けて文ごとに話者を割り当てるようにした。1秒未満の相づち行は、近い同じ話者の行へつなぐ。
-- Linux 向けに、Full 版・Editor 版とも deb + AppImage を Ubuntu 24.04 の Docker 経路でビルドする構成を用意した。Linux 実機でのビルド・起動は未検証。
-- 設定タブに、旧エディション（CUDA / AMD / CPU 版）が残したモデル・キャッシュ・実行資源を一覧して削除する機能を追加した。Full 版・Editor 版とも対象で、削除対象はサーバー側で決め直す。
-- Linux で NVIDIA プロプライエタリドライバーを検出したとき、`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` を自動設定するようにした。
+- GPU ドライバーや Vulkan ローダーが無い PC でも CPU で起動できるよう、フォールバック用の Vulkan ローダーを同梱した（Windows / Linux。ホストのローダーがあればそちらを優先する）。
+- 文字起こしの対象言語を設定タブで選べるようにした。既定は日本語で、選択肢は24言語。自動検出は行わない。公式資料で話者分離の対応を確認できない17言語には「話者分離非対応」と表示するが、話者分離は全言語で実行する。結果 JSON に言語を記録し、読み込み時に復元する。
+- 設定タブに、旧エディション（CUDA / AMD / CPU 版）が残したモデル・キャッシュ・実行資源を一覧して削除する機能を追加した（Full 版・Editor 版。リリースビルドのみ）。削除対象はアプリ側で決め直し、この版の音声認識・話者分離モデルは対象にしない。
+- 編集画面の連続再生・一時停止・再開に `Ctrl+Shift+P` を追加した。IME が `Ctrl+Shift+Space` を使う環境向けで、`Ctrl+Shift+Space` も引き続き使える。
 
 ### 変更
 
-- 配布を Full 版（旧「Vulkan 版」。identifier `net.gakkousya.lott`）と Editor 版の2つにした。CUDA 版・AMD (ROCm) 版・CPU 版と、CachyOS / Arch 向けパッケージは廃止した。
-- 校正は Rust のローカルルールによる句読点付与だけにした。カウンセリング会話のフィラー・相づちは保持し、日本語直後の半角「?」「!」は全角へ統一する。氏名・地名などの注意喚起は従来どおり残す。
-- 音声入力は whisper.cpp を使い、例文付きの1回の実行で候補を1件提示する形にした。Full 版は GPU があれば GPU、無ければ CPU で動き、Editor 版は常に CPU で動く。音声入力パックは Whisper large-v3-turbo と Silero VAD（約1.6GB）だけになった。
-- 初回セットアップで取得するモデルを、音声認識モデル（約1.6GB）と話者分離モデル（約0.1GB）だけにした。CUDA Toolkit、cuDNN、Python は不要になった。
-- 「音声調整」を ffmpeg のフィルター（ハイパス・ノイズ除去・音量の正規化）で行うようにした。調整は文字起こしに渡す音声だけにかけ、話者分離には元の音声を使う。既定は「何もしない」。
+- 配布を Full 版（identifier `net.gakkousya.lott`。旧 NVIDIA CUDA 版の後継）と Editor 版の2つにした。Windows は NSIS、Linux は `.deb` と AppImage。CUDA 版・AMD (ROCm) 版・CPU 版と、CachyOS / Arch 向けパッケージは廃止した。
+- 校正を全面的に作り直した。
+  - Gemma 4 E4B による自動句読点付与と、Gemma 4 E4B / 12B による全体校正（提案の採用・却下）を廃止した。
+  - 日本語では、句読点・フィラー入りの中立な例文を whisper.cpp に毎回渡し、Whisper がその書き方をまねて句読点を付ける。カウンセリング会話のフィラー・相づち（「えーと」「うん」など）も残りやすくなった。
+  - 文字起こしの後に、日本語のローカルルールで、日本語直後の半角「?」「!」の全角化と、句読点で終わらない行末の補完だけを行う。日本語以外の言語には日本語の例文・句読点ルール・記号幅変換を適用しない。
+  - 氏名・地名など個人の特定につながりうる語の注意喚起（赤字）と、「〜病院」「〜さん」などの二段目の注意喚起（黄色）は従来どおり行う。
+- 文字起こし結果を1文1行に分け、文ごとに話者を割り当てるようにした。話者交代位置で分割するため、whisper.cpp のトークン時刻を使う。1秒未満の相づち行は、近い同じ話者の行へつなぐ。
+- 話者分離を録音ファイル向けの `v3-offline` preset で実行するようにした。Arc 140T の実測では、11.7分音声の話者分離が64秒から8.4秒に短縮した（58分音声は32.8秒）。
+- 初回セットアップで取得するモデルを、音声認識モデル（約1.6GB）と話者分離モデル（約0.1GB）だけにした。固定 revision・SHA-256 検証・中断再開に対応し、Hugging Face のアカウント・トークン、CUDA Toolkit、cuDNN、Python は不要になった。
+- 処理に必要な VRAM が大幅に減った。RTX 4060 Laptop（Vulkan）での実測の最大使用量は、文字起こし 1,879MiB、話者分離 150MiB で、11.7分と58分の音声で同じだった（両者は順に実行する）。動作要件の目安を「VRAM 8GB以上」から「VRAM 4GB以上」に改めた。
+- 音声入力を whisper.cpp に置き換え、選択中の言語で1回だけ文字起こしして候補を1件示す形にした。日本語ではフィラー例文を付け、前後行の文脈は渡さない。Full 版は GPU があれば GPU、無ければ CPU で動き、Editor 版は常に CPU で動く。Editor 版の音声入力パックは Whisper large-v3-turbo と Silero VAD（約1.6GB）だけになった。
+- 「音声調整」を同梱 LGPL ffmpeg のフィルター（低域ノイズの処理・強いノイズの処理・音量拡大・全般的な改善）で行うようにした。調整は文字起こしに渡す音声だけにかけ、話者分離には元の音声を使う。既定は「何もしない」で、結果 JSON に設定を記録する。
+- 行ごとの連続再生・ループ再生、再生ショートカット、下部の再生コントロールが同じ再生状態を共有するようにした。再生中は一時停止、一時停止中は同じ位置から再開し、行ボタンのアイコン・ツールチップも状態に合わせて切り替わる。
+- 文字起こし画面の表示を「音声ファイル: 長さ / GPU（名前）」のように簡潔にした。
+- Linux で NVIDIA プロプライエタリドライバーを検出したとき、`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` と `WEBKIT_FORCE_DMABUF_RENDERER=1` を自動で組み合わせて設定するようにした（AppImage / deb 共通）。Ubuntu の WebKitGTK が NVIDIA 上で SHM 経路まで無効にする問題（Debian #1142771）を避け、合成器を維持する。利用者の設定は尊重し、`LOTT_ENABLE_DMABUF_RENDERER=1` で無効にできる。
 - 開発用 Angular dev server は `127.0.0.1` にだけ bind するようにした。
 
 ### 削除
 
 - Python サイドカー、faster-whisper、pyannote.audio を削除した。Python は同梱も使用もしない。
-- Gemma 4 E4B / 12B による AI 校正・全体校正、LM Studio / Ollama 連携、区間聞き直しを削除した。会話データを推論サーバーへ渡す経路は無くなった。
+- Gemma 4 E4B / 12B、llama-server、LM Studio / Ollama 連携、区間聞き直しを削除した。会話データを推論サーバーへ渡す経路は無くなった。
+- 文字起こし用モデルの選択、実行デバイス・話者分離デバイス・計算方式の選択、AI 校正の各設定（バックエンド・モデル・コンテキスト長・並列数など）、Hugging Face アクセストークン欄を削除した。デバイスは自動選択になった。
 - 文字起こし設定の「再試行の理由」を削除した。旧話者分離（pyannote）のクラスタリング基準を変える設定で、Nemotron には対応する設定が無いため。
 - 「頻出語・注目語」の指定を削除した。whisper.cpp で毎回の窓に付けると、話されていない語（臨床用語）が出力される誤認識が確認されたため。
-- CUDA / ROCm の導入案内や Hugging Face のトークン取得ページなど、外部サイトを開くボタンを削除した（該当する手順が無くなったため）。
+- CUDA / ROCm の導入案内や Hugging Face の同意ページなど、外部サイトを開くボタンを削除した（該当する手順が無くなったため）。
+
+### 修正
+
+- 旧データの一覧で、容量が0の項目を通知しないようにした。小さなファイルは B / KB 単位で表示し、読み取れない項目は0ではなく「容量不明」と表示する。シンボリックリンクはたどらない。
+
+### 内部品質
+
+- Linux の配布ビルドを Ubuntu 24.04 Docker 経路に一本化した（`scripts/build-appimage-docker.sh`）。GStreamer の LGPL 構成、libreadline の混入、Vulkan ローダー・ICD の同梱範囲、エンジンの `RUNPATH=$ORIGIN` と libgomp の同梱をビルド時に検査し、違反があれば成果物を作らない。`patchelf` を必須にし、既存エンジンの補修用に `setup-ggml-speech-linux.sh --finalize-only` を追加した。
+- Linux は、Docker でのビルド、AppImage / deb の起動、同梱エンジンの CPU 実行と GStreamer デコードを WSL2・Ubuntu 24.04 コンテナで確認した。Linux 実機での GPU 実行・各ディストリビューションでの動作は未検証。
+- 再生の読み込み・シーク・開始の完了を世代で照合し、停止済みの要求から再生が始まらないようにした。
+- 同梱 Wry（WebKitGTK）で、WebKitGTK 2.40 で非推奨になった `run_javascript` を `evaluate_javascript` に置き換えた。Windows の WebView2 には影響しない。
+- 対象言語の正規化、日本語だけに例文・句読点ルールを適用する判定、再生状態、旧データの容量表示、リリース成果物の集約、Linux エンジンのセットアップスクリプトにテストを追加した。
 
 
 ## [0.9.8] - 2026-08-31
@@ -290,7 +314,8 @@ v0.9.0 からのメンテナンスリリース。アプリの基本機能（文�
 - セグメント表の編集・句点での分割・セグメント単位の音声再生。
 - Word（.docx）/ Excel（.xlsx）/ JSON 形式での保存。
 
-[Unreleased]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.9...HEAD
+[0.9.9]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/Hironori-Abe/local-transcription-for-therapy/compare/v0.9.5...v0.9.6

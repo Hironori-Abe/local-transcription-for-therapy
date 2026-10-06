@@ -9,7 +9,7 @@
 
 ## [Unreleased]
 
-## [0.9.9] - 未リリース
+## [0.9.9] - 2026-10-06
 
 音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換えたリリース。Python サイドカー、Gemma 4 による AI 校正・全体校正、CUDA / AMD (ROCm) / CPU 版を廃止し、配布を Full 版と Editor 版の2つに整理した（ビルド済みの配布は Windows。Linux は利用者自身のビルドを前提とする）。校正は「Whisper に句読点付きの書き方をまねさせる」方式と、日本語のローカルルール、氏名・地名の注意喚起の組み合わせになった。
 

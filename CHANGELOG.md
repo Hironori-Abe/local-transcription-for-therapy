@@ -11,7 +11,7 @@
 
 ## [0.9.9] - 未リリース
 
-音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換えたリリース。Python サイドカー、Gemma 4 による AI 校正・全体校正、CUDA / AMD (ROCm) / CPU 版を廃止し、配布を Full 版と Editor 版の2つ（Windows と Linux）に整理した。校正は「Whisper に句読点付きの書き方をまねさせる」方式と、日本語のローカルルール、氏名・地名の注意喚起の組み合わせになった。
+音声エンジンを whisper.cpp と NeMo-Speech.cpp（Vulkan）へ全面的に置き換えたリリース。Python サイドカー、Gemma 4 による AI 校正・全体校正、CUDA / AMD (ROCm) / CPU 版を廃止し、配布を Full 版と Editor 版の2つに整理した（ビルド済みの配布は Windows。Linux は利用者自身のビルドを前提とする）。校正は「Whisper に句読点付きの書き方をまねさせる」方式と、日本語のローカルルール、氏名・地名の注意喚起の組み合わせになった。
 
 ### 追加
 
@@ -27,7 +27,7 @@
 
 ### 変更
 
-- 配布を Full 版（identifier `net.gakkousya.lott`。旧 NVIDIA CUDA 版の後継）と Editor 版の2つにした。Windows は NSIS、Linux は `.deb` と AppImage。CUDA 版・AMD (ROCm) 版・CPU 版と、CachyOS / Arch 向けパッケージは廃止した。
+- 配布を Full 版（identifier `net.gakkousya.lott`。旧 NVIDIA CUDA 版の後継）と Editor 版の2つにした。Windows は NSIS で配布し、Linux（`.deb` と AppImage）は利用者自身が `scripts/build-appimage-docker.sh` でビルドすることを前提とした（ビルド済みを後から添付する場合はある）。CUDA 版・AMD (ROCm) 版・CPU 版と、CachyOS / Arch 向けパッケージは廃止した。
 - 校正を全面的に作り直した。
   - Gemma 4 E4B による自動句読点付与と、Gemma 4 E4B / 12B による全体校正（提案の採用・却下）を廃止した。
   - 日本語では、句読点・フィラー入りの中立な例文を whisper.cpp に毎回渡し、Whisper がその書き方をまねて句読点を付ける。カウンセリング会話のフィラー・相づち（「えーと」「うん」など）も残りやすくなった。
@@ -36,7 +36,7 @@
 - 文字起こし結果を1文1行に分け、文ごとに話者を割り当てるようにした。話者交代位置で分割するため、whisper.cpp のトークン時刻を使う。1秒未満の相づち行は、近い同じ話者の行へつなぐ。
 - 話者分離を録音ファイル向けの `v3-offline` preset で実行するようにした。Arc 140T の実測では、11.7分音声の話者分離が64秒から8.4秒に短縮した（58分音声は32.8秒）。
 - 初回セットアップで取得するモデルを、音声認識モデル（約1.6GB）と話者分離モデル（約0.1GB）だけにした。固定 revision・SHA-256 検証・中断再開に対応し、Hugging Face のアカウント・トークン、CUDA Toolkit、cuDNN、Python は不要になった。
-- 処理に必要な VRAM が大幅に減った。RTX 4060 Laptop（Vulkan）での実測の最大使用量は、文字起こし 1,879MiB、話者分離 150MiB で、11.7分と58分の音声で同じだった（両者は順に実行する）。動作要件の目安を「VRAM 8GB以上」から「VRAM 4GB以上」に改めた。
+- 処理に必要な VRAM が大幅に減った。RTX 4060 Laptop（Vulkan）での実測の最大使用量は、文字起こし 1,879MiB、話者分離 150MiB で、11.7分と58分の音声で同じだった（両者は順に実行する）。推奨する VRAM を「8GB以上」から「6GB以上」に改めた（余裕を見た値）。
 - 音声入力を whisper.cpp に置き換え、選択中の言語で1回だけ文字起こしして候補を1件示す形にした。日本語ではフィラー例文を付け、前後行の文脈は渡さない。Full 版は GPU があれば GPU、無ければ CPU で動き、Editor 版は常に CPU で動く。Editor 版の音声入力パックは Whisper large-v3-turbo と Silero VAD（約1.6GB）だけになった。
 - 「音声調整」を同梱 LGPL ffmpeg のフィルター（低域ノイズの処理・強いノイズの処理・音量拡大・全般的な改善）で行うようにした。調整は文字起こしに渡す音声だけにかけ、話者分離には元の音声を使う。既定は「何もしない」で、結果 JSON に設定を記録する。
 - 行ごとの連続再生・ループ再生、再生ショートカット、下部の再生コントロールが同じ再生状態を共有するようにした。再生中は一時停止、一時停止中は同じ位置から再開し、行ボタンのアイコン・ツールチップも状態に合わせて切り替わる。

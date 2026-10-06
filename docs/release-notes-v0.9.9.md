@@ -10,13 +10,11 @@ v0.9.9は、音声エンジンを全面的に入れ替えた大きな更新で�
 | --- | --- | --- |
 | `LoTT-v0.9.9-windows-x64-vulkan-setup.exe` | Windows 10 / 11・NVIDIA / AMD / Intel GPU（GPUが無ければCPUで動作） | **Full版・主配布** |
 | `LoTT-v0.9.9-windows-x64-editor-setup.exe` | Windows 10 / 11・GPU不要 | JSONの読込・編集・書き出しに特化（文字起こし・話者分離なし） |
-| `LoTT-v0.9.9-linux-x64-vulkan.AppImage` | Linux x86-64・NVIDIA / AMD / Intel GPU（GPUが無ければCPUで動作） | Full版・試験的 |
-| `LoTT-v0.9.9-linux-x64-vulkan.deb` | Ubuntu系 x86-64・NVIDIA / AMD / Intel GPU（GPUが無ければCPUで動作） | Full版・試験的 |
-| `LoTT-v0.9.9-linux-x64-editor.AppImage` | Linux x86-64・GPU不要 | Editor版・試験的 |
-| `LoTT-v0.9.9-linux-x64-editor.deb` | Ubuntu系 x86-64・GPU不要 | Editor版・試験的 |
 | `SHA256SUMS.txt` | — | 各配布ディレクトリ内のファイルに対応するSHA-256チェックサム |
 
 ファイル名の `vulkan` はFull版を表します。NVIDIAのPCでもこのファイルを使ってください（CUDA版はありません）。
+
+Linux版（`.deb` / AppImage）は、利用者自身がビルドすることを前提にしています。手順は「Linux版」の節を参照してください。ビルド済みのファイルを後からこのReleaseに追加することもありますが、毎回ではありません。
 
 ダウンロード後は、配布ディレクトリにあるチェックサムを任意で確認できます。
 
@@ -31,7 +29,7 @@ sha256sum -c SHA256SUMS.txt
 | Windows NVIDIA（CUDA）版 | Full版（`vulkan`） | 上書きインストールされます。初回セットアップでモデル（約1.7GB）を取得し直してください。CUDA Toolkit・cuDNNは不要になりました |
 | Windows CPU版 / AMD版 | Full版（`vulkan`） | 別アプリとして追加されます。旧版はWindowsの「インストールされているアプリ」からアンインストールしてください |
 | Windows Editor版 | Editor版 | 上書きインストールされます。音声入力を使う場合は、設定タブから新しい音声入力パック（約1.6GB）を取得してください |
-| Linux NVIDIA（CUDA）版 | Linux Full版（`vulkan`） | CachyOS / Arch向けパッケージは廃止しました。AppImageまたは`.deb`を使ってください |
+| Linux NVIDIA（CUDA）版 | Linux Full版（`vulkan`。自分でビルド） | CachyOS / Arch向けパッケージは廃止しました。「Linux版」の節の手順でAppImageまたは`.deb`をビルドしてください |
 
 - 旧版が残したモデルやキャッシュ（Gemma 4、Python環境、faster-whisper・pyannoteのモデルなど）は、設定タブの一覧から確認して削除できます。会話データではありません。
 - 保存済みのJSONは、Full版・Editor版のどちらでも読み込めます。
@@ -51,7 +49,7 @@ sha256sum -c SHA256SUMS.txt
 - 文字起こしはwhisper.cpp（Whisper large-v3-turbo + Silero VAD）、話者分離はNeMo-Speech.cpp + Nemotron-3-Diarizationで行います。どちらもVulkanビルドを同梱し、NVIDIA / AMD / IntelのGPUで動きます。
 - 初回セットアップで取得するのは、音声認識モデル（約1.6GB）と話者分離モデル（約0.1GB）だけです。Hugging Faceのアカウント・トークン、CUDA Toolkit、cuDNN、Pythonは不要になりました。ダウンロードは固定版・SHA-256検証・中断後の再開に対応しています。
 - 話者分離は録音ファイル向けの設定で実行します。RTX 4060 Laptopでは、58分の音声の話者分離が約14秒で終わりました（モデル読み込みを含む）。
-- 必要なVRAMが大きく減りました。RTX 4060 Laptopでの実測の最大使用量は、文字起こし約1.9GB、話者分離約0.15GBです（2つは順に実行します）。動作要件の目安は「VRAM 4GB以上」です。
+- 必要なVRAMが大きく減りました。RTX 4060 Laptopでの実測の最大使用量は、文字起こし約1.9GB、話者分離約0.15GBです（2つは順に実行します）。余裕を見て、VRAM 6GB以上を推奨します。
 
 ### GPUが無いPCでも動作
 
@@ -84,7 +82,7 @@ sha256sum -c SHA256SUMS.txt
 
 ### Linux版
 
-- Linux版はFull版・Editor版とも、AppImageと`.deb`で配布します。Ubuntu 24.04のDocker環境でビルドしています。
+- Linux版は、利用者自身がビルドすることを基本にしています。Dockerを用意してこのリポジトリを取得し、Full版は `bash scripts/build-appimage-docker.sh`、Editor版は `bash scripts/build-appimage-docker.sh --editor` を実行すると、Ubuntu 24.04のコンテナ内で `.deb` とAppImageを作ります（ビルド時はインターネット接続が必要です）。詳しくは `docs/release-build-linux.md` を参照してください。
 - GPUのドライバー（ICD）は同梱せず、ホストのものを使います。Vulkanローダーがホストに無い場合だけ、同梱のフォールバックを使ってCPUで処理します。
 - NVIDIAのプロプライエタリドライバーを検出したときは、画面の描画が止まったりスクロールがカクついたりしないよう、WebKitGTKの描画設定を自動で調整します（`LOTT_ENABLE_DMABUF_RENDERER=1` で無効化できます）。
 - Docker・WSL2上で、ビルド、AppImage / `.deb`の起動、同梱エンジンのCPU実行を確認しました。**Linux実機でのGPU実行と、各ディストリビューションでの動作は未検証です。**
@@ -112,21 +110,21 @@ sha256sum -c SHA256SUMS.txt
 
 ### Full版
 
-- Windows 10 / 11 64bit、またはLinux x86-64（試験的）
-- GPUで処理する場合: NVIDIA / AMD / IntelのGPU（VRAM 4GB以上を目安）と、Vulkanに対応した最新のGPUドライバー。CUDA Toolkit・cuDNNは不要です
+- Windows 10 / 11 64bit。Linux x86-64は自分でビルドして使います（試験的）
+- GPUで処理する場合: NVIDIA / AMD / IntelのGPU（VRAM 6GB以上を推奨）と、Vulkanに対応した最新のGPUドライバー。CUDA Toolkit・cuDNNは不要です
 - GPUが無い場合（CPU処理）: RAM 16GB以上、AVX2対応CPU、8論理スレッド以上。処理時間は音声時間の約1.5〜2.5倍が目安です
 - ディスク空き容量: アプリ本体に加えて、モデル用に約1.7GB
 - Linuxでは、GPUで処理するためにホストのVulkanローダー（Ubuntuでは`libvulkan1`。`.deb`は自動で導入）と、MesaまたはNVIDIAのVulkanドライバーが必要です
 
 ### Editor版
 
-- Windows 10 / 11 64bit、またはLinux x86-64（試験的）
+- Windows 10 / 11 64bit。Linux x86-64は自分でビルドして使います（試験的）
 - GPU不要
 - 音声入力を使う場合は、音声入力パック用に約1.6GBの空き容量
 
 ## インストールと初回セットアップ
 
-1. 使用するOSに合うインストーラーまたはパッケージを導入します。
+1. Windowsはインストーラーを、Linuxは自分でビルドしたパッケージを導入します。
 2. Full版は、アプリのセットアップタブから文字起こしモデル（Whisper large-v3-turbo・Silero VAD）と話者分離モデル（Nemotron-3-Diarization）をダウンロードします。
    - インターネット接続が必要なのは、このモデル取得のときだけです。
    - Nemotron-3-DiarizationのライセンスはNVIDIA OpenMDW-1.1です。本文はセットアップ画面から確認できます。
@@ -145,7 +143,7 @@ sha256sum -c SHA256SUMS.txt
 
 ## 既知の注意事項
 
-- Linux版は試験的な配布です。Linux実機でのGPU実行、Wayland / IMEでの日本語入力、スクロール性能は未検証です。
+- Linux版は試験的な位置づけです（利用者自身のビルドが前提）。Linux実機でのGPU実行、Wayland / IMEでの日本語入力、スクロール性能は未検証です。
 - 最小構成のLinux（WSLなど）では、`libwayland-server0`、`libgles2`、日本語フォント（例: `fonts-noto-cjk`）などを別途導入しないと起動できない、または日本語が表示されない場合があります。
 - 話者分離モデル（Nemotron-3-Diarization）自体には話者数を指定できません。画面で選んだ話者数は後処理に使い、発話時間の長い話者から順にその人数だけ残します。
 - whisper.cppの初回実行では、GPUドライバーがシェーダーを準備するため、2回目以降より時間がかかることがあります。

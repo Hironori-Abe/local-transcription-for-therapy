@@ -18,7 +18,7 @@ LoTT が目指すのは、全自動で完璧な逐語録を作ることではあ
 - **文章校正** — フィラー・相づちを残した句読点付きの下書きを作り、氏名・地名など個人の特定につながりうる語を警告表示します（詳しくは下記「文章校正のしくみ」）
 - **編集画面** — 行ごとの再生・ループ再生・連続再生、キーボードショートカット、句点での行の分割、マイクからの音声入力
 - **保存形式** — Word（.docx）/ Excel（.xlsx）/ SRT字幕 / JSON。いずれも任意のパスワードで暗号化して保存できます（Word / Excel は Office 標準の暗号化、JSON / SRT は AES-256 暗号化 ZIP）。パスワード付きで保存するとき、暗号化されていない内容をディスクに書き出しません
-- **軽い動作要件** — GPU で処理する場合の VRAM は 4GB 以上が目安です（実測の最大使用量は約1.9GB）
+- **軽い動作要件** — GPU で処理する場合、VRAM 6GB 以上を推奨します（実測の最大使用量は約1.9GB）
 
 ## 文章校正のしくみ
 
@@ -49,18 +49,20 @@ v0.9.9 で校正の方式を作り直しました。以前の Gemma 4 による 
 
 配布ファイル名の `vulkan` が Full 版、`editor` が Editor 版です。NVIDIA の GPU でも Full 版（`vulkan`）を使います。
 
+ビルド済みのインストーラーを配布するのは Windows 版です。Linux 版（`.deb` / AppImage）は、利用者自身がビルドして使うことを前提にしています（下記「Linux で使う場合」）。
+
 ## 動作環境
 
 ### Full 版
 
 | 項目 | 要件 |
 | --- | --- |
-| OS | Windows 10 / 11 64bit、または Linux x86-64（`.deb` / AppImage。試験的） |
-| GPU で処理する場合 | NVIDIA / AMD / Intel の GPU（**VRAM 4GB 以上**が目安）と、Vulkan に対応した最新の GPU ドライバー |
+| OS | Windows 10 / 11 64bit。Linux x86-64 は自分でビルドして使います（試験的） |
+| GPU で処理する場合 | NVIDIA / AMD / Intel の GPU（**VRAM 6GB 以上を推奨**）と、Vulkan に対応した最新の GPU ドライバー |
 | GPU が無い場合 | CPU で処理（下記の最低要件あり） |
 | ディスク | アプリ本体に加えて、モデル用に約1.7GB |
 
-- 必要な VRAM の根拠: RTX 4060 Laptop（Vulkan）での実測の最大使用量は、文字起こし 1,879MiB、話者分離 150MiB でした。11.7分と58分の音声で同じ値で、音声の長さでは増えません。文字起こしと話者分離は順に実行するため、同時に使うのは多い方だけです。画面表示や他のアプリが使う分を見込んで、4GB 以上を目安としています。
+- 必要な VRAM の根拠: RTX 4060 Laptop（Vulkan）での実測の最大使用量は、文字起こし 1,879MiB、話者分離 150MiB でした。11.7分と58分の音声で同じ値で、音声の長さでは増えません。文字起こしと話者分離は順に実行するため、同時に使うのは多い方だけです。画面表示や他のアプリが使う分、ドライバーや GPU の種類による差を見込んで、余裕をもって 6GB 以上を推奨しています。
 - 内蔵 GPU（Intel Arc / AMD Radeon の iGPU など）でも動作します。単体 GPU より時間はかかります。
 - GPU が複数ある PC では、内蔵 GPU 以外で VRAM が最大の GPU を自動で使います。設定タブの「音声エンジンの GPU」で変更できます。
 - GPU ドライバーが入っていない・古い場合は、起動時のダイアログとバナーで導入・更新を案内します（Windows のみ）。
@@ -81,18 +83,28 @@ Full 版は、Vulkan に対応した GPU が見つからない場合、自動的
 
 ### Editor 版
 
-- Windows 10 / 11 64bit、または Linux x86-64（試験的）。GPU は不要です。
+- Windows 10 / 11 64bit。Linux x86-64 は自分でビルドして使います（試験的）。GPU は不要です。
 - 音声入力を使う場合は、音声入力パック用に約1.6GB の空き容量が必要です。
 
 ## インストールと初回セットアップ
 
-1. [Releases](https://github.com/Hironori-Abe/local-transcription-for-therapy/releases) から、Windows 用インストーラー（`LoTT-vX.Y.Z-windows-x64-{vulkan|editor}-setup.exe`）、または Linux 用の `.deb` / AppImage（`LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.*`）を入手して導入します
+1. [Releases](https://github.com/Hironori-Abe/local-transcription-for-therapy/releases) から Windows 用インストーラー（`LoTT-vX.Y.Z-windows-x64-{vulkan|editor}-setup.exe`）を入手して導入します。Linux の場合は、下記「Linux で使う場合」の手順でビルドした `.deb` / AppImage を導入します
 2. **Full 版**: アプリを起動し、セットアップタブから文字起こしモデル（Whisper large-v3-turbo・Silero VAD、約1.6GB）と話者分離モデル（Nemotron-3-Diarization、約0.1GB）をダウンロードします（要インターネット接続）
    - Hugging Face のアカウントやトークンは不要です。中断した場合は、セットアップを再実行すると続きから取得します
    - Nemotron-3-Diarization のライセンスは NVIDIA OpenMDW-1.1 です。本文はセットアップ画面から確認できます
 3. **Editor 版**: JSON の読込・編集・書き出しだけならモデルは不要です。音声入力を使う場合は、設定タブから「音声入力パック」をダウンロードします
 
 モデル取得の後は、文字起こし・話者分離・校正をオフラインで使えます。
+
+### Linux で使う場合
+
+Linux 版は、利用者自身がビルドすることを基本にしています。ビルド済みの `.deb` / AppImage を Releases に載せることもありますが、毎回ではありません。また、Linux 実機での GPU 動作や各ディストリビューションでの動作は未検証で、試験的な位置づけです。
+
+1. Docker を用意し、このリポジトリを取得します（ビルド時はインターネット接続が必要です）
+2. Full 版は `bash scripts/build-appimage-docker.sh`、Editor 版は `bash scripts/build-appimage-docker.sh --editor` を実行します（Ubuntu 24.04 のコンテナ内でビルドします）
+3. `dist/vX.Y.Z/` にできた `LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.{deb,AppImage}` を導入します
+
+詳しい手順と注意点は [docs/release-build-linux.md](docs/release-build-linux.md) を参照してください。
 
 ### v0.9.8 以前からの更新
 
@@ -154,7 +166,7 @@ IME が `Ctrl+Shift+Space` を使う環境では `Ctrl+Shift+P` をお使いく�
 - 開発環境セットアップ・内部仕様: [docs/development.md](docs/development.md)
 - ggml 音声エンジンの設計と計測: [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
 - 配布ビルド（Windows NSIS）: [docs/release-build-windows.md](docs/release-build-windows.md)
-- 配布ビルド（Linux deb / AppImage・試験的）: [docs/release-build-linux.md](docs/release-build-linux.md)
+- Linux 版のビルド（deb / AppImage・試験的）: [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## ライセンス
 

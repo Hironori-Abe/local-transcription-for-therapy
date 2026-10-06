@@ -18,7 +18,7 @@ LoTT does not aim to produce perfect verbatim transcripts automatically. The app
 - **Proofreading** - Produces a punctuated draft that keeps fillers and backchannels, and highlights words that could identify individuals, such as names and place names (see "How Proofreading Works" below)
 - **Editor** - Per-row playback, loop playback, and continuous playback; keyboard shortcuts; splitting rows at Japanese full stops; microphone voice input
 - **Save formats** - Word (.docx), Excel (.xlsx), SRT subtitles, and JSON. All of them can be saved encrypted with an optional password (Word and Excel use standard Office encryption; JSON and SRT use an AES-256 encrypted ZIP). When saving with a password, unencrypted content is never written to disk
-- **Modest requirements** - About 4 GB of VRAM or more is recommended for GPU processing (measured peak usage is about 1.9 GB)
+- **Modest requirements** - For GPU processing, 6 GB of VRAM or more is recommended (measured peak usage is about 1.9 GB)
 
 ## How Proofreading Works
 
@@ -49,18 +49,20 @@ When a language other than Japanese is selected, the Japanese example sentence, 
 
 In release file names, `vulkan` means the Full edition and `editor` means the Editor edition. Use the Full edition (`vulkan`) for NVIDIA GPUs as well.
 
+Prebuilt installers are distributed for Windows. The Linux editions (`.deb` / AppImage) are intended to be built by users themselves (see "Using LoTT on Linux" below).
+
 ## Requirements
 
 ### Full Edition
 
 | Item | Requirement |
 | --- | --- |
-| OS | Windows 10 / 11 64-bit, or Linux x86-64 (`.deb` / AppImage; experimental) |
-| For GPU processing | An NVIDIA / AMD / Intel GPU (**about 4 GB of VRAM or more** recommended) and an up-to-date GPU driver that supports Vulkan |
+| OS | Windows 10 / 11 64-bit. On Linux x86-64, build it yourself (experimental) |
+| For GPU processing | An NVIDIA / AMD / Intel GPU (**6 GB of VRAM or more recommended**) and an up-to-date GPU driver that supports Vulkan |
 | Without a GPU | Processing runs on the CPU (minimum requirements below) |
 | Disk | About 1.7 GB for models, in addition to the app itself |
 
-- Basis for the VRAM figure: on an RTX 4060 Laptop GPU (Vulkan), measured peak usage was 1,879 MiB for transcription and 150 MiB for speaker diarization. The values were the same for 11.7-minute and 58-minute audio and do not grow with audio length. Transcription and diarization run one after the other, so only the larger of the two is used at a time. 4 GB or more is recommended to leave room for the display and other apps.
+- Basis for the VRAM figure: on an RTX 4060 Laptop GPU (Vulkan), measured peak usage was 1,879 MiB for transcription and 150 MiB for speaker diarization. The values were the same for 11.7-minute and 58-minute audio and do not grow with audio length. Transcription and diarization run one after the other, so only the larger of the two is used at a time. 6 GB or more is recommended to leave a comfortable margin for the display, other apps, and differences between drivers and GPU models.
 - Integrated GPUs (such as Intel Arc or AMD Radeon iGPUs) also work, although more slowly than discrete GPUs.
 - On PCs with multiple GPUs, the GPU with the most VRAM other than the integrated GPU is used automatically. You can change it with "Audio engine GPU" in the Settings tab.
 - If the GPU driver is missing or outdated, a startup dialog and a banner tell you to install or update it (Windows only).
@@ -81,18 +83,28 @@ When no Vulkan-capable GPU is found, the Full edition automatically processes on
 
 ### Editor Edition
 
-- Windows 10 / 11 64-bit, or Linux x86-64 (experimental). No GPU is required.
+- Windows 10 / 11 64-bit. On Linux x86-64, build it yourself (experimental). No GPU is required.
 - To use voice input, about 1.6 GB of free space is needed for the voice input pack.
 
 ## Installation and Initial Setup
 
-1. From [Releases](https://github.com/Hironori-Abe/local-transcription-for-therapy/releases), get the Windows installer (`LoTT-vX.Y.Z-windows-x64-{vulkan|editor}-setup.exe`) or the Linux `.deb` / AppImage (`LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.*`) and install it
+1. Get the Windows installer (`LoTT-vX.Y.Z-windows-x64-{vulkan|editor}-setup.exe`) from [Releases](https://github.com/Hironori-Abe/local-transcription-for-therapy/releases) and install it. On Linux, install the `.deb` / AppImage you built by following "Using LoTT on Linux" below
 2. **Full edition**: launch the app and download the transcription models (Whisper large-v3-turbo and Silero VAD, about 1.6 GB) and the speaker diarization model (Nemotron-3-Diarization, about 0.1 GB) from the Setup tab. This requires an internet connection
    - No Hugging Face account or token is needed. If a download is interrupted, run setup again to resume
    - Nemotron-3-Diarization is licensed under the NVIDIA OpenMDW-1.1 license. The full text can be viewed on the setup screen
 3. **Editor edition**: no models are needed for JSON import, editing, and export. To use voice input, download the "voice input pack" from the Settings tab
 
 After the models are downloaded, transcription, diarization, and proofreading can be used offline.
+
+### Using LoTT on Linux
+
+The Linux editions are basically meant to be built by users themselves. Prebuilt `.deb` / AppImage files may sometimes be posted on Releases, but not for every release. GPU operation on real Linux hardware and behavior on each distribution have not been verified, so Linux support is experimental.
+
+1. Install Docker and clone this repository (an internet connection is required while building)
+2. Run `bash scripts/build-appimage-docker.sh` for the Full edition, or `bash scripts/build-appimage-docker.sh --editor` for the Editor edition (the build runs inside an Ubuntu 24.04 container)
+3. Install the resulting `LoTT-vX.Y.Z-linux-x64-{vulkan|editor}.{deb,AppImage}` from `dist/vX.Y.Z/`
+
+See [docs/release-build-linux.md](docs/release-build-linux.md) (Japanese) for detailed steps and notes.
 
 ### Upgrading from v0.9.8 or Earlier
 
@@ -154,7 +166,7 @@ Japanese, English, Chinese, Hindi, Telugu, Bengali, Kannada, Korean, Arabic, Ger
 - Development environment setup and internal notes (Japanese): [docs/development.md](docs/development.md)
 - ggml speech engine design and measurements (Japanese): [docs/ggml-speech-engine-design.md](docs/ggml-speech-engine-design.md)
 - Distribution builds, Windows NSIS (Japanese): [docs/release-build-windows.md](docs/release-build-windows.md)
-- Distribution builds, Linux deb / AppImage; experimental (Japanese): [docs/release-build-linux.md](docs/release-build-linux.md)
+- Building the Linux editions (deb / AppImage; experimental) (Japanese): [docs/release-build-linux.md](docs/release-build-linux.md)
 
 ## License
 

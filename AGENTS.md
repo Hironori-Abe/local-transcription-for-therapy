@@ -113,7 +113,7 @@ scripts\run-dev-editor.bat   rem Editor 版
 
 ## Setup and Run (Ubuntu / Linux)
 
-Linux は Full 版・Editor 版とも deb + AppImage で配布する。Docker でのビルド、AppImage の起動、同梱エンジンの CPU 実行は WSL2（Ubuntu 26.04）で確認済み（2026-09-30）。**Linux 実機での GPU 実行・各ディストリビューションでの動作は未検証**（`docs/release-build-linux.md`）。Python・LLM は使わない。
+Linux は Full 版・Editor 版とも deb + AppImage を、利用者自身が Docker 経路でビルドすることを前提とする（ビルド済みを GitHub Release に後から添付することはあるが、前提にしない）。Docker でのビルド、AppImage の起動、同梱エンジンの CPU 実行は WSL2（Ubuntu 26.04）で確認済み（2026-09-30）。**Linux 実機での GPU 実行・各ディストリビューションでの動作は未検証**（`docs/release-build-linux.md`）。Python・LLM は使わない。
 
 推奨フロー:
 
@@ -275,7 +275,7 @@ linuxdeploy 製 AppRun は `LD_LIBRARY_PATH` の先頭へ `$APPDIR/usr/lib` を�
 
 ## Distribution Strategy
 
-**現行方針（2026-09-29）: 配布は Full 版と Editor 版の2つ。Windows（NSIS）と Linux（deb + AppImage）を対象とする。Linux は Docker 経路でのビルドと AppImage の起動を WSL2 で確認済み。実機での GPU 実行は未検証。** 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）で動かし、GPU が無い PC では CPU で動かす。LLM・Python は含めない。CUDA 版・AMD (ROCm) 版・CPU 版は削除した。
+**現行方針（2026-09-29）: 配布は Full 版と Editor 版の2つ。ビルド済みの配布は Windows（NSIS）。Linux（deb + AppImage）は利用者自身のビルドを前提とし、ビルド済みの添付は任意（README・リリースノートでもこの前提で案内する）。Linux は Docker 経路でのビルドと AppImage の起動を WSL2 で確認済み。実機での GPU 実行は未検証。** 音声エンジンは Vulkan（NVIDIA / AMD / Intel 共通）で動かし、GPU が無い PC では CPU で動かす。LLM・Python は含めない。CUDA 版・AMD (ROCm) 版・CPU 版は削除した。
 
 1. Full version（**主配布**。旧称「Vulkan 版」）
    - identifier `net.gakkousya.lott`。文字起こし（whisper.cpp）・話者分離（NeMo-Speech.cpp + Nemotron-3-Diarization）・ルールベース句読点付与・音声入力を含む

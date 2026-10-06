@@ -153,7 +153,7 @@ Windows 固有の問題（いずれも対処済み。7.1・8章）:
 [音声ファイル]
    │ 同梱 LGPL ffmpeg（現行の FFMPEG_BIN と同じ）
    ▼
-16kHz mono PCM WAV（app_cache_dir()/private-temp/、0700、自動削除）
+16kHz mono PCM WAV（app_cache_dir()/private-temp/、0700、処理後・終了時に削除）
    ├─▶ whisper-cli  ── JSON ─▶ Rust: 現行の文字起こし結果形式へ変換
    └─▶ nemo-speech diarize ── JSON ─▶ Rust: 後処理 → 現行の話者分離区間形式へ変換
                                           ▼
@@ -338,7 +338,7 @@ pyannote community-1 と同様に、UI のセットアップタブからダウ�
   - 常にローカルの絶対パスを渡す（6.1）。PoC で確認したところ、パスの形をした引数はファイルが無くてもダウンロードせず、`diarization model file does not exist` を出して終了コード 3 で止まる
   - 念のため、起動前に Rust 側でもモデルファイルの存在を確認し、無ければ明示エラーにする
   - オフライン検証（`docs/offline-verification.md`）の対象に追加する
-- 一時 WAV・JSON は `private-temp`（0700、`PRIVATE_TEMP_MAX_AGE` で自動削除）に置く
+- 一時 WAV・JSON は `private-temp`（0700）に置き、処理後に削除する。アプリ終了時に自プロセスのファイルを削除し（`cleanup_own_private_temp_files`）、異常終了で残ったものは次回起動時に、持ち主のプロセスが終了していれば経過時間に関係なく削除する（`cleanup_stale_private_temp_files`。持ち主を特定できない旧形式と24時間以上経過したものも削除）
 - 同梱バイナリなので `apply_host_command_env` は適用しない（AGENTS.md の方針どおり）
 
 ### 6.5 GPU の選択（Vulkan 版）
@@ -375,7 +375,7 @@ Windows の whisper-cli / nemo-speech は argv をシステムのコードペー
   - `whisper-cpp-cli-utf8-model-path.patch`: モデルの存在確認を UTF-8 で行う
   - `nemo-speech-diarize-utf8-model-path.patch`: モデルパスを `u8string()` で渡す（Linux では値が変わらない）
 - 日本語のフォルダ名にモデル・音声を置いて、両エンジンとも ASCII のパスと同一の結果になることを確認した
-- 応答ファイルにはモデルの絶対パスと固定の例文だけが入り、音声のファイル名は入らない。一時ディレクトリに置き、処理後に削除する（異常終了時は `PRIVATE_TEMP_MAX_AGE` で回収）
+- 応答ファイルにはモデルの絶対パスと固定の例文だけが入り、音声のファイル名は入らない。一時ディレクトリに置き、処理後に削除する（異常終了時は次回起動時に `cleanup_stale_private_temp_files` が回収）
 - nemo-speech はモデルの読み込みに失敗しても、パスの形をした引数ではダウンロードを試みない（日本語パスで失敗させた際にも確認）
 
 ## 8. 配布とビルド

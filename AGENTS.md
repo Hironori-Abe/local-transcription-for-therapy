@@ -156,7 +156,18 @@ bash scripts/run-dev-editor.sh         # Editor 版（127.0.0.1:4203）
 - 同梱 ffmpeg は `--enable-gpl`、`--enable-nonfree`、`--enable-libx264`、`--enable-libx265`、`--enable-libxvid`、`--enable-libfdk-aac` を含まないこと
 - BtbN `lgpl` build は `--enable-version3` を含むため LGPLv3 として扱い、`LICENSE.txt` / `FFMPEG_BUILD_INFO.txt` / ソース入手手段を配布物に含める
 - 配布用 Tauri resources には `../LICENSE` / `../NOTICE` / `../THIRD_PARTY_LICENSES.md` / `../licenses` も含める。設定を変更する場合はこれらを落とさない
-- ffmpeg の取得・検査: `scripts/setup_ffmpeg_lgpl.py`
+- ffmpeg の取得・検査: `scripts/setup_ffmpeg_lgpl.py`。取得は BtbN の**固定リリース**（`PINNED_TAG`）と、アセットごとの SHA-256（`ASSETS`）で行い、一致しなければインストールしない（取得時点の最新版は使わない）。版を上げるときは両方を更新し、デコード結果が旧版と一致することを確認する。実際に同梱した版・URL・SHA-256 は `FFMPEG_BUILD_INFO.txt` に記録される
+- ffmpeg に渡す入力はローカルファイルに限定する（`ffmpeg_input_args` が `-protocol_whitelist file` を `-i` の直前へ置く）。Linux では、元の音声ファイルのパスを渡さず、一時領域の中立な名前のリンクを渡す（`ps` から他ユーザーにクライアント名を含みうるファイル名が見えないようにするため）。ffmpeg のエラー文に含まれる音声ファイルのパスは `<音声ファイル>` に置き換えてから画面へ出す
+
+### 一時ファイル（private-temp）の扱い
+
+- 変換した音声（WAV）、文字起こし全文を含むエンジンの出力、音声入力の録音、Linux の再生用キャッシュは、アプリ専用の一時領域（Windows: `%LOCALAPPDATA%\{identifier}\private-temp`、Linux: `~/.cache/{identifier}/private-temp`、権限 0700）に置く。OS の共有一時フォルダへ会話データを置かない
+- ファイル名に作成プロセスの PID を入れる（`private_temp_owner_pid`）。処理後に削除し、アプリ終了時に自プロセスのファイル（再生用キャッシュを含む）を削除する（`cleanup_own_private_temp_files`）。クラッシュ・強制終了のあとは、次回起動時に `cleanup_stale_private_temp_files` が、持ち主のプロセスが終了しているファイルを経過時間に関係なく削除する（持ち主を判別できない旧形式と、24時間以上経過したもの〔`PRIVATE_TEMP_MAX_AGE`〕も削除）。同じ関数が、旧版が OS の一時フォルダへ残した会話データ（`lott_llm_segments_*` など）も経過時間に関係なく削除する
+- Windows のアンインストール時（NSIS フック）は、「アプリデータを削除」のチェックに関係なく一時領域を削除する
+- パスワード付き保存（DOCX / XLSX / JSON / SRT）は、暗号化前の内容をディスクへ書かない。メモリ上で作成・暗号化し（`write_encrypted_ooxml` / `write_aes_zip_bytes`）、保存先と同じフォルダへ乱数名の暗号文の一時ファイルを作って完成後に置き換える（失敗しても既存のファイルを壊さない）。同期フォルダへ平文を漏らさないための要件なので、保存先へ平文を書く実装を戻さない。OOXML の AES-256 の鍵は32バイトすべてを乱数にする
+- クラッシュ時のダンプ送信を抑止する。Windows ではアプリと子プロセスのエラー報告ダイアログ・Windows エラー報告を抑止し、`whisper-cli.exe` / `nemo-speech.exe` / `lott.exe` を Windows エラー報告の除外一覧（利用者ごと）へ登録する。Linux ではアプリと子プロセスのコアダンプを無効にする。管理者が設定する LocalDumps までは制御できない
+- 画面の CSP（`tauri.conf.json`）の `connect-src` に `http://127.0.0.1:*` / `http://localhost:*` などの HTTP 接続を足さない（LLM 連携の削除に伴い外した）。`media-src` は音声再生用のローカルサーバー（`http://127.0.0.1:*`）だけに許可する
+- エラー文の「コピー」では、エラー文中のファイルの場所を `<パス>` に置き換える（フォルダ名・ファイル名にクライアント名が入りうるため）
 
 ### Linux 再生バックエンド（GStreamer）と AAC 変換
 
@@ -166,7 +177,7 @@ Linux の WebKitGTK は `<audio>` の再生・メタデータ取得を **GStream
 - 同梱するのは **LGPL のみ**（`gstreamer1.0-plugins-base` / `-good` / `-alsa` / `-pulseaudio`）。GPL の `gstreamer1.0-plugins-ugly` / `gstreamer1.0-libav` / `faad` は入れない。`GSTREAMER_INCLUDE_BAD_PLUGINS=0` を維持する
 - 検証は二重にかける。`scripts/Dockerfile.appimage-ubuntu24` がビルドホストのプラグイン構成を、`scripts/setup-build-tools-linux.sh` が再パッケージ前に AppDir を検査し、GPL プラグイン混入・プラグイン欠落があればビルドを落とす
 - LGPL だけで再生できる形式: wav / mp3 / flac / ogg(vorbis, opus) / webm。いずれも seek 可能なことを確認済み
-- **AAC（m4a / mp4 / aac）は LGPL 側にデコーダが無い**ため、再生時に同梱 LGPL ffmpeg で 16bit FLAC へ変換したキャッシュを配信する（`prepare_playback_source` / `transcode_for_playback`）。変換キャッシュは `app_cache_dir()/private-temp/lott-playback-*.flac`（0700・`PRIVATE_TEMP_MAX_AGE` で自動削除）。**再生専用**であり、文字起こしには元ファイルを使う
+- **AAC（m4a / mp4 / aac）は LGPL 側にデコーダが無い**ため、再生時に同梱 LGPL ffmpeg で 16bit FLAC へ変換したキャッシュを配信する（`prepare_playback_source` / `transcode_for_playback`）。変換キャッシュは `app_cache_dir()/private-temp/lott-p{pid}-playback-*.flac`（0700。アプリ終了時に削除し、異常終了で残った場合は次回起動時に回収する。上の「一時ファイル」参照）。**再生専用**であり、文字起こしには元ファイルを使う
 - 変換は Linux のみ。Windows(WebView2) は AAC をデコードできるため従来どおり元ファイルを直接配信する
 - 再生時間（推定時間表示）は WebView ではなく同梱 ffmpeg で取得する（`get_audio_duration_seconds`）。メディアバックエンドの可否に文字起こし機能を依存させない
 - `AudioStreamServer` の `playback_path` は実際に HTTP 配信するファイル（元ファイルまたは変換キャッシュ）を指す。HTTP サーバーはこのパスを配信する

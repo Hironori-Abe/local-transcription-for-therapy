@@ -54,6 +54,7 @@ import {
   isBuildVariantValue,
   resolveStepForStageValue,
   secondsToEstimatedMinutesValue,
+  redactPathsForSharingValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
   shouldShowVoiceInputShortCandidateHintValue,
@@ -831,4 +832,79 @@ test('audio preprocess preset settings validate, round-trip and migrate legacy f
     playbackRateOptions: [1]
   });
   assert.equal(resolved.audioPreprocess, 'strong_noise');
+});
+
+test('redactPathsForSharingValue replaces Windows drive paths with Japanese names and spaces', () => {
+  const out = redactPathsForSharingValue(
+    'ffmpeg failed: C:\\Users\\山田\\クライアント 記録\\佐藤様_第3回.m4a: Invalid data found'
+  );
+  assert.equal(out, 'ffmpeg failed: <パス>: Invalid data found');
+  assert.ok(!out.includes('山田') && !out.includes('佐藤') && !out.includes('m4a'));
+  assert.equal(redactPathsForSharingValue('D:/録音/田中 花子/面接.wav'), '<パス>');
+});
+
+test('redactPathsForSharingValue handles quoted paths, apostrophes and Rust escaped paths', () => {
+  assert.equal(
+    redactPathsForSharingValue('open "C:\\Users\\鈴木 一郎\\a b.mp3" failed'),
+    'open "<パス>" failed'
+  );
+  assert.equal(
+    redactPathsForSharingValue("file 'C:\\Users\\O'Brien\\rec.wav' not found"),
+    "file '<パス>' not found"
+  );
+  assert.equal(
+    redactPathsForSharingValue('Err("C:\\\\Users\\\\山田\\\\a.wav")'),
+    'Err("<パス>")'
+  );
+});
+
+test('redactPathsForSharingValue handles UNC paths', () => {
+  assert.equal(
+    redactPathsForSharingValue('cannot read \\\\fileserver\\記録\\佐藤様\\第3回.m4a'),
+    'cannot read <パス>'
+  );
+});
+
+test('redactPathsForSharingValue handles Unix absolute paths', () => {
+  assert.equal(
+    redactPathsForSharingValue('/home/yamada/クライアント 記録/佐藤様.m4a: Invalid data'),
+    '<パス>: Invalid data'
+  );
+  assert.equal(redactPathsForSharingValue('error at /Users/abe/Music/a.wav'), 'error at <パス>');
+  assert.equal(redactPathsForSharingValue('x /mnt/c/Users/u/a.mp3 | y'), 'x <パス> | y');
+  assert.equal(redactPathsForSharingValue('/run/media/abe/USB/録音.flac'), '<パス>');
+  assert.equal(redactPathsForSharingValue('/tmp/lott-playback-1.flac'), '<パス>');
+  assert.equal(redactPathsForSharingValue('see ~/Documents/山田/a.wav'), 'see <パス>');
+  assert.equal(redactPathsForSharingValue('file:///home/u/山田/a.wav'), '<パス>');
+});
+
+test('redactPathsForSharingValue replaces multiple paths and keeps separators', () => {
+  assert.equal(
+    redactPathsForSharingValue('in=C:\\a\\山田.wav | out=/tmp/x/y.wav'),
+    'in=<パス> | out=<パス>'
+  );
+  assert.equal(
+    redactPathsForSharingValue('first C:\\a\\山田.wav\nsecond /home/u/佐藤.m4a\n'),
+    'first <パス>\nsecond <パス>\n'
+  );
+  assert.equal(
+    redactPathsForSharingValue('（C:\\Users\\山田\\a.wav）で失敗'),
+    '（<パス>）で失敗'
+  );
+});
+
+test('redactPathsForSharingValue keeps URLs, times and plain error text intact', () => {
+  const samples = [
+    'http://127.0.0.1:4200/a/b/c.js',
+    'https://example.com/foo/bar',
+    'GET http://localhost:5000/x/y?token=abc failed',
+    '00:01:02 - 00:01:10 exit=Some(1)',
+    'Vulkan GPU が見つかりません。CPU/GPU の切り替え a/b/c',
+    '2026/10/06 12:00:00 and/or',
+    'ffmpeg exited with code 1: Invalid data found when processing input',
+    ''
+  ];
+  for (const sample of samples) {
+    assert.equal(redactPathsForSharingValue(sample), sample);
+  }
 });

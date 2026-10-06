@@ -90,13 +90,15 @@
 - PyAV（`av`）・`imageio-ffmpeg`（GPL ビルドの ffmpeg を含む）は使用しない。Python 自体を同梱しない。
 - `scripts/setup_ffmpeg_lgpl.py`: BtbN `lgpl` build を取得し、`--enable-gpl` / GPL 系ライブラリの混入を検査する。
 
-Windows 同梱 FFmpeg の記録:
-- 取得元: `https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip`
+同梱 FFmpeg の記録（固定版）:
+- `scripts/setup_ffmpeg_lgpl.py` が BtbN の固定リリース `autobuild-2026-09-30-13-08`（FFmpeg 8.1 リリースブランチの n8.1.3 ビルド）を取得し、アーカイブの SHA-256 が固定値と一致しなければインストールしない（以前は取得時点の最新版を取得していた）。
+- 取得元: `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/` 配下の次のファイル。
+  - Windows: `ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip`
+  - Linux: `ffmpeg-n8.1.3-9-g29e619e767-linux64-lgpl-8.1.tar.xz`
 - build project: `https://github.com/BtbN/FFmpeg-Builds`
-- FFmpeg source: `https://github.com/FFmpeg/FFmpeg`
-- version: `N-124724-g6f1de91492-20260601`
-- `FFMPEG_BUILD_INFO.txt` に download URL、SHA-256、`ffmpeg -version` / configure 行を記録済み。
-- configure 行は `--enable-version3` を含むため LGPLv3 として扱う。`--enable-gpl` は含まず、`--disable-libx264` / `--disable-libx265` / `--disable-libxvid` を確認済み。
+- FFmpeg source: `https://github.com/FFmpeg/FFmpeg`（n8.1.3）
+- 実際に同梱するバイナリの version・download URL・SHA-256・configure 行は、ビルド時に `FFMPEG_BUILD_INFO.txt` へ記録され、配布物に同梱される（本ファイルにはビルドごとの値を書かない）。
+- configure 行は `--enable-version3` を含むため LGPLv3 として扱う。`--enable-gpl` は含まず、`--disable-libx264` / `--disable-libx265` / `--disable-libxvid` を確認する。
 
 検証観点:
 - `ffmpeg -version` に `--enable-gpl`、`--enable-nonfree`、`--enable-libx264`、`--enable-libx265`、`--enable-libxvid`、`--enable-libfdk-aac` が含まれないこと。

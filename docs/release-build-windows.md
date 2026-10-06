@@ -56,10 +56,27 @@ src-tauri\target\release\bundle\nsis\Local Transcription for Therapy_X.Y.Z_x64-s
 | ---- | ------ | ---- |
 | whisper.cpp / NeMo-Speech.cpp の Vulkan ビルド | `src-tauri/resources/speech-engines/{whisper,nemo}/` | `scripts/prepare-vulkan-bundle-windows.ps1`。固定 commit からビルド。Editor 版は `-WhisperOnly`（whisper.cpp のみ） |
 | ビルド用 Python 3.12 embeddable | `%LOCALAPPDATA%\lott-ggml-speech-build\python-3.12.10-build\` | **アプリには同梱しない**。ffmpeg 取得・ライセンス収集・成果物整理に標準ライブラリだけを使う |
-| LGPL ffmpeg（Full 版のみ） | `src-tauri/resources/ffmpeg/ffmpeg.exe` | `scripts/setup_ffmpeg_lgpl.py`（BtbN `lgpl` build） |
+| LGPL ffmpeg（Full 版のみ） | `src-tauri/resources/ffmpeg/ffmpeg.exe` | `scripts/setup_ffmpeg_lgpl.py`（BtbN `lgpl` build の**固定版**。タグ・アセット名・SHA-256 を固定し、一致しなければ失敗する。取得済みアーカイブは `%LOCALAPPDATA%\lott-ggml-speech-build\ffmpeg-cache\` に保存して再利用） |
 | VC++ ランタイム | 各エンジン実行ファイルの隣 | VC++ 再頒布パッケージが未導入の PC でも動かすため |
 
 モデルは同梱しません。既存のファイルがある場合、取得はスキップされます。
+
+### FFmpeg 固定版の更新
+
+全ての音声を処理する ffmpeg だけが「その日の最新」にならないよう、`scripts/setup_ffmpeg_lgpl.py` は BtbN の日付付き autobuild（`autobuild-YYYY-MM-DD-HH-MM`）のタグ・アセット名・SHA-256 を定数で固定しています（`PINNED_TAG` と `ASSETS`）。`latest` へは暗黙にフォールバックしません。
+
+- ダウンロード後に SHA-256 を照合し、不一致ならファイルを破棄して失敗します。キャッシュ済みアーカイブはハッシュが一致するときだけ再利用します（キャッシュ場所は `LOTT_FFMPEG_CACHE_DIR` または `--cache-dir` で変更可）。
+- `src-tauri/resources/ffmpeg/FFMPEG_BUILD_INFO.txt` の `archive_sha256` が固定値と異なる（旧版が入っている）場合は、次回実行時に固定版へ置き換えます。
+- 固定先が BtbN から削除されると 404 で失敗し、「固定版が削除された」旨のエラーを出します。キャッシュに固定版が残っていればネット取得なしで通ります。
+- BtbN は日次の autobuild を一定期間で削除しますが、**月末の autobuild は長く残ります**。更新するときは月末（その月で最後）のタグを選んでください。
+
+更新手順（固定版が消えたとき、または意図して版を上げるとき）:
+
+1. `curl -s "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=30"` などで、現存する月末の `autobuild-*` を選ぶ。現行と同じ系統（`n8.1.x` の `...-lgpl-8.1`）を優先し、系統を変える場合は音声調整（`highpass` / `afftdn` / `dynaudnorm`）と各形式のデコードを確認する。
+2. そのリリースの `checksums.sha256` から、`win64-lgpl` / `win64-lgpl-shared` / `linux64-lgpl` / `linux64-lgpl-shared` の 4 件のアセット名と SHA-256 を `scripts/setup_ffmpeg_lgpl.py` の `PINNED_TAG` と `ASSETS` へ写す（`--enable-gpl` 系ではなく `-lgpl` のアセットであること）。
+3. `python scripts\setup_ffmpeg_lgpl.py --force` を実行し、SHA-256 照合・`--enable-gpl` / `--enable-nonfree` / `--enable-libx264` / `--enable-libx265` / `--enable-libxvid` / `--enable-libfdk-aac` が無いことの検査・`FFMPEG_BUILD_INFO.txt` の `download_url` が固定 URL になっていることを確認する。
+4. `python -m unittest test_setup_ffmpeg_lgpl`（`scripts` ディレクトリで実行）を通す。
+5. 一時的に別版を試すだけなら、定数を書き換えずに `--tag` / `--asset` / `--sha256` を **3 つ全て**指定する（SHA-256 無しの上書きは受け付けない）。
 
 ### Tauri 設定ファイル
 

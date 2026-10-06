@@ -37,7 +37,7 @@ scripts\run-dev-editor.bat
 - `run-dev-editor.bat` は Editor 用の Angular dev server（`127.0.0.1:4203`）と `tauri.editor.windows.override.json` + `tauri.editor.dev.windows.override.json` で起動します。
 - `run-dev.bat` のオプション: `--no-hold`（終了時に待機しない）/ `--cpu`（`LOTT_DEV_FORCE_CPU=1` を設定。GPU を無いものとして CPU で動かす。開発ビルドだけで有効で、リリースビルドでは無視されます。画面に「開発オプション: CPU強制」と表示されます）。`run-dev.sh` も `--cpu` を受け付けます。
 - 開発用の Angular dev server は `127.0.0.1` にだけ bind します。
-- 音声デコードに使う LGPL 構成 ffmpeg は、`python scripts\setup_ffmpeg_lgpl.py` で取得します（`run-dev.bat` の案内も参照）。
+- 音声デコードに使う LGPL 構成 ffmpeg は、`python scripts\setup_ffmpeg_lgpl.py` で取得します（`run-dev.bat` の案内も参照）。取得するのは BtbN の日付付き autobuild の固定版で、SHA-256 が一致しないと失敗します。固定先が削除されて 404 になった場合の更新手順は [release-build-windows.md](release-build-windows.md) の「FFmpeg 固定版の更新」を参照してください。
 
 ### Linux（未検証）
 

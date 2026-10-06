@@ -228,6 +228,45 @@ export function normalizeTimeInputValue(value: string): string {
   return value.replace(/[^0-9]/g, '');
 }
 
+const SHARED_PATH_PLACEHOLDER = '<パス>';
+
+// 絶対パスの開始部分。Windows ドライブ / UNC / Unix（2階層以上）/ ~/ / file:// URL。
+// URL（http://…）や時刻（00:01:02）に反応しないよう、ドライブは1文字+「:\」「:/」のみ。
+const PATH_START_SOURCE =
+  String.raw`(?:file:\/\/)?(?:\/?[A-Za-z]:[\\/]|\\{2,}[^\\/\s"'|<>]+\\+|~\/|\/[^\s\/"'|<>]+\/[^\s\/"'|<>])`;
+// パス本体。日本語・空白を含みうるため、改行・引用符・「|」・「: 」（コロン+空白/行末）・
+// 対応しない括弧まで続ける。迷ったら行末まで含める（ファイル名部分を残さない）。
+const PATH_BODY_SOURCE =
+  String.raw`(?:\([^()\n\r]*\)|（[^（）\n\r]*）|(?!:(?:\s|$))[^\n\r"|<>()（）])*`;
+
+const QUOTED_PATH_PATTERN = new RegExp(
+  String.raw`(["'])(${PATH_START_SOURCE}[^\n\r]*?)\1(?=$|[\s,;:.)\]}）。、])`,
+  'gu'
+);
+const BARE_PATH_PATTERN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_:/.\\~-])${PATH_START_SOURCE}${PATH_BODY_SOURCE}`,
+  'gu'
+);
+
+/**
+ * エラー文などを GitHub issue・メールへ貼る前提で共有するとき、音声ファイルの絶対パスを
+ * `<パス>` に置き換える。パスのフォルダ名・ファイル名にはクライアントの氏名が含まれうるため。
+ * 画面表示用ではなく、コピー（共有）用の変換。
+ */
+export function redactPathsForSharingValue(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const quotesDone = text.replace(
+    QUOTED_PATH_PATTERN,
+    (_match, quote: string) => `${quote}${SHARED_PATH_PLACEHOLDER}${quote}`
+  );
+  return quotesDone.replace(BARE_PATH_PATTERN, (match) => {
+    const trailingSpace = /\s+$/.exec(match)?.[0] ?? '';
+    return `${SHARED_PATH_PLACEHOLDER}${trailingSpace}`;
+  });
+}
+
 export function selectedFileNameValue(fullPath: string): string {
   if (!fullPath) {
     return '';

@@ -41,7 +41,7 @@ bash scripts/build-appimage-docker.sh --dry-run
 `setup-build-tools-linux.sh` の手順は次のとおりです。
 
 1. ggml 音声エンジンを Vulkan でビルドし、`src-tauri/resources/speech-engines/` へ配置する（`scripts/setup-ggml-speech-linux.sh --backend vulkan --engines-dir ... --skip-models`。Editor は `--skip-nemo` も付ける）
-2. LGPL 構成 ffmpeg を取得する（Full のみ）
+2. LGPL 構成 ffmpeg を固定版（BtbN の日付付き autobuild。SHA-256 照合あり）で取得する（Full のみ）。取得済みアーカイブは `~/.cache/lott-ggml-speech-build/ffmpeg-cache/` に保存し、Docker 経路では `lott-ubuntu-ggml-speech-build` ボリューム内に残るため再ビルドで再取得しない。固定先が削除された場合の更新手順は [release-build-windows.md](release-build-windows.md) の「FFmpeg 固定版の更新」
 3. ライセンスを収集する（`collect_licenses.py --no-python`）
 4. `tauri build`（deb + appimage）
 5. AppImage を再パッケージし、下記の補正と検査を行う

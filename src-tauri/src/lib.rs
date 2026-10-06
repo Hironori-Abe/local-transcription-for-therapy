@@ -173,9 +173,23 @@ fn bundled_resource_dir_candidates(app: &AppHandle, name: &str) -> Vec<PathBuf> 
 
 
 
+/// 子プロセス用 Job Object の LimitFlags。
+/// - KILL_ON_JOB_CLOSE: 親の終了時に子を確実に終了させる。
+/// - DIE_ON_UNHANDLED_EXCEPTION: 子の未処理例外で WER（Windows エラー報告）のダンプ作成・
+///   送信ダイアログを出さず、そのまま終了させる。子（whisper-cli / nemo-speech / ffmpeg）の
+///   メモリには会話音声と文字起こし本文があり、クラッシュダンプに載りうるため。
+#[cfg(target_os = "windows")]
+fn child_job_limit_flags() -> u32 {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+}
+
 /// 子プロセスを Job Object に紐付け、親プロセス終了時に自動 kill させる（Windows のみ）。
-/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、管理下の llama-server
-/// （CUDA/ROCm/Vulkan）を確実に終了させ VRAM を解放する。
+/// CloseRequested ハンドラーが走らないクラッシュ・強制終了時も、管理下の子プロセス
+/// （whisper.cpp / NeMo-Speech.cpp / ffmpeg）を確実に終了させ VRAM を解放する。
+/// あわせて子の未処理例外でクラッシュダンプを作らせない（`child_job_limit_flags`）。
 #[cfg(target_os = "windows")]
 fn assign_to_kill_on_close_job(child: &Child) {
     use std::os::windows::io::AsRawHandle;
@@ -184,7 +198,6 @@ fn assign_to_kill_on_close_job(child: &Child) {
         System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
     };
     unsafe {
@@ -193,7 +206,7 @@ fn assign_to_kill_on_close_job(child: &Child) {
             return;
         }
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        info.BasicLimitInformation.LimitFlags = child_job_limit_flags();
         SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,
@@ -207,6 +220,135 @@ fn assign_to_kill_on_close_job(child: &Child) {
 
 #[cfg(not(target_os = "windows"))]
 fn assign_to_kill_on_close_job(_child: &Child) {}
+
+/// `Command::output()` の代わり。spawn 直後に子を Job Object へ入れてから出力を集める
+/// （`output()` は spawn と待機が一体で、間にジョブへ入れられないため）。
+/// stdin は `output()` と同じく null、stdout / stderr はパイプにする。
+fn output_in_kill_job(cmd: &mut Command) -> std::io::Result<std::process::Output> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = cmd.spawn()?;
+    assign_to_kill_on_close_job(&child);
+    child.wait_with_output()
+}
+
+// ---- クラッシュダンプ（会話データを含みうる）を OS の報告機構に作らせない ----------------------
+//
+// 子プロセス（whisper-cli / nemo-speech / ffmpeg）と本体のメモリには会話音声と文字起こし本文がある。
+// クラッシュ時に Windows のエラー報告（WER）や Linux の apport / systemd-coredump がダンプ・コアを
+// 作成・送信しうるため、起動直後に次の対策を入れる（WebView2 側は vendor/wry のパッチで対処済み）。
+
+/// WER の除外登録（`WerAddExcludedApplication`）に載せる子プロセスの exe 名。
+/// `ffmpeg.exe` は意図的に入れない: 名前が汎用的で、この PC の他のアプリの ffmpeg.exe まで
+/// WER の対象外にしてしまうため。ffmpeg はエラーモード（`SetErrorMode`）と Job Object
+/// （DIE_ON_UNHANDLED_EXCEPTION）だけで守る。
+/// 登録は per-user（HKCU）で、アンインストール時にも削除しない。Full 版と Editor 版は同じ
+/// exe 名を共有し、片方を消しても他方が使い続けるため。残っても無害な空の除外エントリだけ。
+#[cfg(any(target_os = "windows", test))]
+const WER_EXCLUDED_CHILD_EXES: &[&str] = &["whisper-cli.exe", "nemo-speech.exe"];
+
+/// 除外登録する exe 名の一覧（子プロセス + 本体）。重複は除く。
+#[cfg(any(target_os = "windows", test))]
+fn wer_excluded_exe_names(current_exe_name: Option<&str>) -> Vec<String> {
+    let mut names: Vec<String> = WER_EXCLUDED_CHILD_EXES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    if let Some(own) = current_exe_name.filter(|name| !name.is_empty()) {
+        if !names.iter().any(|name| name.eq_ignore_ascii_case(own)) {
+            names.push(own.to_string());
+        }
+    }
+    names
+}
+
+/// 現在のエラーモードに「重大エラー／GP フォールトのダイアログを出さない」を足した値。
+#[cfg(any(target_os = "windows", test))]
+fn error_mode_without_fault_ui(current: u32) -> u32 {
+    // SEM_FAILCRITICALERRORS = 0x0001, SEM_NOGPFAULTERRORBOX = 0x0002
+    current | 0x0001 | 0x0002
+}
+
+/// 自プロセスのエラーモードに SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX を足す。
+/// エラーモードは子プロセスへ継承される（`CREATE_DEFAULT_ERROR_MODE` を使う起動は無く、
+/// `apply_windows_no_window` も CREATE_NO_WINDOW だけを指定する）ので、以後に起動する
+/// whisper-cli / nemo-speech / ffmpeg にも効く。
+#[cfg(target_os = "windows")]
+fn suppress_windows_fault_reporting_ui() {
+    use windows_sys::Win32::System::Diagnostics::Debug::{GetErrorMode, SetErrorMode};
+    unsafe {
+        SetErrorMode(error_mode_without_fault_ui(GetErrorMode()));
+    }
+}
+
+/// `WerAddExcludedApplication`（per-user）で exe 名を除外登録する。成功で Ok(())、失敗は HRESULT。
+/// 登録先は HKCU\Software\Microsoft\Windows\Windows Error Reporting\ExcludedApplications
+/// （管理者権限は不要。同じ名前の再登録は冪等）。
+#[cfg(target_os = "windows")]
+fn wer_add_excluded_application(exe_name: &str) -> Result<(), i32> {
+    use windows_sys::Win32::System::ErrorReporting::WerAddExcludedApplication;
+    let wide: Vec<u16> = exe_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let hr = unsafe { WerAddExcludedApplication(wide.as_ptr(), 0) };
+    if hr >= 0 {
+        Ok(())
+    } else {
+        Err(hr)
+    }
+}
+
+/// テスト用の後始末。テストが自分で登録した名前だけを消す。
+#[cfg(all(target_os = "windows", test))]
+fn wer_remove_excluded_application(exe_name: &str) -> Result<(), i32> {
+    use windows_sys::Win32::System::ErrorReporting::WerRemoveExcludedApplication;
+    let wide: Vec<u16> = exe_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let hr = unsafe { WerRemoveExcludedApplication(wide.as_ptr(), 0) };
+    if hr >= 0 {
+        Ok(())
+    } else {
+        Err(hr)
+    }
+}
+
+/// 子プロセスと本体を WER の除外対象に登録する。`abort()` / `__fastfail` はエラーモードと
+/// Job Object を迂回して WER に届くため、その経路の対策。失敗しても動作は続ける。
+/// 本体の exe 名は実行中の exe のファイル名から取る（dev ビルドでも実名になる）。
+#[cfg(target_os = "windows")]
+fn register_wer_exclusions() {
+    let own = std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    for name in wer_excluded_exe_names(own.as_deref()) {
+        if let Err(hr) = wer_add_excluded_application(&name) {
+            eprintln!(
+                "WER 除外登録に失敗しました（{name}, HRESULT=0x{:08X}）。",
+                hr as u32
+            );
+        }
+    }
+}
+
+/// `run()` の最初に呼ぶ（Windows）。以後に作る子プロセスにもエラーモードが継承される。
+#[cfg(target_os = "windows")]
+fn configure_crash_dump_protection() {
+    suppress_windows_fault_reporting_ui();
+    register_wer_exclusions();
+}
+
+/// 自プロセスの RLIMIT_CORE を 0 にする（Linux）。rlimit は fork / exec 後も子へ継承されるため、
+/// whisper-cli / nemo-speech / ffmpeg / WebKit の子プロセスでも apport / systemd-coredump が
+/// コアダンプ（会話データを含む）を作らない。ハードリミットも 0 にするので子から戻せない。
+/// `prctl(PR_SET_DUMPABLE, 0)` は通常の execve で 1 に戻り子の対策にならず、本体では
+/// /proc/self の所有者が変わる副作用もあるため使わない。失敗は無視してよい（戻り値は確認用）。
+#[cfg(target_os = "linux")]
+fn disable_core_dumps() -> bool {
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) == 0 }
+}
 
 
 const LLM_ENGINE_CACHE_DIR_NAME: &str = "llm-engine";
@@ -1853,23 +1995,40 @@ struct SidecarExecResult {
 fn save_transcription_json(
     request: SaveTranscriptionJsonRequest,
 ) -> Result<(), String> {
+    write_transcription_json(&request)
+}
+
+/// パスワードがある場合は、メモリ上の JSON から直接 AES-256 ZIP を作って暗号文だけを書く
+/// （平文の一時ファイルをディスクへ書かない）。
+fn write_transcription_json(request: &SaveTranscriptionJsonRequest) -> Result<(), String> {
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        // 一時 JSON を Rust で AES-256 ZIP に格納する。
-        let temp_path = format!("{}.tmp", request.path);
-        fs::write(&temp_path, &request.content)
-            .map_err(|e| format!("一時ファイル書き込みに失敗しました: {e}"))?;
         let arcname = encrypted_export_arcname(&request.path, ".json")?;
-        let result = export_crypto::write_aes_zip(
-            Path::new(&temp_path),
+        export_crypto::write_aes_zip_bytes(
+            request.content.as_bytes(),
             Path::new(&request.path),
             &arcname,
             pw,
-        );
-        let _ = fs::remove_file(&temp_path);
-        result
+        )
     } else {
-        fs::write(&request.path, request.content)
+        fs::write(&request.path, &request.content)
             .map_err(|e| format!("JSON 保存に失敗しました: {e}"))
+    }
+}
+
+/// メモリ上で組み立てた OOXML（DOCX / XLSX）を保存する。パスワードがある場合は
+/// メモリ上で暗号化し、暗号文だけをディスクへ書く（平文をディスクへ書かない）。
+fn write_ooxml_output(
+    bytes: &[u8],
+    path: &str,
+    password: Option<&str>,
+    label: &str,
+) -> Result<(), String> {
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        export_crypto::write_encrypted_ooxml(bytes, Path::new(path), pw)
+    } else {
+        fs::write(path, bytes).map_err(|e| {
+            format!("{label} ファイルの保存に失敗しました。保存先のフォルダと書き込み権限を確認してください: {e}")
+        })
     }
 }
 
@@ -2041,21 +2200,20 @@ fn build_transcription_srt(rows: &[SaveTranscriptionSrtRow]) -> String {
 fn save_transcription_srt(
     request: SaveTranscriptionSrtRequest,
 ) -> Result<(), String> {
+    write_transcription_srt(&request)
+}
+
+fn write_transcription_srt(request: &SaveTranscriptionSrtRequest) -> Result<(), String> {
     let content = build_transcription_srt(&request.rows);
     if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        // JSON と同様に、一時 SRT を AES-256 暗号化 ZIP に格納する。
-        let temp_path = format!("{}.tmp", request.path);
-        fs::write(&temp_path, content.as_bytes())
-            .map_err(|e| format!("一時SRTファイルの書き込みに失敗しました: {e}"))?;
+        // JSON と同様に、メモリ上の SRT から直接 AES-256 暗号化 ZIP を作る（平文をディスクへ書かない）。
         let arcname = encrypted_export_arcname(&request.path, ".srt")?;
-        let result = export_crypto::write_aes_zip(
-            Path::new(&temp_path),
+        export_crypto::write_aes_zip_bytes(
+            content.as_bytes(),
             Path::new(&request.path),
             &arcname,
             pw,
-        );
-        let _ = fs::remove_file(&temp_path);
-        result
+        )
     } else {
         fs::write(&request.path, content.as_bytes())
             .map_err(|e| format!("SRT 保存に失敗しました: {e}"))
@@ -2066,6 +2224,10 @@ fn save_transcription_srt(
 fn save_transcription_docx(
     request: SaveTranscriptionDocxRequest,
 ) -> Result<(), String> {
+    write_transcription_docx(&request)
+}
+
+fn write_transcription_docx(request: &SaveTranscriptionDocxRequest) -> Result<(), String> {
     const DOCX_TIME_COL_W: usize = 1200;
     const DOCX_SPEAKER_COL_W: usize = 1400;
     const DOCX_TEXT_COL_W: usize = 7038;
@@ -2162,9 +2324,8 @@ fn save_transcription_docx(
 </w:document>"#
     );
 
-    let file = fs::File::create(&request.path)
-        .map_err(|e| format!("Word ファイル作成に失敗しました: {e}"))?;
-    let mut zip = ZipWriter::new(file);
+    // ZIP はメモリ上で組み立てる。保存先へは完成後に（パスワードがあれば暗号文だけを）書く。
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", options)
@@ -2202,23 +2363,22 @@ fn save_transcription_docx(
     std::io::Write::write_all(&mut zip, document_rels_xml.as_bytes())
         .map_err(|e| format!("DOCX 書き込みに失敗しました: {e}"))?;
 
-    zip.finish()
-        .map_err(|e| format!("DOCX 生成の完了に失敗しました: {e}"))?;
+    let bytes = zip
+        .finish()
+        .map_err(|e| format!("DOCX 生成の完了に失敗しました: {e}"))?
+        .into_inner();
 
-    if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        if let Err(e) = export_crypto::encrypt_ooxml_in_place(Path::new(&request.path), pw) {
-            let _ = fs::remove_file(&request.path);
-            return Err(e);
-        }
-    }
-
-    Ok(())
+    write_ooxml_output(&bytes, &request.path, request.password.as_deref(), "Word")
 }
 
 #[tauri::command]
 fn save_transcription_xlsx(
     request: SaveTranscriptionXlsxRequest,
 ) -> Result<(), String> {
+    write_transcription_xlsx(&request)
+}
+
+fn write_transcription_xlsx(request: &SaveTranscriptionXlsxRequest) -> Result<(), String> {
     let content_types_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -2292,9 +2452,8 @@ fn save_transcription_xlsx(
 </worksheet>"#
     );
 
-    let file = fs::File::create(&request.path)
-        .map_err(|e| format!("Excel ファイル作成に失敗しました: {e}"))?;
-    let mut zip = ZipWriter::new(file);
+    // ZIP はメモリ上で組み立てる。保存先へは完成後に（パスワードがあれば暗号文だけを）書く。
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
 
     zip.start_file("[Content_Types].xml", options)
@@ -2327,17 +2486,12 @@ fn save_transcription_xlsx(
     std::io::Write::write_all(&mut zip, sheet_xml.as_bytes())
         .map_err(|e| format!("XLSX 書き込みに失敗しました: {e}"))?;
 
-    zip.finish()
-        .map_err(|e| format!("XLSX 生成の完了に失敗しました: {e}"))?;
+    let bytes = zip
+        .finish()
+        .map_err(|e| format!("XLSX 生成の完了に失敗しました: {e}"))?
+        .into_inner();
 
-    if let Some(pw) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        if let Err(e) = export_crypto::encrypt_ooxml_in_place(Path::new(&request.path), pw) {
-            let _ = fs::remove_file(&request.path);
-            return Err(e);
-        }
-    }
-
-    Ok(())
+    write_ooxml_output(&bytes, &request.path, request.password.as_deref(), "Excel")
 }
 
 /// スコープ離脱時（早期 return・`?`・panic を含む）に登録済みの一時ファイルを
@@ -2349,12 +2503,18 @@ struct TempFileGuard {
 
 const PRIVATE_TEMP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-fn private_llm_temp_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
+/// 専用一時領域のパス（作成はしない）。Windows では `%LOCALAPPDATA%\{identifier}\private-temp`
+/// になる（NSIS のアンインストールフックが同じ場所を削除する）。
+fn private_temp_dir_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
         .path()
         .app_cache_dir()
         .map_err(|e| format!("一時ファイル保存先を解決できませんでした: {e}"))?
-        .join("private-temp");
+        .join("private-temp"))
+}
+
+fn private_llm_temp_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = private_temp_dir_path(app)?;
     fs::create_dir_all(&dir)
         .map_err(|e| format!("一時ファイル保存先を作成できませんでした: {e}"))?;
     #[cfg(unix)]
@@ -2381,49 +2541,203 @@ fn write_private_temp_file(path: &Path, contents: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("一時ファイルの書き込みに失敗しました: {e}"))
 }
 
-fn cleanup_stale_private_temp_files(app: &AppHandle) {
-    let Ok(dir) = private_llm_temp_dir(app) else {
+/// 一時ファイル名の固定プレフィックス。直後に作成プロセスの PID と `-` が続く
+/// （`lott-p{pid}-{tag}-{nanos}`）。
+const PRIVATE_TEMP_PID_PREFIX: &str = "lott-p";
+
+fn private_temp_name_for_pid(pid: u32, tag: &str) -> String {
+    format!(
+        "{PRIVATE_TEMP_PID_PREFIX}{pid}-{tag}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    )
+}
+
+/// 専用一時領域のファイル名。作成プロセスの PID を `lott-p{pid}-` の固定位置へ入れ、
+/// 異常終了後の次回起動時に「持ち主が居なくなったファイル」を判定できるようにする。
+fn private_temp_name(tag: &str) -> String {
+    private_temp_name_for_pid(std::process::id(), tag)
+}
+
+/// `private_temp_name` が作ったファイル名から作成プロセスの PID を取り出す。
+/// 旧形式（`lott-{tag}-{pid}-{nanos}` や `lott-playback-{hash}.flac`）や不正な形式は `None`。
+fn private_temp_owner_pid(file_name: &str) -> Option<u32> {
+    let rest = file_name.strip_prefix(PRIVATE_TEMP_PID_PREFIX)?;
+    let digits = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits == 0 || !rest[digits..].starts_with('-') {
+        return None;
+    }
+    rest[..digits].parse().ok()
+}
+
+/// プロセスが生きているか。判定できないときは「生きている」側へ倒す（消しすぎない）。
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            // 権限不足は「存在するが開けない」。それ以外（引数不正など）は存在しない。
+            return GetLastError() == ERROR_ACCESS_DENIED;
+        }
+        let mut exit_code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok == 0 || exit_code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    // /proc が無い環境では判定できないので、生きている扱いにする。
+    if !Path::new("/proc/self").exists() {
+        return true;
+    }
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_alive(pid: u32) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    // 0 や負値は kill(2) ではプロセスグループ指定になるため渡さない。
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: シグナル 0 は存在確認だけで何も送らない。
+    let rc = unsafe { kill(pid as i32, 0) };
+    // EPERM（= 1）は「存在するが権限が無い」。
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
+}
+
+/// 起動時クリーンアップで専用一時領域のファイルを消すか。
+/// 次のいずれかなら消す: 24時間以上経過 / 所有 PID が取れない（旧形式）/ 所有プロセスが存在しない。
+/// 自プロセスや、生きている別インスタンスのファイルは（24時間超を除き）残す。
+/// PID の再利用で残ることは許容する（24時間経過の規則が最終的に回収する）。
+fn should_remove_private_temp_file(
+    owner_pid: Option<u32>,
+    own_pid: u32,
+    age: Option<Duration>,
+    is_alive: impl Fn(u32) -> bool,
+) -> bool {
+    if age.is_some_and(|age| age >= PRIVATE_TEMP_MAX_AGE) {
+        return true;
+    }
+    match owner_pid {
+        None => true,
+        Some(pid) if pid == own_pid => false,
+        Some(pid) => !is_alive(pid),
+    }
+}
+
+/// 通常ファイルとシンボリックリンク（ffmpeg 入力用リンク）だけを対象にする。
+/// `DirEntry::file_type` はリンクを辿らないので、リンク先の元音声は消さない。
+fn private_temp_entry_is_removable_kind(entry: &fs::DirEntry) -> bool {
+    entry
+        .file_type()
+        .map(|kind| kind.is_file() || kind.is_symlink())
+        .unwrap_or(false)
+}
+
+fn cleanup_stale_private_temp_dir(dir: &Path, own_pid: u32, is_alive: impl Fn(u32) -> bool) {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let cleanup_dir = |target_dir: &Path, known_prefixes: Option<&[&str]>| {
-        let Ok(entries) = fs::read_dir(target_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if known_prefixes.map(|prefixes| prefixes.iter().any(|prefix| name.starts_with(prefix)))
-                == Some(false)
-            {
-                continue;
-            }
-            let path = entry.path();
-            let is_stale_file = entry
-                .metadata()
-                .ok()
-                .filter(|metadata| metadata.is_file())
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| modified.elapsed().ok())
-                .map(|age| age >= PRIVATE_TEMP_MAX_AGE)
-                .unwrap_or(false);
-            if is_stale_file {
-                let _ = fs::remove_file(path);
-            }
+    for entry in entries.flatten() {
+        if !private_temp_entry_is_removable_kind(&entry) {
+            continue;
         }
+        let name = entry.file_name();
+        let age = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok());
+        if should_remove_private_temp_file(
+            private_temp_owner_pid(&name.to_string_lossy()),
+            own_pid,
+            age,
+            &is_alive,
+        ) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 旧版が OS の一時フォルダへ作った会話データのファイルの既知プレフィックス。
+const LEGACY_OS_TEMP_PREFIXES: &[&str] = &[
+    "lott_llm_segments_",
+    "lott_llm_system_prompt_",
+    "lott_overall_segments_",
+    "lott_overall_system_prompt_",
+    "lott-playback-",
+    "lott_diar_",
+];
+
+/// 旧版が OS の一時フォルダへ残した会話データのファイルを、経過時間に関係なく消す。
+/// 現行版はこの場所へ会話データを置かない（専用一時領域だけを使う）。
+fn cleanup_legacy_os_temp_files(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
     };
-    cleanup_dir(&dir, None);
-    // 旧バージョンや強制終了でOS一時領域に残った既知のファイルも、安全な期限後に回収する。
-    cleanup_dir(
-        &env::temp_dir(),
-        Some(&[
-            "lott_llm_segments_",
-            "lott_llm_system_prompt_",
-            "lott_overall_segments_",
-            "lott_overall_system_prompt_",
-            "lott-playback-",
-            "lott_diar_",
-        ]),
-    );
+    for entry in entries.flatten() {
+        let is_regular_file = entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false);
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if is_regular_file
+            && LEGACY_OS_TEMP_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 起動時に、異常終了などで残った一時ファイルを回収する。
+fn cleanup_stale_private_temp_files(app: &AppHandle) {
+    if let Ok(dir) = private_llm_temp_dir(app) {
+        cleanup_stale_private_temp_dir(&dir, std::process::id(), process_is_alive);
+    }
+    cleanup_legacy_os_temp_files(&env::temp_dir());
+}
+
+/// 自プロセスが作った専用一時領域のファイル（再生用キャッシュを含む）を消す。
+fn cleanup_own_private_temp_dir(dir: &Path, own_pid: u32) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if private_temp_entry_is_removable_kind(&entry)
+            && private_temp_owner_pid(&entry.file_name().to_string_lossy()) == Some(own_pid)
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// アプリ終了時の後始末。
+fn cleanup_own_private_temp_files(app: &AppHandle) {
+    if let Ok(dir) = private_temp_dir_path(app) {
+        cleanup_own_private_temp_dir(&dir, std::process::id());
+    }
 }
 
 impl TempFileGuard {
@@ -2777,6 +3091,106 @@ fn parse_ffmpeg_audio_codec_line(line: &str) -> Option<String> {
     (!codec.is_empty()).then_some(codec)
 }
 
+/// ffmpeg の入力指定（`-protocol_whitelist file -i <入力>`）。
+/// 利用者が選んだ音声はローカルファイルだけを開かせる。`-protocol_whitelist` は入力オプション
+/// なので `-i` の直前に置く（出力側の `-progress pipe:1` には影響しない）。同梱 ffmpeg は既定でも
+/// ローカルのプレイリストから http を開かないが、PATH 上の古い ffmpeg に備えた多層防御。
+fn ffmpeg_input_args(input: &Path) -> Vec<std::ffi::OsString> {
+    vec![
+        "-protocol_whitelist".into(),
+        "file".into(),
+        "-i".into(),
+        input.as_os_str().to_os_string(),
+    ]
+}
+
+const REDACTED_AUDIO_PATH: &str = "<音声ファイル>";
+
+/// ffmpeg の stderr に含まれる入力パス（元のパス・ffmpeg へ渡したリンクのパス。Windows では
+/// `\` と `/` の両表記）を伏せる。ファイル名にクライアントの氏名が入りうるため、
+/// 画面やログへ出すエラー文に元の音声のパスを残さない。
+fn redact_audio_paths(text: &str, paths: &[&str]) -> String {
+    let mut variants: Vec<String> = Vec::new();
+    for path in paths.iter().filter(|path| !path.is_empty()) {
+        for variant in [
+            path.to_string(),
+            path.replace('\\', "/"),
+            path.replace('/', "\\"),
+        ] {
+            if !variants.contains(&variant) {
+                variants.push(variant);
+            }
+        }
+    }
+    // 長い方を先に置換し、短いパスが長いパスの一部だけを置換して残骸を作らないようにする。
+    variants.sort_by_key(|variant| std::cmp::Reverse(variant.len()));
+    variants
+        .iter()
+        .fold(text.to_string(), |acc, variant| {
+            acc.replace(variant.as_str(), REDACTED_AUDIO_PATH)
+        })
+}
+
+/// 中立なリンク名。拡張子は ffmpeg の形式判定のために残すが、英数字だけを許可する。
+#[cfg(any(unix, test))]
+fn neutral_input_link_name(base_name: &str, audio_path: &str) -> String {
+    let extension = Path::new(audio_path)
+        .extension()
+        .and_then(OsStr::to_str)
+        .filter(|ext| {
+            !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        });
+    match extension {
+        Some(ext) => format!("{base_name}.{ext}"),
+        None => base_name.to_string(),
+    }
+}
+
+/// ffmpeg に渡す入力パスを用意する。
+///
+/// Unix: 専用一時領域（0700）に中立な名前のシンボリックリンク `lott-p{pid}-input-{nanos}.{ext}`
+/// を作って元ファイルを指させ、そのリンクのパスを返す。ffmpeg の引数は `ps` や
+/// /proc/*/cmdline から他ユーザーにも見えるため、クライアントの氏名が入りうる元のパスを
+/// 引数に出さない。リンクは `guard` が必ず消す。作れないときは元のパスへ戻す。
+#[cfg(unix)]
+fn prepare_ffmpeg_input_in(dir: &Path, audio_path: &str, guard: &mut TempFileGuard) -> PathBuf {
+    let original = PathBuf::from(audio_path);
+    let Ok(target) = fs::canonicalize(&original) else {
+        return original;
+    };
+    let link = dir.join(neutral_input_link_name(
+        &private_temp_name("input"),
+        audio_path,
+    ));
+    match std::os::unix::fs::symlink(&target, &link) {
+        Ok(()) => {
+            guard.push(link.clone());
+            link
+        }
+        Err(_) => original,
+    }
+}
+
+/// Windows: 元のパスのまま渡す。他ユーザーのプロセスのコマンドラインは通常の権限では読めず、
+/// シンボリックリンクの作成には特権（開発者モードや管理者）が要るため、一般の利用者環境では
+/// リンクを使えない。
+#[cfg(not(unix))]
+fn prepare_ffmpeg_input_in(_dir: &Path, audio_path: &str, _guard: &mut TempFileGuard) -> PathBuf {
+    PathBuf::from(audio_path)
+}
+
+fn prepare_ffmpeg_input(app: &AppHandle, audio_path: &str, guard: &mut TempFileGuard) -> PathBuf {
+    match private_llm_temp_dir(app) {
+        Ok(dir) => prepare_ffmpeg_input_in(&dir, audio_path, guard),
+        Err(_) => PathBuf::from(audio_path),
+    }
+}
+
+/// ffmpeg の stderr を、元の音声のパスを伏せたうえでエラー文へ載せられる形にする。
+fn redacted_ffmpeg_stderr(stderr: &str, audio_path: &str, ffmpeg_input: &Path) -> String {
+    redact_audio_paths(stderr, &[audio_path, &ffmpeg_input.to_string_lossy()])
+}
+
 /// `ffmpeg -i <path>` の stderr から再生時間と音声コーデックを読む。
 /// 入力のみ指定した ffmpeg は "At least one output file must be specified" で
 /// 非ゼロ終了するが、その前にストリーム情報を出力するので終了コードは見ない。
@@ -2786,15 +3200,18 @@ fn probe_audio_with_ffmpeg(app: &AppHandle, path: &str) -> Result<FfmpegAudioPro
     if !Path::new(path).exists() {
         return Err("音声ファイルが見つかりません。".to_string());
     }
+    let mut link_guard = TempFileGuard::new();
+    let input = prepare_ffmpeg_input(app, path, &mut link_guard);
     let mut cmd = Command::new(&ffmpeg);
     // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
     // （PATH 解決した場合はホスト ffmpeg なので必須）。
     apply_host_command_env(&mut cmd);
     // -nostdin: 端末が無い状況で入力待ちに落ちて固まらないようにする。
-    cmd.arg("-hide_banner").arg("-nostdin").arg("-i").arg(path);
+    cmd.arg("-hide_banner")
+        .arg("-nostdin")
+        .args(ffmpeg_input_args(&input));
     apply_windows_no_window(&mut cmd);
-    let output = cmd
-        .output()
+    let output = output_in_kill_job(&mut cmd)
         .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut probe = FfmpegAudioProbe::default();
@@ -2807,6 +3224,7 @@ fn probe_audio_with_ffmpeg(app: &AppHandle, path: &str) -> Result<FfmpegAudioPro
         }
     }
     if probe.duration_seconds.is_none() && probe.audio_codec.is_none() {
+        let stderr = redacted_ffmpeg_stderr(&stderr, path, &input);
         return Err(format!(
             "音声情報を読み取れませんでした: {}",
             stderr.lines().last().unwrap_or("").trim()
@@ -2840,7 +3258,13 @@ fn playback_cache_path(app: &AppHandle, source: &str) -> Result<PathBuf, String>
             epoch.as_secs().hash(&mut hasher);
         }
     }
-    Ok(private_llm_temp_dir(app)?.join(format!("lott-playback-{:016x}.flac", hasher.finish())))
+    // 名前に作成プロセスの PID を入れる。同じセッション内では同じパスなので再利用でき、
+    // 異常終了後は次回起動時に持ち主不在として回収され、通常終了時は終了処理が消す。
+    Ok(private_llm_temp_dir(app)?.join(format!(
+        "{PRIVATE_TEMP_PID_PREFIX}{}-playback-{:016x}.flac",
+        std::process::id(),
+        hasher.finish()
+    )))
 }
 
 /// 再生用に FLAC へ変換する。FLAC は可逆・シーク可能で、デコーダが LGPL の
@@ -2865,6 +3289,9 @@ fn transcode_for_playback(
     // もう一度 0600 へ寄せる）。
     let _ = write_private_temp_file(&partial, b"");
 
+    // リンクは成功時に `guard.paths.clear()` で空にされる guard とは別に持ち、必ず消す。
+    let mut link_guard = TempFileGuard::new();
+    let input = prepare_ffmpeg_input(app, source, &mut link_guard);
     let mut cmd = Command::new(&ffmpeg);
     // 同梱 ffmpeg は libc/libm しか要求しないため、AppDir 環境を渡さない方が安全
     // （PATH 解決した場合はホスト ffmpeg なので必須）。
@@ -2874,8 +3301,7 @@ fn transcode_for_playback(
         .arg("error")
         .arg("-nostdin")
         .arg("-y")
-        .arg("-i")
-        .arg(source)
+        .args(ffmpeg_input_args(&input))
         .arg("-vn")
         .arg("-map")
         .arg("0:a:0")
@@ -2899,6 +3325,7 @@ fn transcode_for_playback(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+    assign_to_kill_on_close_job(&child);
 
     let _ = app.emit(
         "playback-transcode-progress",
@@ -2943,7 +3370,10 @@ fn transcode_for_playback(
     };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let result = Err(format!("再生用の音声変換に失敗しました: {}", stderr.trim()));
+        let result = Err(format!(
+            "再生用の音声変換に失敗しました: {}",
+            redacted_ffmpeg_stderr(&stderr, source, &input).trim()
+        ));
         finish(&result);
         return result;
     }
@@ -3179,39 +3609,31 @@ fn xml_escape(input: &str) -> String {
 
 
 
-fn get_hf_hub_cache() -> PathBuf {
-    if let Ok(path) = env::var("HF_HUB_CACHE") {
-        return PathBuf::from(path);
-    }
-    if let Ok(hf_home) = env::var("HF_HOME") {
-        return PathBuf::from(hf_home).join("hub");
-    }
-    let home = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/"));
-    home.join(".cache").join("huggingface").join("hub")
+/// 旧 LoTT リリース（faster-whisper 版）が HF Hub キャッシュを置いていたアプリ専用ディレクトリ。
+/// 旧データの一覧・削除はここだけを対象にする。`HF_HUB_CACHE` / `HF_HOME` は見ない:
+/// それらは他のアプリと共用のキャッシュを指すことが多く、削除ボタンで他アプリのモデルまで
+/// 消してしまうため。
+fn legacy_app_hf_hub_dir(app_local_data_dir: &Path) -> PathBuf {
+    app_local_data_dir.join("hf_cache").join("hub")
 }
 
-/// リリースビルドで HF Hub キャッシュをアプリ固有ディレクトリへ向ける。
-/// これにより全モデルが %LOCALAPPDATA%\{identifier}\ 以下に収まり、
-/// NSIS アンインストーラーによる一括削除が可能になる。
-/// dev ビルドはデフォルトの HF_HOME/~/.cache/huggingface/hub を使う。
-fn get_app_hf_hub_cache(app: &AppHandle) -> PathBuf {
-    if cfg!(debug_assertions) {
-        return get_hf_hub_cache();
-    }
-    // 環境変数が明示されていればそちらを優先する。
-    if let Ok(path) = env::var("HF_HUB_CACHE") {
-        return PathBuf::from(path);
-    }
-    if let Ok(hf_home) = env::var("HF_HOME") {
-        return PathBuf::from(hf_home).join("hub");
-    }
-    app.path()
-        .app_local_data_dir()
-        .map(|d| d.join("hf_cache").join("hub"))
-        .unwrap_or_else(|_| get_hf_hub_cache())
+/// 旧データ候補のうち、アプリ専用 HF Hub キャッシュ内の旧 faster-whisper モデルのディレクトリ。
+fn legacy_faster_whisper_model_dirs(hub: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = fs::read_dir(hub) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (name.starts_with("models--") && name.contains("faster-whisper")).then(|| {
+                (
+                    format!("音声認識モデル（{}）", name.trim_start_matches("models--")),
+                    entry.path(),
+                )
+            })
+        })
+        .collect()
 }
 
 /// リリースビルドでモデルを置くアプリ固有データのルート（%LOCALAPPDATA%\{id}\models）。
@@ -4768,6 +5190,205 @@ mod tests {
 
     use super::*;
 
+    const EXPORT_TEST_MARKER: &str = "秘匿テスト本文マーカー";
+    const EXPORT_TEST_PASSWORD: &str = "export-test-password";
+
+    struct ExportTestDir(PathBuf);
+
+    impl ExportTestDir {
+        fn new(tag: &str) -> Self {
+            let dir = env::temp_dir().join(private_temp_name(tag));
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn file_names(&self) -> Vec<String> {
+            let mut names = fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for ExportTestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle)
+    }
+
+    fn export_test_docx_request(path: &Path, password: Option<&str>) -> SaveTranscriptionDocxRequest {
+        SaveTranscriptionDocxRequest {
+            path: path.to_string_lossy().into_owned(),
+            rows: vec![SaveTranscriptionDocxRow {
+                time: "00:00:01".to_string(),
+                speaker: "Th".to_string(),
+                text: EXPORT_TEST_MARKER.to_string(),
+            }],
+            password: password.map(str::to_string),
+        }
+    }
+
+    fn export_test_xlsx_request(path: &Path, password: Option<&str>) -> SaveTranscriptionXlsxRequest {
+        SaveTranscriptionXlsxRequest {
+            path: path.to_string_lossy().into_owned(),
+            rows: vec![SaveTranscriptionXlsxRow {
+                start: "00:00:01".to_string(),
+                end: "00:00:02".to_string(),
+                speaker: "Cl".to_string(),
+                text: EXPORT_TEST_MARKER.to_string(),
+            }],
+            password: password.map(str::to_string),
+        }
+    }
+
+    fn export_test_json_request(path: &Path, password: Option<&str>) -> SaveTranscriptionJsonRequest {
+        SaveTranscriptionJsonRequest {
+            path: path.to_string_lossy().into_owned(),
+            content: format!("{{\"text\":\"{EXPORT_TEST_MARKER}\"}}"),
+            password: password.map(str::to_string),
+        }
+    }
+
+    fn export_test_srt_request(path: &Path, password: Option<&str>) -> SaveTranscriptionSrtRequest {
+        SaveTranscriptionSrtRequest {
+            path: path.to_string_lossy().into_owned(),
+            rows: vec![SaveTranscriptionSrtRow {
+                start_seconds: 0.0,
+                end_seconds: 1.5,
+                speaker: "Th".to_string(),
+                text: EXPORT_TEST_MARKER.to_string(),
+            }],
+            password: password.map(str::to_string),
+        }
+    }
+
+    const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+    fn read_aes_zip_entry(path: &Path, name: &str) -> String {
+        use std::io::Read;
+        let mut archive = zip2::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+        let mut entry = archive
+            .by_name_decrypt(name, EXPORT_TEST_PASSWORD.as_bytes())
+            .unwrap();
+        let mut text = String::new();
+        entry.read_to_string(&mut text).unwrap();
+        text
+    }
+
+    #[test]
+    fn password_protected_exports_leave_only_the_destination_and_no_plaintext() {
+        let dir = ExportTestDir::new("export-no-plaintext");
+        let pw = Some(EXPORT_TEST_PASSWORD);
+        let docx = dir.0.join("a.docx");
+        let xlsx = dir.0.join("b.xlsx");
+        let json = dir.0.join("c.json");
+        let srt = dir.0.join("d.srt");
+
+        write_transcription_docx(&export_test_docx_request(&docx, pw)).unwrap();
+        write_transcription_xlsx(&export_test_xlsx_request(&xlsx, pw)).unwrap();
+        write_transcription_json(&export_test_json_request(&json, pw)).unwrap();
+        write_transcription_srt(&export_test_srt_request(&srt, pw)).unwrap();
+
+        // 一時ファイル（.tmp など）が残らない
+        assert_eq!(dir.file_names(), vec!["a.docx", "b.xlsx", "c.json", "d.srt"]);
+        for path in [&docx, &xlsx, &json, &srt] {
+            let bytes = fs::read(path).unwrap();
+            assert!(!contains_bytes(&bytes, EXPORT_TEST_MARKER.as_bytes()), "{path:?}");
+        }
+        // Office は暗号化コンテナ（CFB）で、平文の ZIP ではない
+        for path in [&docx, &xlsx] {
+            assert_eq!(&fs::read(path).unwrap()[..8], &CFB_MAGIC);
+        }
+        // JSON / SRT はパスワードで復号でき、内容が元どおり
+        assert!(read_aes_zip_entry(&json, "c.json").contains(EXPORT_TEST_MARKER));
+        let srt_text = read_aes_zip_entry(&srt, "d.srt");
+        assert!(srt_text.contains(EXPORT_TEST_MARKER));
+        assert!(srt_text.contains("00:00:00,000 --> 00:00:01,500"));
+    }
+
+    #[test]
+    fn exports_without_password_still_write_plain_files() {
+        let dir = ExportTestDir::new("export-plain");
+        let docx = dir.0.join("a.docx");
+        let xlsx = dir.0.join("b.xlsx");
+        let json = dir.0.join("c.json");
+        let srt = dir.0.join("d.srt");
+
+        write_transcription_docx(&export_test_docx_request(&docx, None)).unwrap();
+        write_transcription_xlsx(&export_test_xlsx_request(&xlsx, Some(""))).unwrap();
+        write_transcription_json(&export_test_json_request(&json, None)).unwrap();
+        write_transcription_srt(&export_test_srt_request(&srt, None)).unwrap();
+
+        assert_eq!(dir.file_names(), vec!["a.docx", "b.xlsx", "c.json", "d.srt"]);
+        for (path, entry) in [(&docx, "word/document.xml"), (&xlsx, "xl/worksheets/sheet1.xml")] {
+            use std::io::Read;
+            let mut archive = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+            let mut xml = String::new();
+            archive.by_name(entry).unwrap().read_to_string(&mut xml).unwrap();
+            assert!(xml.contains(EXPORT_TEST_MARKER));
+        }
+        assert!(fs::read_to_string(&json).unwrap().contains(EXPORT_TEST_MARKER));
+        assert!(fs::read_to_string(&srt).unwrap().contains(EXPORT_TEST_MARKER));
+    }
+
+    #[test]
+    fn password_protected_export_to_missing_folder_writes_no_file() {
+        let dir = ExportTestDir::new("export-missing-folder");
+        let missing = dir.0.join("no-such-folder");
+        let pw = Some(EXPORT_TEST_PASSWORD);
+
+        assert!(write_transcription_docx(&export_test_docx_request(&missing.join("a.docx"), pw)).is_err());
+        assert!(write_transcription_xlsx(&export_test_xlsx_request(&missing.join("b.xlsx"), pw)).is_err());
+        assert!(write_transcription_json(&export_test_json_request(&missing.join("c.json"), pw)).is_err());
+        assert!(write_transcription_srt(&export_test_srt_request(&missing.join("d.srt"), pw)).is_err());
+
+        assert!(!missing.exists());
+        assert!(dir.file_names().is_empty());
+    }
+
+    #[test]
+    fn failed_password_protected_export_keeps_existing_destination() {
+        // 保存先が中身のあるフォルダだと、最後の置き換えだけが失敗する
+        let dir = ExportTestDir::new("export-failed-replace");
+        let pw = Some(EXPORT_TEST_PASSWORD);
+        for name in ["a.docx", "b.xlsx", "c.json", "d.srt"] {
+            let destination = dir.0.join(name);
+            fs::create_dir_all(&destination).unwrap();
+            fs::write(destination.join("keep.txt"), b"keep").unwrap();
+        }
+
+        assert!(write_transcription_docx(&export_test_docx_request(&dir.0.join("a.docx"), pw)).is_err());
+        assert!(write_transcription_xlsx(&export_test_xlsx_request(&dir.0.join("b.xlsx"), pw)).is_err());
+        assert!(write_transcription_json(&export_test_json_request(&dir.0.join("c.json"), pw)).is_err());
+        assert!(write_transcription_srt(&export_test_srt_request(&dir.0.join("d.srt"), pw)).is_err());
+
+        assert_eq!(dir.file_names(), vec!["a.docx", "b.xlsx", "c.json", "d.srt"]);
+        for name in ["a.docx", "b.xlsx", "c.json", "d.srt"] {
+            let destination = dir.0.join(name);
+            assert_eq!(fs::read(destination.join("keep.txt")).unwrap(), b"keep");
+            // フォルダの中にも一時ファイルは無い
+            assert_eq!(fs::read_dir(&destination).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn password_protected_export_overwrites_existing_file_with_ciphertext_only() {
+        let dir = ExportTestDir::new("export-overwrite");
+        let docx = dir.0.join("a.docx");
+        fs::write(&docx, b"old document").unwrap();
+
+        write_transcription_docx(&export_test_docx_request(&docx, Some(EXPORT_TEST_PASSWORD))).unwrap();
+
+        assert_eq!(dir.file_names(), vec!["a.docx"]);
+        assert_eq!(&fs::read(&docx).unwrap()[..8], &CFB_MAGIC);
+    }
+
     #[test]
     fn prepend_dir_to_path_puts_dir_first_and_skips_duplicates() {
         let dir = PathBuf::from("vk-loader");
@@ -4866,6 +5487,139 @@ mod tests {
         assert!(paths.iter().any(|path| path.ends_with("/ffmpeg")));
         assert!(paths.iter().all(|path| !path.contains("whisper-ggml")));
         assert!(paths.iter().all(|path| !path.contains("nemotron")));
+    }
+
+    #[test]
+    fn legacy_hf_hub_dir_is_app_private_and_ignores_hf_env() {
+        // 他のアプリと共用の HF キャッシュを指す環境変数があっても、旧データの対象はアプリ専用
+        // ディレクトリ配下に限る（削除ボタンで他アプリのモデルを消さない）。
+        let saved: Vec<(&str, Option<String>)> = ["HF_HUB_CACHE", "HF_HOME"]
+            .iter()
+            .map(|name| (*name, env::var(name).ok()))
+            .collect();
+        env::set_var("HF_HUB_CACHE", "shared-cache-of-other-apps/hub");
+        env::set_var("HF_HOME", "shared-hf-home");
+        let data_dir = Path::new("app-data");
+        let hub = legacy_app_hf_hub_dir(data_dir);
+        for (name, value) in saved {
+            match value {
+                Some(v) => env::set_var(name, v),
+                None => env::remove_var(name),
+            }
+        }
+        assert!(hub.starts_with(data_dir));
+        assert_eq!(hub, data_dir.join("hf_cache").join("hub"));
+        let text = hub.to_string_lossy();
+        assert!(!text.contains("shared-cache-of-other-apps"));
+        assert!(!text.contains("shared-hf-home"));
+    }
+
+    #[test]
+    fn legacy_faster_whisper_dirs_only_come_from_the_given_hub() {
+        let root = env::temp_dir().join(private_temp_name("legacy-hf-test"));
+        let hub = root.join("hf_cache").join("hub");
+        fs::create_dir_all(hub.join("models--Systran--faster-whisper-large-v3")).unwrap();
+        fs::create_dir_all(hub.join("models--someone--other-model")).unwrap();
+        let dirs = legacy_faster_whisper_model_dirs(&hub);
+        assert_eq!(dirs.len(), 1);
+        assert!(dirs[0].1.starts_with(&hub));
+        assert!(dirs[0].0.contains("Systran--faster-whisper-large-v3"));
+        assert!(legacy_faster_whisper_model_dirs(&root.join("missing")).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wer_exclusions_cover_engines_and_own_exe_but_not_generic_ffmpeg() {
+        let names = wer_excluded_exe_names(Some("lott.exe"));
+        assert!(names.iter().any(|n| n == "whisper-cli.exe"));
+        assert!(names.iter().any(|n| n == "nemo-speech.exe"));
+        assert!(names.iter().any(|n| n == "lott.exe"));
+        assert!(names.iter().all(|n| !n.to_ascii_lowercase().contains("ffmpeg")));
+        assert!(WER_EXCLUDED_CHILD_EXES
+            .iter()
+            .all(|n| !n.to_ascii_lowercase().contains("ffmpeg")));
+        // 本体名が子と同じでも、空でも、重複・空エントリを作らない。
+        assert_eq!(wer_excluded_exe_names(Some("WHISPER-CLI.EXE")).len(), 2);
+        assert_eq!(wer_excluded_exe_names(Some("")).len(), 2);
+        assert_eq!(wer_excluded_exe_names(None).len(), 2);
+    }
+
+    #[test]
+    fn error_mode_adds_fault_ui_suppression_and_keeps_existing_bits() {
+        let mode = error_mode_without_fault_ui(0x8000); // SEM_NOOPENFILEERRORBOX
+        assert_eq!(mode & 0x0001, 0x0001);
+        assert_eq!(mode & 0x0002, 0x0002);
+        assert_eq!(mode & 0x8000, 0x8000);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_job_flags_kill_on_close_and_die_on_unhandled_exception() {
+        use windows_sys::Win32::System::JobObjects::{
+            JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        let flags = child_job_limit_flags();
+        assert_eq!(
+            flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        );
+        assert_eq!(
+            flags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
+            JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn suppress_windows_fault_reporting_ui_sets_error_mode_bits() {
+        // テストプロセスのエラーモードを変えるが、足すのはダイアログ抑止ビットだけで、
+        // 他のテストの結果には影響しない（クラッシュ時に WER ダイアログが出なくなるだけ）。
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
+        };
+        suppress_windows_fault_reporting_ui();
+        let mode = unsafe { GetErrorMode() };
+        assert_eq!(mode & SEM_NOGPFAULTERRORBOX, SEM_NOGPFAULTERRORBOX);
+        assert_eq!(mode & SEM_FAILCRITICALERRORS, SEM_FAILCRITICALERRORS);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn wer_exclusion_registers_in_hkcu_and_can_be_cleaned_up() {
+        // 実在しない専用の名前だけを登録・削除する（既存の除外登録には触れない）。
+        const KEY: &str = r"HKCU\Software\Microsoft\Windows\Windows Error Reporting\ExcludedApplications";
+        let name = format!("lott-test-{}.exe", std::process::id());
+        let query = |name: &str| {
+            Command::new("reg")
+                .args(["query", KEY, "/v", name])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        assert!(!query(&name));
+        wer_add_excluded_application(&name).expect("WerAddExcludedApplication should succeed");
+        let registered = query(&name);
+        // 冪等であること
+        let again = wer_add_excluded_application(&name);
+        let _ = wer_remove_excluded_application(&name);
+        assert!(registered, "ExcludedApplications に {name} が作られていない");
+        assert!(again.is_ok());
+        assert!(!query(&name), "テストで作った値が消えていない");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn disable_core_dumps_sets_rlimit_core_to_zero() {
+        // 自プロセスにだけ効く。テストプロセスがコアを吐かなくなるだけで他のテストには影響しない。
+        assert!(disable_core_dumps());
+        let mut limit = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
+        };
+        let rc = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut limit) };
+        assert_eq!(rc, 0);
+        assert_eq!(limit.rlim_cur, 0);
+        assert_eq!(limit.rlim_max, 0);
     }
 
     #[test]
@@ -5573,6 +6327,354 @@ mod tests {
         let meta = detect_sensitive_entities_rust("松山駅前で会いました。", &rules);
 
         assert!(meta.location_names.contains(&"松山駅前".to_string()));
+    }
+
+    // ---- 専用一時領域の命名・回収 --------------------------------------------------
+
+    /// 実在しない PID（OS の上限より大きい値）。
+    const NONEXISTENT_PID: u32 = u32::MAX - 1;
+
+    fn touch(path: &Path) {
+        fs::write(path, b"x").unwrap();
+    }
+
+    fn set_age(path: &Path, age: Duration) {
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age).unwrap();
+    }
+
+    #[test]
+    fn private_temp_name_embeds_owner_pid_at_fixed_position() {
+        let name = private_temp_name("ggml-asr");
+        let prefix = format!("lott-p{}-ggml-asr-", std::process::id());
+        assert!(name.starts_with(&prefix), "{name}");
+        assert!(name[prefix.len()..].chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(private_temp_owner_pid(&name), Some(std::process::id()));
+        // 拡張子付きのファイル名・応答ファイル・再生キャッシュでも取り出せる。
+        assert_eq!(
+            private_temp_owner_pid(&format!("{name}.json")),
+            Some(std::process::id())
+        );
+        assert_eq!(
+            private_temp_owner_pid("lott-p4242-playback-00ff00ff00ff00ff.flac"),
+            Some(4242)
+        );
+        assert_eq!(
+            private_temp_owner_pid("lott-p4242-playback-00ff00ff00ff00ff.flac.part"),
+            Some(4242)
+        );
+        assert_eq!(
+            private_temp_owner_pid(&private_temp_name_for_pid(7, "input")),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn private_temp_owner_pid_rejects_old_and_malformed_names() {
+        for name in [
+            // 旧形式
+            "lott-ggml-audio-1234-1700000000000000000.wav",
+            "lott-playback-00ff00ff00ff00ff.flac",
+            "lott-voice-input-77-1.wav",
+            "lott_diar_abc.json",
+            // 不正な形式
+            "",
+            "lott-p",
+            "lott-p-ggml-1",
+            "lott-pabc-ggml-1",
+            "lott-p123",
+            "lott-p123.wav",
+            "lott-p123x-ggml-1",
+            "lott-p-1-ggml-1",
+            "lott-p99999999999-ggml-1",
+            "xlott-p123-ggml-1",
+            "LOTT-P123-ggml-1",
+        ] {
+            assert_eq!(private_temp_owner_pid(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn stale_private_temp_decision_follows_owner_and_age() {
+        let own = 100;
+        let alive = |pid: u32| pid == 200;
+        let fresh = Some(Duration::from_secs(60));
+        let old = Some(PRIVATE_TEMP_MAX_AGE);
+        let decide = |owner, age| should_remove_private_temp_file(owner, own, age, alive);
+        // 自プロセス・生きている別インスタンスのものは残す。
+        assert!(!decide(Some(100), fresh));
+        assert!(!decide(Some(200), fresh));
+        assert!(!decide(Some(100), None));
+        // 存在しない PID・旧形式（PID なし）は経過時間に関係なく消す。
+        assert!(decide(Some(300), fresh));
+        assert!(decide(Some(300), None));
+        assert!(decide(None, fresh));
+        assert!(decide(None, None));
+        // 24時間以上経過したものは持ち主が生きていても消す。
+        assert!(decide(Some(100), old));
+        assert!(decide(Some(200), old));
+        assert!(!decide(
+            Some(200),
+            Some(PRIVATE_TEMP_MAX_AGE - Duration::from_secs(1))
+        ));
+    }
+
+    #[test]
+    fn process_liveness_detects_self_and_missing_pids() {
+        assert!(process_is_alive(std::process::id()));
+        assert!(!process_is_alive(NONEXISTENT_PID));
+        assert!(!process_is_alive(0));
+    }
+
+    #[test]
+    fn startup_cleanup_removes_only_orphaned_stale_or_legacy_files() {
+        let dir = ExportTestDir::new("cleanup-startup");
+        let own = std::process::id();
+        let other_alive = NONEXISTENT_PID - 1;
+        let mk = |name: String| {
+            let path = dir.0.join(&name);
+            touch(&path);
+            (name, path)
+        };
+        let (own_name, _) = mk(format!("lott-p{own}-ggml-audio-1.wav"));
+        let (alive_name, _) = mk(format!("lott-p{other_alive}-ggml-asr-1.json"));
+        let (dead_name, _) = mk(format!("lott-p{NONEXISTENT_PID}-ggml-audio-1.wav"));
+        let (legacy_name, _) = mk("lott-ggml-audio-1234-1.wav".to_string());
+        let (old_name, old_path) = mk(format!("lott-p{own}-playback-00ff00ff00ff00ff.flac"));
+        set_age(&old_path, PRIVATE_TEMP_MAX_AGE + Duration::from_secs(60));
+        // ディレクトリは対象外。
+        fs::create_dir(dir.0.join(format!("lott-p{NONEXISTENT_PID}-dir"))).unwrap();
+
+        cleanup_stale_private_temp_dir(&dir.0, own, |pid| pid == other_alive);
+
+        let remaining = dir.file_names();
+        assert!(remaining.contains(&own_name));
+        assert!(remaining.contains(&alive_name));
+        assert!(!remaining.contains(&dead_name));
+        assert!(!remaining.contains(&legacy_name));
+        assert!(!remaining.contains(&old_name));
+        assert!(remaining.contains(&format!("lott-p{NONEXISTENT_PID}-dir")));
+    }
+
+    #[test]
+    fn exit_cleanup_removes_only_files_owned_by_this_process() {
+        let dir = ExportTestDir::new("cleanup-exit");
+        let own = std::process::id();
+        let other = NONEXISTENT_PID;
+        for name in [
+            format!("lott-p{own}-playback-00ff00ff00ff00ff.flac"),
+            format!("lott-p{own}-playback-00ff00ff00ff00ff.flac.part"),
+            format!("lott-p{own}-ggml-asr-1.json"),
+        ] {
+            touch(&dir.0.join(name));
+        }
+        let kept = [
+            format!("lott-p{other}-playback-00ff00ff00ff00ff.flac"),
+            "lott-playback-00ff00ff00ff00ff.flac".to_string(),
+            "notes.txt".to_string(),
+        ];
+        for name in &kept {
+            touch(&dir.0.join(name));
+        }
+
+        cleanup_own_private_temp_dir(&dir.0, own);
+
+        let mut expected = kept.to_vec();
+        expected.sort();
+        assert_eq!(dir.file_names(), expected);
+    }
+
+    #[test]
+    fn legacy_os_temp_files_are_removed_regardless_of_age() {
+        let dir = ExportTestDir::new("cleanup-legacy-os-temp");
+        for name in [
+            "lott_llm_segments_1.json",
+            "lott_llm_system_prompt_1.txt",
+            "lott_overall_segments_1.json",
+            "lott_overall_system_prompt_1.txt",
+            "lott-playback-00ff00ff00ff00ff.flac",
+            "lott_diar_1.wav",
+        ] {
+            touch(&dir.0.join(name)); // 作ったばかり（24時間未満）でも消える
+        }
+        let kept = ["other.txt", "lott-p1234-playback-00ff00ff00ff00ff.flac"];
+        for name in kept {
+            touch(&dir.0.join(name));
+        }
+
+        cleanup_legacy_os_temp_files(&dir.0);
+
+        let mut expected: Vec<String> = kept.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(dir.file_names(), expected);
+    }
+
+    #[test]
+    fn playback_cache_name_pattern_is_recognized_as_owned() {
+        // playback_cache_path の命名と、起動時・終了時の判定が同じ形式を前提にしていること。
+        let name = format!(
+            "{PRIVATE_TEMP_PID_PREFIX}{}-playback-{:016x}.flac",
+            std::process::id(),
+            0xabcdu64
+        );
+        assert_eq!(private_temp_owner_pid(&name), Some(std::process::id()));
+        assert_eq!(
+            private_temp_owner_pid(&format!("{name}.part")),
+            Some(std::process::id())
+        );
+    }
+
+    // ---- ffmpeg の入力（ローカルファイル限定・パス伏せ字・中立リンク）-----------------
+
+    #[test]
+    fn ffmpeg_input_args_whitelist_file_protocol_right_before_input() {
+        let args = ffmpeg_input_args(Path::new("音声 data/依頼者 山田.m4a"));
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec!["-protocol_whitelist", "file", "-i", "音声 data/依頼者 山田.m4a"]
+        );
+        let i = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(&args[i - 2..i], ["-protocol_whitelist", "file"]);
+    }
+
+    #[test]
+    fn redact_audio_paths_hides_both_slash_styles_and_non_ascii_paths() {
+        let original = r"C:\Users\山田 太郎\Documents\相談 2026\依頼者A.mp3";
+        let slash = "C:/Users/山田 太郎/Documents/相談 2026/依頼者A.mp3";
+        let text = format!(
+            "{original}: Invalid data found\nError opening input file {slash}.\nOther line"
+        );
+        let redacted = redact_audio_paths(&text, &[original]);
+        assert_eq!(
+            redacted,
+            "<音声ファイル>: Invalid data found\nError opening input file <音声ファイル>.\nOther line"
+        );
+        assert!(!redacted.contains("山田"));
+
+        // 元のパスが `/` 表記で渡された場合の `\` 表記も伏せる。
+        let redacted = redact_audio_paths(&format!("x {original} y"), &[slash]);
+        assert_eq!(redacted, "x <音声ファイル> y");
+
+        // 元のパスと ffmpeg へ渡したリンクのパスの両方を伏せ、長い方を先に置換する。
+        let link = "/home/u/.cache/net.gakkousya.lott/private-temp/lott-p1-input-2.mp3";
+        let redacted = redact_audio_paths(
+            &format!("{link}: No such file; src {link}.bak; orig /data/依頼者/山田.mp3"),
+            &["/data/依頼者/山田.mp3", link],
+        );
+        assert!(!redacted.contains("private-temp"));
+        assert!(!redacted.contains("山田"));
+
+        // 空のパスは何も置換しない。パスを含まない文もそのまま。
+        assert_eq!(redact_audio_paths("abc", &[""]), "abc");
+        assert_eq!(
+            redact_audio_paths("Invalid data found", &["a.mp3"]),
+            "Invalid data found"
+        );
+    }
+
+    #[test]
+    fn redacted_ffmpeg_stderr_covers_original_and_input_link_paths() {
+        let text = "/mnt/依頼者 山田.mp3: Invalid data\n/cache/lott-p1-input-2.mp3: Invalid data";
+        let out = redacted_ffmpeg_stderr(
+            text,
+            "/mnt/依頼者 山田.mp3",
+            Path::new("/cache/lott-p1-input-2.mp3"),
+        );
+        assert_eq!(out, "<音声ファイル>: Invalid data\n<音声ファイル>: Invalid data");
+    }
+
+    #[test]
+    fn neutral_input_link_name_keeps_only_safe_extension() {
+        let base = "lott-p1-input-2";
+        assert_eq!(neutral_input_link_name(base, "/a/山田.M4A"), "lott-p1-input-2.M4A");
+        assert_eq!(neutral_input_link_name(base, r"C:\a\b.mp3"), "lott-p1-input-2.mp3");
+        assert_eq!(neutral_input_link_name(base, "/a/noext"), base);
+        assert_eq!(neutral_input_link_name(base, "/a/x.m p3"), base);
+        assert_eq!(neutral_input_link_name(base, "/a/x.mp3;rm"), base);
+        assert_eq!(neutral_input_link_name(base, "/a/x.音声"), base);
+        assert_eq!(neutral_input_link_name(base, "/a/x."), base);
+        assert_eq!(neutral_input_link_name(base, "/a/x.waveformfile"), base);
+        assert_eq!(private_temp_owner_pid(&neutral_input_link_name(base, "/a/x.mp3")), Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_ffmpeg_input_is_a_neutral_symlink_removed_by_guard() {
+        let dir = ExportTestDir::new("input-link");
+        let source_dir = ExportTestDir::new("input-link-src");
+        let original = source_dir.0.join("依頼者 山田太郎 面談.m4a");
+        touch(&original);
+        let original_str = original.to_string_lossy().into_owned();
+
+        let link;
+        {
+            let mut guard = TempFileGuard::new();
+            link = prepare_ffmpeg_input_in(&dir.0, &original_str, &mut guard);
+            assert_ne!(link, original);
+            assert_eq!(link.parent(), Some(dir.0.as_path()));
+            let name = link.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(name.starts_with(&format!("lott-p{}-input-", std::process::id())));
+            assert!(name.ends_with(".m4a"));
+            assert!(!link.to_string_lossy().contains("山田"));
+            assert_eq!(fs::read(&link).unwrap(), b"x");
+            assert_eq!(fs::canonicalize(&link).unwrap(), fs::canonicalize(&original).unwrap());
+            // 終了時の掃除はリンクだけを消し、元ファイルは消さない。
+            cleanup_own_private_temp_dir(&dir.0, std::process::id());
+            assert!(fs::symlink_metadata(&link).is_err());
+            assert!(original.exists());
+        }
+
+        // guard が消す（掃除済みでもエラーにならない）。もう一度作って guard の Drop を確かめる。
+        let link2;
+        {
+            let mut guard = TempFileGuard::new();
+            link2 = prepare_ffmpeg_input_in(&dir.0, &original_str, &mut guard);
+            assert!(fs::symlink_metadata(&link2).is_ok());
+        }
+        assert!(fs::symlink_metadata(&link2).is_err());
+        assert!(original.exists());
+
+        // 存在しない元ファイルは元のパスのまま（リンクを作らない）。
+        let mut guard = TempFileGuard::new();
+        let missing = source_dir.0.join("missing.mp3");
+        assert_eq!(
+            prepare_ffmpeg_input_in(&dir.0, &missing.to_string_lossy(), &mut guard),
+            missing
+        );
+        assert!(dir.file_names().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_cleanup_removes_orphaned_input_symlink_but_not_its_target() {
+        let dir = ExportTestDir::new("input-link-orphan");
+        let source_dir = ExportTestDir::new("input-link-orphan-src");
+        let original = source_dir.0.join("original.mp3");
+        touch(&original);
+        let link = dir.0.join(format!("lott-p{NONEXISTENT_PID}-input-1.mp3"));
+        std::os::unix::fs::symlink(&original, &link).unwrap();
+
+        cleanup_stale_private_temp_dir(&dir.0, std::process::id(), |_| false);
+
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert!(original.exists());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn windows_ffmpeg_input_keeps_original_path() {
+        let dir = ExportTestDir::new("input-nolink");
+        let mut guard = TempFileGuard::new();
+        let original = r"C:\Users\山田\依頼者.mp3";
+        assert_eq!(
+            prepare_ffmpeg_input_in(&dir.0, original, &mut guard),
+            PathBuf::from(original)
+        );
+        assert!(dir.file_names().is_empty());
     }
 }
 
@@ -6595,17 +7697,6 @@ fn ggml_failure_result(
     }
 }
 
-fn private_temp_name(tag: &str) -> String {
-    format!(
-        "lott-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    )
-}
-
 /// 音声調整プリセットを ffmpeg の `-af` フィルターチェーンへ対応づける。
 /// `none`・空・不明値は `None`（フィルターなし。従来と同一のコマンド）。
 fn audio_preprocess_filter(preset: Option<&str>) -> Option<&'static str> {
@@ -6647,14 +7738,16 @@ fn decode_audio_to_private_wav(
     let wav = private_llm_temp_dir(app)?.join(format!("{}.wav", private_temp_name("ggml-audio")));
     write_private_temp_file(&wav, b"")?;
     guard.push(wav.clone());
+    // 入力リンクは変換が終わり次第（この関数を抜けるとき）消す。
+    let mut link_guard = TempFileGuard::new();
+    let input = prepare_ffmpeg_input(app, audio_path, &mut link_guard);
     let mut cmd = Command::new(&ffmpeg);
     apply_host_command_env(&mut cmd);
     cmd.arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
         .arg("-y")
-        .arg("-i")
-        .arg(audio_path);
+        .args(ffmpeg_input_args(&input));
     if let Some(filter) = audio_filter {
         cmd.arg("-af").arg(filter);
     }
@@ -6668,13 +7761,13 @@ fn decode_audio_to_private_wav(
         .arg("wav")
         .arg(&wav);
     apply_windows_no_window(&mut cmd);
-    let output = cmd
-        .output()
+    let output = output_in_kill_job(&mut cmd)
         .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "音声の変換に失敗しました: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            redacted_ffmpeg_stderr(&String::from_utf8_lossy(&output.stderr), audio_path, &input)
+                .trim()
         ));
     }
     Ok(wav)
@@ -7173,17 +8266,9 @@ fn legacy_cuda_data_items(app: &AppHandle) -> Vec<LegacyDataItem> {
             models.join("llm").join(GEMMA_12B_LLM_MODEL_DIR),
         ));
     }
-    let hub = get_app_hf_hub_cache(app);
-    if let Ok(entries) = fs::read_dir(&hub) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("models--") && name.contains("faster-whisper") {
-                candidates.push((
-                    format!("音声認識モデル（{}）", name.trim_start_matches("models--")),
-                    entry.path(),
-                ));
-            }
-        }
+    // 環境変数（HF_HUB_CACHE / HF_HOME）は見ない。アプリ専用ディレクトリだけを対象にする。
+    if let Ok(data_dir) = app.path().app_local_data_dir() {
+        candidates.extend(legacy_faster_whisper_model_dirs(&legacy_app_hf_hub_dir(&data_dir)));
     }
     if let Ok(resource_dir) = app.path().resource_dir() {
         for sub in ["resources/python312", "python312"] {
@@ -8119,6 +9204,11 @@ async fn run_full_setup(app: AppHandle, hf_token: Option<String>) -> Result<bool
 
 
 pub fn run() {
+    // 会話データを含みうるクラッシュダンプ・コアダンプを OS の報告機構に作らせない（最優先で設定する）。
+    #[cfg(target_os = "windows")]
+    configure_crash_dump_protection();
+    #[cfg(target_os = "linux")]
+    let _ = disable_core_dumps();
     #[cfg(target_os = "linux")]
     configure_webkit_dmabuf_workaround();
     let audio_playback_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -8209,6 +9299,13 @@ pub fn run() {
             check_all_setup_status,
             run_full_setup
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 通常終了時に、自プロセスが専用一時領域へ作ったファイル（再生用キャッシュなど）を消す。
+            // 子プロセス（whisper.cpp など）の停止は従来どおり Job Object が担う。
+            if let tauri::RunEvent::Exit = event {
+                cleanup_own_private_temp_files(app_handle);
+            }
+        });
 }

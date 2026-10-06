@@ -11,6 +11,14 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; ── 一時データ（private-temp）は無条件に削除する ───────────────────────────────
+  ; 変換済み音声・文字起こしの中間 JSON・再生用キャッシュなど、会話データのコピーが
+  ; 異常終了後に残りうる専用一時領域。モデルとは違い再利用する価値がないので、
+  ; 「アプリデータを削除する」のチェックやバックグラウンド更新（/UPDATE）に関係なく消す。
+  ; Tauri の app_cache_dir は Windows で %LOCALAPPDATA%\{identifier} になる。
+  DetailPrint "一時ファイル ($LOCALAPPDATA\${BUNDLEID}\private-temp) を削除しています..."
+  RMDir /r "$LOCALAPPDATA\${BUNDLEID}\private-temp"
+
   ; アップデート（バックグラウンド更新 /UPDATE）時は校正設定を保持する。
   StrCmp $UpdateMode "1" nsis_skip_editor_cleanup 0
 

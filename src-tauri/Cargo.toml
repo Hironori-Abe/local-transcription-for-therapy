@@ -42,6 +42,9 @@ zip2 = { package = "zip", version = "2", default-features = false, features = ["
 windows-sys = { version = "0.59", features = [
     # GPU はあるのにドライバーが無い・古い場合の案内（gpu_driver.rs。表示装置の列挙）
     "Win32_Devices_DeviceAndDriverInstallation",
+    # クラッシュダンプ対策（SetErrorMode / WerAddExcludedApplication / Job Object。lib.rs）
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_ErrorReporting",
     "Win32_System_JobObjects",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

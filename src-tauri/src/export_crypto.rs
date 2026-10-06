@@ -81,32 +81,32 @@ struct AgileTestMaterial {
     encrypted_hmac_value: Vec<u8>,
 }
 
-/// OOXML（DOCX / XLSX）を ECMA-376 Agile Encryption でその場で暗号化する。
-pub fn encrypt_ooxml_in_place(path: &Path, password: &str) -> Result<(), String> {
+/// メモリ上の OOXML（DOCX / XLSX）を ECMA-376 Agile Encryption で暗号化し、暗号文だけを保存先へ書く。
+///
+/// 平文はディスクへ一切書かない。保存先と同じフォルダへ作る乱数名の一時ファイルには暗号文だけを書き、
+/// 最後に原子的に置き換える。途中で失敗しても保存先の既存ファイルには触れず、一時ファイルも消える。
+pub fn write_encrypted_ooxml(
+    plaintext: &[u8],
+    destination: &Path,
+    password: &str,
+) -> Result<(), String> {
     if password.is_empty() {
         return Err("パスワードが空です。パスワードを入力してから保存してください。".to_string());
     }
+    validate_ooxml(plaintext)?;
 
-    let mut input = File::open(path)
-        .map_err(|e| format!("暗号化する Office ファイルを開けませんでした。保存先を確認してもう一度保存してください: {e}"))?;
-    let mut plaintext = Vec::new();
-    input
-        .read_to_end(&mut plaintext)
-        .map_err(|e| format!("暗号化する Office ファイルを読み込めませんでした。もう一度保存してください: {e}"))?;
-    // Windows では開いたままのファイルを置き換えられないため、読み終えたら閉じる
-    drop(input);
-    validate_ooxml(&plaintext)?;
-
-    let encrypted = build_agile_package(&plaintext, password)?;
-    let (temporary, file) = create_temp_output(path)?;
+    let encrypted = build_agile_package(plaintext, password)?;
+    let (temporary, file) = create_temp_output(destination)?;
     write_compound_file(file, &encrypted.encryption_info, &encrypted.encrypted_package)?;
-    temporary.commit(path)
+    temporary.commit(destination)
 }
 
-/// 1 ファイルを WinZip AES-256 (AE-2) + Deflate の ZIP に入れる。
-pub fn write_aes_zip(
-    input: &Path,
-    output_zip: &Path,
+/// メモリ上の内容を WinZip AES-256 (AE-2) + Deflate の ZIP（1 ファイル入り）にして保存先へ書く。
+///
+/// 平文はディスクへ一切書かない。一時ファイルの扱いは `write_encrypted_ooxml` と同じ。
+pub fn write_aes_zip_bytes(
+    content: &[u8],
+    destination: &Path,
     arcname: &str,
     password: &str,
 ) -> Result<(), String> {
@@ -117,9 +117,7 @@ pub fn write_aes_zip(
         return Err("ZIP 内のファイル名が空です。保存するファイル名を確認してください。".to_string());
     }
 
-    let source = File::open(input)
-        .map_err(|e| format!("ZIP に入れる一時ファイルを開けませんでした。もう一度保存してください: {e}"))?;
-    let (temporary, file) = create_temp_output(output_zip)?;
+    let (temporary, file) = create_temp_output(destination)?;
     let mut archive = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -127,8 +125,8 @@ pub fn write_aes_zip(
     archive
         .start_file(arcname, options)
         .map_err(|e| format!("暗号化 ZIP の作成を開始できませんでした。保存先を確認してもう一度保存してください: {e}"))?;
-    let mut source = source;
-    io::copy(&mut source, &mut archive)
+    archive
+        .write_all(content)
         .map_err(|e| format!("暗号化 ZIP へ書き込めませんでした。ディスクの空き容量を確認してもう一度保存してください: {e}"))?;
     let file = archive
         .finish()
@@ -136,7 +134,7 @@ pub fn write_aes_zip(
     file.sync_all()
         .map_err(|e| format!("暗号化 ZIP をディスクへ書き込めませんでした。もう一度保存してください: {e}"))?;
     drop(file);
-    temporary.commit(output_zip)
+    temporary.commit(destination)
 }
 
 fn validate_ooxml(data: &[u8]) -> Result<(), String> {
@@ -156,36 +154,34 @@ fn validate_ooxml(data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn build_agile_package(plaintext: &[u8], password: &str) -> Result<AgilePackage, String> {
-    let mut password_salt = [0u8; 16];
-    getrandom::getrandom(&mut password_salt)
+fn random_array<const N: usize>() -> Result<[u8; N], String> {
+    let mut bytes = [0u8; N];
+    getrandom::getrandom(&mut bytes)
         .map_err(|e| format!("乱数を生成できませんでした（OS の乱数機能を利用できません）。もう一度保存してください: {e}"))?;
+    Ok(bytes)
+}
+
+fn build_agile_package(plaintext: &[u8], password: &str) -> Result<AgilePackage, String> {
+    let password_salt: [u8; 16] = random_array()?;
     let password_hash = derive_iterated_password_hash(password, &password_salt);
     let key1 = derive_encryption_key(&password_hash, &PASSWORD_KEY_VERIFIER_INPUT);
     let key2 = derive_encryption_key(&password_hash, &PASSWORD_KEY_VERIFIER_HASH);
     let key3 = derive_encryption_key(&password_hash, &PASSWORD_KEY_ENCRYPTED_KEY);
 
-    let mut verifier = [0u8; 16];
-    getrandom::getrandom(&mut verifier)
-        .map_err(|e| format!("乱数を生成できませんでした（OS の乱数機能を利用できません）。もう一度保存してください: {e}"))?;
+    let verifier: [u8; 16] = random_array()?;
     let encrypted_verifier_hash_input = encrypt_cbc_no_padding(&verifier, &key1, &password_salt)?;
     let verifier_hash = Sha512::digest(verifier);
     let encrypted_verifier_hash_value =
         encrypt_cbc_no_padding(&verifier_hash, &key2, &password_salt)?;
 
-    let mut secret_key = [0x36u8; 32];
-    getrandom::getrandom(&mut secret_key[..16])
-        .map_err(|e| format!("乱数を生成できませんでした（OS の乱数機能を利用できません）。もう一度保存してください: {e}"))?;
+    // keyBits=256 なので 32 バイトすべてを乱数にする（半分を固定値にすると実効鍵長が 128 bit になる）
+    let secret_key: [u8; 32] = random_array()?;
     let encrypted_key_value = encrypt_cbc_no_padding(&secret_key, &key3, &password_salt)?;
 
-    let mut data_salt = [0u8; 16];
-    getrandom::getrandom(&mut data_salt)
-        .map_err(|e| format!("乱数を生成できませんでした（OS の乱数機能を利用できません）。もう一度保存してください: {e}"))?;
+    let data_salt: [u8; 16] = random_array()?;
     let encrypted_package = encrypt_payload(plaintext, &secret_key, &data_salt)?;
 
-    let mut hmac_key = [0u8; 64];
-    getrandom::getrandom(&mut hmac_key)
-        .map_err(|e| format!("乱数を生成できませんでした（OS の乱数機能を利用できません）。もう一度保存してください: {e}"))?;
+    let hmac_key: [u8; 64] = random_array()?;
     let encrypted_hmac_key = encrypt_cbc_no_padding(
         &hmac_key,
         &secret_key,
@@ -459,15 +455,37 @@ mod tests {
         }
     }
 
-    fn test_zip(path: &Path, entries: &[(&str, &[u8])]) {
-        let file = File::create(path).expect("create OOXML zip");
-        let mut archive = ZipWriter::new(file);
+    fn test_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
         let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
         for (name, data) in entries {
             archive.start_file(*name, options).expect("start OOXML entry");
             archive.write_all(data).expect("write OOXML entry");
         }
-        archive.finish().expect("finish OOXML zip");
+        archive.finish().expect("finish OOXML zip").into_inner()
+    }
+
+    fn test_ooxml(marker: &[u8]) -> Vec<u8> {
+        test_zip(&[
+            (
+                "[Content_Types].xml",
+                b"<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>",
+            ),
+            ("word/document.xml", marker),
+        ])
+    }
+
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut names = fs::read_dir(dir)
+            .expect("read test directory")
+            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle)
     }
 
     fn decrypt_payload_for_test(
@@ -495,12 +513,10 @@ mod tests {
     fn aes_zip_reads_with_correct_password_and_rejects_wrong_password() {
         let dir = TestPath::new("aes-zip");
         fs::create_dir_all(&dir.0).expect("create test directory");
-        let input = dir.0.join("input.json");
         let output = dir.0.join("result.zip");
         let expected = br#"{"text":"private transcript"}"#;
-        fs::write(&input, expected).expect("write input");
 
-        write_aes_zip(&input, &output, "result.json", TEST_PASSWORD).expect("encrypt ZIP");
+        write_aes_zip_bytes(expected, &output, "result.json", TEST_PASSWORD).expect("encrypt ZIP");
 
         let mut archive = ZipArchive::new(File::open(&output).expect("open encrypted ZIP"))
             .expect("read encrypted ZIP");
@@ -510,11 +526,13 @@ mod tests {
         let mut actual = Vec::new();
         entry.read_to_end(&mut actual).expect("decrypt entry");
         assert_eq!(actual, expected);
+        drop(entry);
 
         let mut archive = ZipArchive::new(File::open(&output).expect("reopen encrypted ZIP"))
             .expect("read encrypted ZIP");
         let result = archive.by_name_decrypt("result.json", b"wrong password");
         assert!(result.is_err());
+        assert_eq!(dir_entries(&dir.0), vec!["result.zip".to_string()]);
     }
 
     #[test]
@@ -573,11 +591,114 @@ mod tests {
     }
 
     #[test]
-    fn invalid_ooxml_is_not_modified() {
-        let path = TestPath::new("invalid-ooxml");
-        fs::write(&path.0, b"original bytes").expect("write invalid input");
-        assert!(encrypt_ooxml_in_place(&path.0, TEST_PASSWORD).is_err());
-        assert_eq!(fs::read(&path.0).expect("read unchanged input"), b"original bytes");
+    fn invalid_input_leaves_existing_destination_untouched_and_creates_no_files() {
+        let dir = TestPath::new("invalid-input");
+        fs::create_dir_all(&dir.0).expect("create test directory");
+        let path = dir.0.join("existing.docx");
+        fs::write(&path, b"original bytes").expect("write existing file");
+
+        assert!(write_encrypted_ooxml(b"not a zip", &path, TEST_PASSWORD).is_err());
+        assert!(write_encrypted_ooxml(&test_ooxml(b"x"), &path, "").is_err());
+        assert!(write_aes_zip_bytes(b"x", &path, "a.json", "").is_err());
+        assert!(write_aes_zip_bytes(b"x", &path, "", TEST_PASSWORD).is_err());
+
+        assert_eq!(fs::read(&path).expect("read unchanged file"), b"original bytes");
+        assert_eq!(dir_entries(&dir.0), vec!["existing.docx".to_string()]);
+    }
+
+    #[test]
+    fn encrypted_ooxml_writes_only_ciphertext_and_leaves_no_temporary_files() {
+        let dir = TestPath::new("ooxml-ciphertext");
+        fs::create_dir_all(&dir.0).expect("create test directory");
+        let path = dir.0.join("result.docx");
+        let marker = "PLAINTEXT-MARKER-相談内容".as_bytes();
+        let ooxml = test_ooxml(marker);
+
+        write_encrypted_ooxml(&ooxml, &path, TEST_PASSWORD).expect("encrypt OOXML");
+
+        assert_eq!(dir_entries(&dir.0), vec!["result.docx".to_string()]);
+        let written = fs::read(&path).expect("read encrypted file");
+        // CFB（OLE）ヘッダーであり、平文の ZIP（PK）ではない
+        assert_eq!(&written[..8], &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+        assert!(!contains_bytes(&written, marker));
+        assert!(!contains_bytes(&written, b"[Content_Types].xml"));
+    }
+
+    #[test]
+    fn encrypted_ooxml_replaces_existing_file_without_leftovers() {
+        let dir = TestPath::new("ooxml-replace");
+        fs::create_dir_all(&dir.0).expect("create test directory");
+        let path = dir.0.join("result.xlsx");
+        fs::write(&path, b"old contents").expect("write existing file");
+
+        write_encrypted_ooxml(&test_ooxml(b"new"), &path, TEST_PASSWORD).expect("encrypt OOXML");
+
+        assert_eq!(dir_entries(&dir.0), vec!["result.xlsx".to_string()]);
+        assert_ne!(fs::read(&path).expect("read replaced file"), b"old contents");
+    }
+
+    #[test]
+    fn missing_destination_directory_fails_without_creating_any_file() {
+        let dir = TestPath::new("missing-parent");
+        fs::create_dir_all(&dir.0).expect("create test directory");
+        let missing_parent = dir.0.join("no-such-folder");
+        let marker = b"PLAINTEXT-MARKER";
+
+        assert!(write_encrypted_ooxml(&test_ooxml(marker), &missing_parent.join("a.docx"), TEST_PASSWORD).is_err());
+        assert!(write_aes_zip_bytes(marker, &missing_parent.join("a.zip"), "a.json", TEST_PASSWORD).is_err());
+
+        assert!(!missing_parent.exists());
+        assert!(dir_entries(&dir.0).is_empty());
+    }
+
+    #[test]
+    fn failed_replace_keeps_existing_destination_and_removes_temporary_file() {
+        // 保存先が（中身のある）フォルダなので、最後の置き換えだけが失敗する
+        let dir = TestPath::new("failed-replace");
+        let destination = dir.0.join("result.docx");
+        fs::create_dir_all(&destination).expect("create destination directory");
+        fs::write(destination.join("keep.txt"), b"keep").expect("write existing child");
+
+        assert!(write_encrypted_ooxml(&test_ooxml(b"x"), &destination, TEST_PASSWORD).is_err());
+        assert!(write_aes_zip_bytes(b"x", &destination, "a.json", TEST_PASSWORD).is_err());
+
+        assert_eq!(dir_entries(&dir.0), vec!["result.docx".to_string()]);
+        assert_eq!(fs::read(destination.join("keep.txt")).expect("read child"), b"keep");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_replace_of_read_only_file_keeps_it_unchanged() {
+        let dir = TestPath::new("readonly-replace");
+        fs::create_dir_all(&dir.0).expect("create test directory");
+        let path = dir.0.join("result.docx");
+        fs::write(&path, b"original bytes").expect("write existing file");
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).expect("set read-only");
+
+        let result = write_encrypted_ooxml(&test_ooxml(b"x"), &path, TEST_PASSWORD);
+
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&path, permissions).expect("clear read-only");
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).expect("read unchanged file"), b"original bytes");
+        assert_eq!(dir_entries(&dir.0), vec!["result.docx".to_string()]);
+    }
+
+    #[test]
+    fn office_secret_key_is_fully_random() {
+        let first = build_agile_package(b"a", TEST_PASSWORD).expect("encrypt");
+        let second = build_agile_package(b"a", TEST_PASSWORD).expect("encrypt");
+        let first_key = first.test_material.secret_key;
+        let second_key = second.test_material.secret_key;
+        assert_ne!(first_key, second_key);
+        assert_ne!(first_key[16..], second_key[16..]);
+        assert_ne!(first_key[16..], [0x36u8; 16]);
+        assert_ne!(second_key[16..], [0x36u8; 16]);
+        assert_ne!(first_key[..16], second_key[..16]);
     }
 
     fn compatibility_directory() -> PathBuf {
@@ -589,18 +710,15 @@ mod tests {
     fn write_compatibility_ooxml(file_name: &str, entry_name: &str, document: &[u8]) {
         let dir = compatibility_directory();
         fs::create_dir_all(&dir).expect("create scratchpad compatibility directory");
-        let path = dir.join(file_name);
-        test_zip(
-            &path,
-            &[
-                (
-                    "[Content_Types].xml",
-                    b"<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>",
-                ),
-                (entry_name, document),
-            ],
-        );
-        encrypt_ooxml_in_place(&path, TEST_PASSWORD).expect("encrypt compatibility sample");
+        let ooxml = test_zip(&[
+            (
+                "[Content_Types].xml",
+                b"<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>",
+            ),
+            (entry_name, document),
+        ]);
+        write_encrypted_ooxml(&ooxml, &dir.join(file_name), TEST_PASSWORD)
+            .expect("encrypt compatibility sample");
     }
 
     #[test]
@@ -628,10 +746,8 @@ mod tests {
     fn pyzipper_can_decrypt_generated_aes_zip() {
         let dir = compatibility_directory();
         fs::create_dir_all(&dir).expect("create scratchpad compatibility directory");
-        let input = dir.join("sample.json");
-        fs::write(&input, br#"{"transcript":"test"}"#).expect("write AES ZIP sample");
-        write_aes_zip(
-            &input,
+        write_aes_zip_bytes(
+            br#"{"transcript":"test"}"#,
             &dir.join("sample-aes.zip"),
             "sample.json",
             TEST_PASSWORD,

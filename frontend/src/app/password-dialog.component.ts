@@ -25,6 +25,7 @@ import { MatInputModule } from '@angular/material/input';
                 [attr.aria-label]="showPassword() ? 'パスワードを隠す' : 'パスワードを表示'">
           <mat-icon class="material-symbols-outlined">{{ showPassword() ? 'visibility_off' : 'visibility' }}</mat-icon>
         </button>
+        <mat-hint>12文字以上の推測されにくいパスワードをお勧めします。忘れると開けなくなります。</mat-hint>
       </mat-form-field>
     </mat-dialog-content>
     <mat-dialog-actions align="end">

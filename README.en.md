@@ -17,7 +17,7 @@ LoTT does not aim to produce perfect verbatim transcripts automatically. The app
 - **Speaker diarization** - NeMo-Speech.cpp + Nemotron-3-Diarization. Results are split into one sentence per row, and a speaker is assigned to each sentence (default labels: Th / Cl / IP ...)
 - **Proofreading** - Produces a punctuated draft that keeps fillers and backchannels, and highlights words that could identify individuals, such as names and place names (see "How Proofreading Works" below)
 - **Editor** - Per-row playback, loop playback, and continuous playback; keyboard shortcuts; splitting rows at Japanese full stops; microphone voice input
-- **Save formats** - Word (.docx), Excel (.xlsx), SRT subtitles, and JSON. SRT can also be saved as an AES-256 encrypted ZIP with an optional password
+- **Save formats** - Word (.docx), Excel (.xlsx), SRT subtitles, and JSON. All of them can be saved encrypted with an optional password (Word and Excel use standard Office encryption; JSON and SRT use an AES-256 encrypted ZIP). When saving with a password, unencrypted content is never written to disk
 - **Modest requirements** - About 4 GB of VRAM or more is recommended for GPU processing (measured peak usage is about 1.9 GB)
 
 ## How Proofreading Works
@@ -37,7 +37,7 @@ When a language other than Japanese is selected, the Japanese example sentence, 
 - Transcription, speaker diarization, proofreading, and voice input are completed entirely by whisper.cpp / NeMo-Speech.cpp and local rules on the PC. No internet-hosted APIs are called.
 - Internet access is needed only for the initial setup (model downloads) and, in the Editor edition, for downloading the voice input pack. Models are pinned versions verified with SHA-256.
 - The app has no AI (LLM) inference feature, so there is no path that hands conversation data to an inference server.
-- The app itself does not communicate with external servers during normal operation. On Windows, WebView2 is configured not to automatically send crash dumps to Microsoft. However, the app cannot completely control required diagnostics, update checks, or other communications performed by system-level components such as the OS, the WebView runtime (WebView2), and GPU drivers. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
+- The app itself does not communicate with external servers during normal operation. On Windows, WebView2 crash dumps and Windows Error Reporting for crashes of the app and its speech engines are configured not to be sent to Microsoft automatically; on Linux, core dumps are disabled. However, the app cannot completely control required diagnostics, update checks, or other communications performed by system-level components such as the OS, the WebView runtime (WebView2), and GPU drivers. If your organization requires fully offline operation, enforce it additionally at the OS or firewall level (e.g., network isolation or proxy restrictions).
 - For non-engineers, see the [plain-language privacy guide](docs/privacy-guide.md) (Japanese). To verify for yourself that nothing is sent, see the [offline verification steps](docs/offline-verification.md) (Japanese).
 
 ## Editions

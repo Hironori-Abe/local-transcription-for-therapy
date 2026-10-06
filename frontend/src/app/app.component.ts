@@ -141,6 +141,7 @@ import {
   resolveTimeInputRangeValue,
   resolveStepForStageValue,
   shouldShowVoiceInputShortCandidateHintValue,
+  redactPathsForSharingValue,
   selectedFileNameValue,
   selectedLocationPrefectureTotalCountValue,
   stripRemovedSettingsValue,
@@ -2923,9 +2924,15 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (!text) {
       return;
     }
+    // 画面表示は変えず、コピー（issue やメールへ貼る前提）のときだけ音声ファイルの場所を伏せる。
+    const shareable = redactPathsForSharingValue(text);
     try {
-      await navigator.clipboard.writeText(text);
-      this.errorCopiedMessage.set('エラー文をコピーしました。');
+      await navigator.clipboard.writeText(shareable);
+      this.errorCopiedMessage.set(
+        shareable !== text
+          ? 'エラー文をコピーしました。ファイルの場所は <パス> に置き換えました。'
+          : 'エラー文をコピーしました。'
+      );
     } catch {
       this.errorCopiedMessage.set('コピーに失敗しました。手動で選択してコピーしてください。');
     }

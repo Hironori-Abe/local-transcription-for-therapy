@@ -165,7 +165,7 @@ bash scripts/run-dev-editor.sh         # Editor 版（127.0.0.1:4203）
 - ファイル名に作成プロセスの PID を入れる（`private_temp_owner_pid`）。処理後に削除し、アプリ終了時に自プロセスのファイル（再生用キャッシュを含む）を削除する（`cleanup_own_private_temp_files`）。クラッシュ・強制終了のあとは、次回起動時に `cleanup_stale_private_temp_files` が、持ち主のプロセスが終了しているファイルを経過時間に関係なく削除する（持ち主を判別できない旧形式と、24時間以上経過したもの〔`PRIVATE_TEMP_MAX_AGE`〕も削除）。同じ関数が、旧版が OS の一時フォルダへ残した会話データ（`lott_llm_segments_*` など）も経過時間に関係なく削除する
 - Windows のアンインストール時（NSIS フック）は、「アプリデータを削除」のチェックに関係なく一時領域を削除する
 - パスワード付き保存（DOCX / XLSX / JSON / SRT）は、暗号化前の内容をディスクへ書かない。メモリ上で作成・暗号化し（`write_encrypted_ooxml` / `write_aes_zip_bytes`）、保存先と同じフォルダへ乱数名の暗号文の一時ファイルを作って完成後に置き換える（失敗しても既存のファイルを壊さない）。同期フォルダへ平文を漏らさないための要件なので、保存先へ平文を書く実装を戻さない。OOXML の AES-256 の鍵は32バイトすべてを乱数にする
-- クラッシュ時のダンプ送信を抑止する。Windows ではアプリと子プロセスのエラー報告ダイアログ・Windows エラー報告を抑止し、`whisper-cli.exe` / `nemo-speech.exe` / `lott.exe` を Windows エラー報告の除外一覧（利用者ごと）へ登録する。Linux ではアプリと子プロセスのコアダンプを無効にする。管理者が設定する LocalDumps までは制御できない
+- クラッシュ時のダンプ送信を抑止する（`configure_crash_dump_protection`）。Windows ではアプリと子プロセスのエラー報告ダイアログ・Windows エラー報告を抑止し、`whisper-cli.exe` / `nemo-speech.exe` / `lott.exe` を Windows エラー報告の除外一覧（利用者ごと）へ登録する。本体には `WER_FAULT_REPORTING_FLAG_NOHEAP` も設定する。Linux（CachyOS・Ubuntu）は `RLIMIT_CORE=0` だけに依存せず、`linux_crash_protection` が本体の `PR_SET_DUMPABLE=0` と、fork / exec 後も残る `coredump_filter=0`（子のメモリ領域除外）を併用する。設定は UI・GPU 列挙・会話データ処理より先に行い、失敗時は起動を中止する。Linux 子プロセスのレジスタ・プロセス情報や、管理者が設定する Windows LocalDumps までは禁止できない。OS の sysctl / 収集サービス / 全体ポリシーを変更しない。詳細は `docs/crash-dump-protection.md`
 - 画面の CSP（`tauri.conf.json`）の `connect-src` に `http://127.0.0.1:*` / `http://localhost:*` などの HTTP 接続を足さない（LLM 連携の削除に伴い外した）。`media-src` は音声再生用のローカルサーバー（`http://127.0.0.1:*`）だけに許可する
 - エラー文の「コピー」では、エラー文中のファイルの場所を `<パス>` に置き換える（フォルダ名・ファイル名にクライアント名が入りうるため）
 

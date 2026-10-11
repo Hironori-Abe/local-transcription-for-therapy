@@ -27,6 +27,8 @@ use ggml_speech::GgmlSpeechPaths;
 mod gpu_driver;
 mod gpu_select;
 mod export_crypto;
+#[cfg(target_os = "linux")]
+mod linux_crash_protection;
 pub use gpu_select::{print_vulkan_devices, LIST_VULKAN_DEVICES_ARG};
 
 
@@ -329,25 +331,50 @@ fn register_wer_exclusions() {
     }
 }
 
-/// `run()` の最初に呼ぶ（Windows）。以後に作る子プロセスにもエラーモードが継承される。
+/// Windows: エラー報告が別経路から要求されても、本体のヒープを収集させない。
+/// これはプロセス内の設定で、OS のポリシーや LocalDumps は変更しない。
 #[cfg(target_os = "windows")]
-fn configure_crash_dump_protection() {
-    suppress_windows_fault_reporting_ui();
-    register_wer_exclusions();
+fn exclude_windows_heap_from_reports() -> Result<(), String> {
+    use windows_sys::Win32::System::{
+        ErrorReporting::{WerGetFlags, WerSetFlags, WER_FAULT_REPORTING_FLAG_NOHEAP},
+        Threading::GetCurrentProcess,
+    };
+    let mut flags = 0;
+    let hr = unsafe { WerGetFlags(GetCurrentProcess(), &mut flags) };
+    if hr < 0 {
+        return Err(format!(
+            "WER 設定の取得に失敗しました（HRESULT=0x{:08X}）。",
+            hr as u32
+        ));
+    }
+    let hr = unsafe { WerSetFlags(flags | WER_FAULT_REPORTING_FLAG_NOHEAP) };
+    if hr < 0 {
+        return Err(format!(
+            "WER のヒープ収集抑止に失敗しました（HRESULT=0x{:08X}）。",
+            hr as u32
+        ));
+    }
+    let mut applied = 0;
+    let hr = unsafe { WerGetFlags(GetCurrentProcess(), &mut applied) };
+    if hr < 0 || applied & WER_FAULT_REPORTING_FLAG_NOHEAP == 0 {
+        return Err("WER のヒープ収集抑止を確認できませんでした。".to_string());
+    }
+    Ok(())
 }
 
-/// 自プロセスの RLIMIT_CORE を 0 にする（Linux）。rlimit は fork / exec 後も子へ継承されるため、
-/// whisper-cli / nemo-speech / ffmpeg / WebKit の子プロセスでも apport / systemd-coredump が
-/// コアダンプ（会話データを含む）を作らない。ハードリミットも 0 にするので子から戻せない。
-/// `prctl(PR_SET_DUMPABLE, 0)` は通常の execve で 1 に戻り子の対策にならず、本体では
-/// /proc/self の所有者が変わる副作用もあるため使わない。失敗は無視してよい（戻り値は確認用）。
-#[cfg(target_os = "linux")]
-fn disable_core_dumps() -> bool {
-    let limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) == 0 }
+/// 会話データを扱う前に設定する。GPU 列挙用の子プロセスにも同じ保護を適用する。
+/// Linux は本体のダンプ禁止と、exec 後も残るメモリ除外を併用する。
+pub fn configure_crash_dump_protection() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        suppress_windows_fault_reporting_ui();
+        exclude_windows_heap_from_reports()?;
+        register_wer_exclusions();
+    }
+    #[cfg(target_os = "linux")]
+    linux_crash_protection::configure()
+        .map_err(|e| format!("コアダンプの保護設定に失敗しました: {e}"))?;
+    Ok(())
 }
 
 
@@ -5607,19 +5634,19 @@ mod tests {
         assert!(!query(&name), "テストで作った値が消えていない");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "windows")]
     #[test]
-    fn disable_core_dumps_sets_rlimit_core_to_zero() {
-        // 自プロセスにだけ効く。テストプロセスがコアを吐かなくなるだけで他のテストには影響しない。
-        assert!(disable_core_dumps());
-        let mut limit = libc::rlimit {
-            rlim_cur: 1,
-            rlim_max: 1,
+    fn windows_heap_is_excluded_without_replacing_existing_wer_flags() {
+        use windows_sys::Win32::System::{
+            ErrorReporting::{WerGetFlags, WER_FAULT_REPORTING_FLAG_NOHEAP},
+            Threading::GetCurrentProcess,
         };
-        let rc = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut limit) };
-        assert_eq!(rc, 0);
-        assert_eq!(limit.rlim_cur, 0);
-        assert_eq!(limit.rlim_max, 0);
+        let mut before = 0;
+        assert!(unsafe { WerGetFlags(GetCurrentProcess(), &mut before) } >= 0);
+        exclude_windows_heap_from_reports().unwrap();
+        let mut after = 0;
+        assert!(unsafe { WerGetFlags(GetCurrentProcess(), &mut after) } >= 0);
+        assert_eq!(after, before | WER_FAULT_REPORTING_FLAG_NOHEAP);
     }
 
     #[test]
@@ -6268,6 +6295,46 @@ mod tests {
         assert!(meta.has_sensitive_entity);
         assert!(meta.kinds.contains(&"person".to_string()));
         assert!(meta.person_names.contains(&"和田".to_string()));
+    }
+
+    #[test]
+    fn bundled_person_dictionary_detects_katakana_names_without_honorifics() {
+        let raw: EntityRulesFile = serde_json::from_str(include_str!(
+            "../resources/proofread/punctuation_rules/named_entity_detection.json"
+        ))
+        .expect("bundled entity dictionary should be valid JSON");
+        let mut rules = EntityRules::default();
+        rules.person_names = normalize_named_entity_list(raw.person_names);
+        rules.person_name_set = rules.person_names.iter().cloned().collect();
+
+        // Two-character katakana entries cause matches inside common words.
+        assert!(!rules.person_names.iter().any(|name| {
+            name.chars().count() == 2
+                && name.chars().all(|c| ('ァ'..='ヺ').contains(&c) || c == 'ー')
+        }));
+        for text in ["カウンセリング", "インターネット", "スマホ"] {
+            let meta = detect_sensitive_entities_rust(text, &rules);
+            assert!(meta.person_names.is_empty(), "unexpected names in {text}");
+        }
+
+        // Whisper can join a katakana surname and given name without a space.
+        // No honorific: these names must be detected through the actual dictionary.
+        let meta = detect_sensitive_entities_rust(
+            "サトウアキラとタカハシミサキについて話しました。",
+            &rules,
+        );
+        for name in ["サトウ", "アキラ", "タカハシ", "ミサキ"] {
+            assert!(
+                meta.person_names.iter().any(|found| found == name),
+                "missing {name}"
+            );
+        }
+        assert!(meta.kinds.iter().any(|kind| kind == "person"));
+
+        let original = detect_sensitive_entities_rust("佐藤と高橋について話しました。", &rules);
+        for name in ["佐藤", "高橋"] {
+            assert!(original.person_names.iter().any(|found| found == name));
+        }
     }
 
     #[test]
@@ -9204,11 +9271,11 @@ async fn run_full_setup(app: AppHandle, hf_token: Option<String>) -> Result<bool
 
 
 pub fn run() {
-    // 会話データを含みうるクラッシュダンプ・コアダンプを OS の報告機構に作らせない（最優先で設定する）。
-    #[cfg(target_os = "windows")]
-    configure_crash_dump_protection();
-    #[cfg(target_os = "linux")]
-    let _ = disable_core_dumps();
+    // 保護できない状態で会話データを扱わない。UI と子プロセスの初期化より先に設定する。
+    if let Err(error) = configure_crash_dump_protection() {
+        eprintln!("プライバシー保護を設定できないため起動を中止しました: {error}");
+        std::process::exit(1);
+    }
     #[cfg(target_os = "linux")]
     configure_webkit_dmabuf_workaround();
     let audio_playback_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));

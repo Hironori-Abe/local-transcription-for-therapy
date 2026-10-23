@@ -23,6 +23,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 mod ggml_speech;
+mod speech_preparation;
 use ggml_speech::GgmlSpeechPaths;
 mod gpu_driver;
 mod gpu_select;
@@ -759,6 +760,7 @@ fn generate_whisper_voice_input_candidates_blocking(
     app: &AppHandle,
     request: &EditorVoiceInputRequest,
 ) -> Result<EditorVoiceInputResponse, String> {
+    speech_preparation::discard();
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     let paths = resolve_ggml_speech_paths(app)?;
@@ -3506,6 +3508,7 @@ fn dev_delete_downloaded_models(app: AppHandle, target: Option<String>) -> DevDe
         };
     }
 
+    speech_preparation::discard();
     // セットアップの動きを確かめるため、取得済みの ggml モデル（音声認識・話者分離）を消す。
     let target = target.as_deref().unwrap_or("all");
     let mut deleted: Vec<String> = vec![];
@@ -4156,6 +4159,12 @@ async fn proofread_transcription(
 
 #[tauri::command]
 fn cancel_transcription() -> Result<String, String> {
+    // Also cancel a start that is still waiting for speculative preparation.
+    let active = TRANSCRIPTION_ACTIVE.load(Ordering::SeqCst);
+    if active {
+        set_cancel_requested(RunningTaskKind::Transcription, true);
+    }
+    speech_preparation::discard();
     // 並行実行中の話者分離も停止する
     let diar_pid = DIARIZATION_PID.load(Ordering::SeqCst);
     if diar_pid > 0 {
@@ -4163,6 +4172,7 @@ fn cancel_transcription() -> Result<String, String> {
     }
     match request_cancel(RunningTaskKind::Transcription)? {
         true => Ok("文字起こし処理の中止要求を送信しました。".to_string()),
+        false if active => Ok("文字起こしの準備の中止要求を送信しました。".to_string()),
         false => Ok("中止対象の文字起こし処理は実行されていません。".to_string()),
     }
 }
@@ -6795,6 +6805,17 @@ fn emit_progress(app: &AppHandle, stage: &str, message: &str, progress: Option<f
 }
 
 #[tauri::command]
+async fn prepare_transcription(app: AppHandle, request: RunTranscriptionRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || speech_preparation::prepare(app, request))
+        .await.map_err(|_| "文字起こしの事前準備を開始できませんでした。".to_string())?
+}
+
+#[tauri::command]
+fn discard_transcription_preparation() {
+    speech_preparation::discard();
+}
+
+#[tauri::command]
 async fn run_transcription(
     app: AppHandle,
     request: RunTranscriptionRequest,
@@ -6811,6 +6832,7 @@ async fn run_transcription(
                 ),
             }),
         };
+    set_cancel_requested(RunningTaskKind::Transcription, false);
     tauri::async_runtime::spawn_blocking(move || run_transcription_blocking(app, request))
         .await
         .map_err(|e| format!("文字起こしタスクの実行に失敗しました: {e}"))?
@@ -7035,7 +7057,6 @@ fn run_transcription_blocking(
         request.diarization,
         request.parallel_diarization.unwrap_or(false)
     );
-    set_cancel_requested(RunningTaskKind::Transcription, false);
     // 旧フロントエンドから false が届いても、カウンセリング会話のフィラーは常に保持する。
     let keep_fillers = true;
     let language = match normalize_transcription_language(request.language.as_deref()) {
@@ -7797,6 +7818,16 @@ fn decode_audio_to_private_wav(
     guard: &mut TempFileGuard,
     audio_filter: Option<&str>,
 ) -> Result<PathBuf, String> {
+    decode_audio_to_private_wav_with_job(app, audio_path, guard, audio_filter, None)
+}
+
+fn decode_audio_to_private_wav_with_job(
+    app: &AppHandle,
+    audio_path: &str,
+    guard: &mut TempFileGuard,
+    audio_filter: Option<&str>,
+    job: Option<&speech_preparation::Job>,
+) -> Result<PathBuf, String> {
     let ffmpeg = resolve_ffmpeg_bin_for_segment_cut(app)
         .ok_or_else(|| "音声の変換に必要な ffmpeg が見つかりませんでした。".to_string())?;
     if !Path::new(audio_path).exists() {
@@ -7828,8 +7859,12 @@ fn decode_audio_to_private_wav(
         .arg("wav")
         .arg(&wav);
     apply_windows_no_window(&mut cmd);
-    let output = output_in_kill_job(&mut cmd)
-        .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?;
+    let output = if let Some(job) = job {
+        speech_preparation::output_for_job(cmd, job)?
+    } else {
+        output_in_kill_job(&mut cmd)
+            .map_err(|e| format!("ffmpeg の起動に失敗しました: {e}"))?
+    };
     if !output.status.success() {
         return Err(format!(
             "音声の変換に失敗しました: {}",
@@ -7931,98 +7966,45 @@ fn execute_ggml_transcription(
             String::new(),
         ));
     }
-    let model_path = paths.whisper_model(model).expect("checked above");
     let use_gpu = device != "cpu";
-
-    emit_progress(
-        app,
-        "preprocessing",
-        "音声を変換しています...（ggml エンジン）",
-        Some(3.0),
-    );
-    let mut guard = TempFileGuard::new();
-    let wav = match decode_audio_to_private_wav(
-        app,
-        audio_path,
-        &mut guard,
-        audio_preprocess_filter(audio_preprocess),
-    ) {
-        Ok(v) => v,
-        Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
+    let key = speech_preparation::Key::new(
+        &paths, audio_path, device, model, language, ggml_gpu_uuid, audio_preprocess, keep_fillers,
+    )?;
+    emit_progress(app, "preprocessing", "音声とモデルを準備しています...", Some(3.0));
+    let cached = match speech_preparation::take(&key) {
+        Ok(value) => value,
+        Err(error) => return Ok(ggml_failure_result(error, None, String::new())),
     };
-    let temp_dir = private_llm_temp_dir(app)?;
-    let out_name = private_temp_name("ggml-asr");
-    let out_json = temp_dir.join(format!("{out_name}.json"));
-    guard.push(out_json.clone());
-    // 音声と出力先は一時ディレクトリからのファイル名（ASCII の生成名）だけで渡す。
-    // Windows の whisper-cli はこの2つを ANSI のパスとして開くため、ユーザー名などに
-    // 日本語を含む絶対パスを渡すと開けない（ggml_speech::whisper_response_file 参照）。
-    let wav_name = wav
-        .file_name()
-        .map(PathBuf::from)
-        .ok_or_else(|| "一時音声ファイル名を解決できませんでした。".to_string())?;
-
-    let threads = thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(8);
-    let whisper_args = ggml_speech::whisper_cli_args(
-        &model_path,
-        &paths.vad_model,
-        &wav_name,
-        Path::new(&out_name),
-        language,
-        use_gpu,
-        keep_fillers,
-        threads,
-    );
-    let mut cmd = Command::new(&paths.whisper_cli);
-    cmd.current_dir(&temp_dir);
-    if cfg!(target_os = "windows") {
-        // argv はシステムのコードページで届き、日本語のプロンプトやモデルパスが化けるため、
-        // UTF-8 の応答ファイルで渡す。
-        let contents = match ggml_speech::whisper_response_file(&whisper_args) {
-            Ok(v) => v,
-            Err(e) => return Ok(ggml_failure_result(e, None, String::new())),
-        };
-        let rsp_name = format!("{}.args", private_temp_name("ggml-asr-args"));
-        let rsp = temp_dir.join(&rsp_name);
-        write_private_temp_file(&rsp, contents.as_bytes())?;
-        guard.push(rsp);
-        cmd.arg(format!("@{rsp_name}"));
-    } else {
-        cmd.args(whisper_args);
-    }
-    let gpu = if use_gpu {
-        apply_ggml_vulkan_device(&mut cmd, paths.whisper_backend(), ggml_gpu_uuid)
-    } else {
-        None
+    let mut prepared = match cached {
+        Some(value) => value,
+        None => match speech_preparation::build_now(app, &paths, key) {
+            Ok(value) => value,
+            Err(error) => return Ok(ggml_failure_result(error, None, String::new())),
+        },
     };
+    let gpu = prepared.gpu.clone();
     let device_label = match (&gpu, use_gpu) {
         (Some(d), _) => d.name.clone(),
         (None, true) => "GPU".to_string(),
         (None, false) => "CPU".to_string(),
     };
     emit_progress(
-        app,
-        "transcribing",
-        &format!("whisper.cpp で文字起こし中です...（{device_label}）"),
-        Some(5.0),
+        app, "transcribing",
+        &format!("whisper.cpp で文字起こし中です...（{device_label}）"), Some(5.0),
     );
     let mut last = 0u32;
-    let exec = run_ggml_engine_process(cmd, RunningTaskKind::Transcription, |line| {
+    let exec = match prepared.run(|line| {
         if let Some(p) = ggml_speech::parse_whisper_progress(line) {
             if p > last {
                 last = p;
-                emit_progress(
-                    app,
-                    "transcribing",
-                    "音声を文字起こし中です...（whisper.cpp）",
-                    Some(5.0 + p as f64 * 0.9),
-                );
+                emit_progress(app, "transcribing", "音声を文字起こし中です...（whisper.cpp）", Some(5.0 + p as f64 * 0.9));
             }
         }
-    })?;
+    }) {
+        Ok(value) => value,
+        Err(error) => return Ok(ggml_failure_result(error, None, String::new())),
+    };
+    let out_json = &prepared.out_json;
     if !exec.status.success() {
         let tail = ggml_speech::tail_chars(exec.stderr.trim(), 1500);
         return Ok(ggml_failure_result(
@@ -9331,6 +9313,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             run_transcription,
+            prepare_transcription,
+            discard_transcription_preparation,
             run_diarization,
             proofread_transcription,
             cancel_transcription,
@@ -9372,6 +9356,7 @@ pub fn run() {
             // 通常終了時に、自プロセスが専用一時領域へ作ったファイル（再生用キャッシュなど）を消す。
             // 子プロセス（whisper.cpp など）の停止は従来どおり Job Object が担う。
             if let tauri::RunEvent::Exit = event {
+                speech_preparation::discard();
                 cleanup_own_private_temp_files(app_handle);
             }
         });

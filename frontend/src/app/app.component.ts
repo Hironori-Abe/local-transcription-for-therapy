@@ -21,6 +21,7 @@ import { PlaybackControlSnackbarComponent } from './playback-control-snackbar.co
 import { ProgressSnackbarComponent } from './progress-snackbar.component';
 import { PreserveUndoValueDirective } from './preserve-undo-value.directive';
 import { BestEffortBrowserStorage, loadAudioMetadataDuration, waitForAudioSeek } from './browser-adapters';
+import { TranscriptionPreparationQueue } from './transcription-preparation';
 import {
   APP_SETTINGS_STORAGE_KEY,
   LEGACY_APP_SETTINGS_STORAGE_KEY,
@@ -619,6 +620,25 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   readonly ggmlGpuUuid = signal<string>('');
   /** 文字起こし用音声の調整プリセット（話者分離には適用しない）。 */
   readonly audioPreprocess = signal<AudioPreprocessPreset>('none');
+  private readonly transcriptionPreparation = new TranscriptionPreparationQueue<Record<string, unknown>>(
+    request => request
+      ? invoke('prepare_transcription', { request })
+      : invoke('discard_transcription_preparation')
+  );
+
+  private scheduleWhisperPreparation(): void {
+    if (!this.isTauriRuntime() || this.editorOnlyBuild || this.transcriptionPipelineRunning()) return;
+    const audioPath = this.selectedAudioPath();
+    this.transcriptionPreparation.schedule(
+      audioPath && !this.transcriptionRunLockedByImport() && !this.isTranscriptionTabDisabled()
+        ? {
+            audioPath, diarization: false, device: this.effectiveSpeechDevice(),
+            model: this.whisperModel(), language: this.transcriptionLanguage(),
+            ggmlGpuUuid: this.ggmlGpuUuid() || null, audioPreprocess: this.audioPreprocess()
+          }
+        : null
+    );
+  }
   readonly audioPreprocessPresetOptions = AUDIO_PREPROCESS_PRESET_OPTIONS;
   readonly audioPreprocessPresetHint = computed<string>(() =>
     getAudioPreprocessPresetHintValue(this.audioPreprocess())
@@ -1230,6 +1250,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onAudioPreprocessPresetChange(value: unknown): void {
     this.audioPreprocess.set(normalizeAudioPreprocessPresetValue(value));
     this.persistTranscriptionSettings();
+    this.scheduleWhisperPreparation();
   }
 
   /** 文字起こし言語コードを正規化する。選択肢に無い値は既定の ja に戻す。 */
@@ -1240,6 +1261,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   onTranscriptionLanguageChange(value: string): void {
     this.transcriptionLanguage.set(this.normalizeTranscriptionLanguage(value));
     this.persistTranscriptionSettings();
+    this.scheduleWhisperPreparation();
   }
 
   private normalizeTranscriptionDevice(valueRaw: string): TranscriptionDeviceOption {
@@ -1364,6 +1386,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
   };
 
   ngOnDestroy(): void {
+    if (this.isTauriRuntime()) this.transcriptionPreparation.schedule(null);
     if (this.systemDarkQuery) {
       this.systemDarkQuery.removeEventListener('change', this._onSystemThemeChange);
       this.systemDarkQuery = null;
@@ -1927,6 +1950,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     if (typeof selected === 'string') {
       this.audioFileLoading.set(true);
       try {
+        this.transcriptionPreparation.schedule(null);
         this.selectedAudioPath.set(selected);
         await this.updateSelectedAudioFileSizeFromPath(selected);
         await this.updateEstimatedTimeFromPath(selected);
@@ -1970,6 +1994,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
         this.selectedAudioPath.set(selected);
         await this.updateSelectedAudioFileSizeFromPath(selected);
         this.transcriptionRunLockedByImport.set(false);
+        this.scheduleWhisperPreparation();
         await this.updateEstimatedTimeFromPath(selected);
       } finally {
         this.audioFileLoading.set(false);
@@ -2024,6 +2049,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.ggmlGpuUuid.set(uuid);
     this.persistTranscriptionSettings();
     this.syncPreferredVulkanGpu();
+    this.scheduleWhisperPreparation();
   }
 
   async toggleNemotronLicense(): Promise<void> {
@@ -2164,6 +2190,10 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     try {
       this.runningStatus.set('音声エンジンを起動しています...');
       console.info(`[LoTT][transcription][run_id=${runId}][frontend_stage=invoke_start]`);
+      await this.transcriptionPreparation.settled();
+      if (this.errorWasCancelledByUser() || this.transcriptionPipelineCanceling()) {
+        throw new Error('文字起こしを中止しました。');
+      }
       const response = await invoke<{ success: boolean; result?: TranscriptionResult; errorMessage?: string }>(
         'run_transcription',
         {
@@ -2428,6 +2458,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
       return;
     }
     this.errorWasCancelledByUser.set(true);
+    this.transcriptionPreparation.schedule(null);
     this.transcriptionCanceling.set(true);
     try {
       const message = await invoke<string>('cancel_transcription');
@@ -2866,6 +2897,7 @@ export class AppComponent implements OnDestroy, OnInit, AfterViewInit {
     this.proofreadStatusSource.set(null);
     this.mergeStatus.set('');
     this.selectedAudioPath.set('');
+    if (this.isTauriRuntime()) this.transcriptionPreparation.schedule(null);
     this.selectedAudioFileSizeBytes.set(null);
     this.applyImportedPayload(parsed.value);
   }

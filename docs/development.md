@@ -7,7 +7,7 @@
 
 ## 事前に必要なもの（Windows）
 
-- Node.js (LTS)
+- Node.js 22.23.4 以上の 22.x、24.22.1 以上の 24.x、または 26.12.1 以上の 26.x（CVE-2026-111497 修正済み）。Windows / CachyOS / Ubuntu 共通。npm install・開発起動・ビルド時に検査します。
 - Rustup / Cargo
 - Microsoft C++ Build Tools（Visual Studio 2022 Build Tools。C++、同梱の CMake / Ninja を使用）
 - Git

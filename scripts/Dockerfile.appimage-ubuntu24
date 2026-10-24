@@ -7,7 +7,7 @@
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG NODE_VERSION=22.23.2
+ARG NODE_VERSION=22.23.4
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -39,6 +39,31 @@ RUN apt-get update \
       spirv-headers \
       xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# CVE-2026-111497: Ubuntu 24.04 の配布版は修正状況が未確定のため、
+# WebKitGTK/libsoup/FreeType が読む C Brotli を修正版へ置き換える。
+# コンテナ内だけを変更する。利用者の OS のライブラリは変更しない。
+# 1.1.1 は既存の libbrotli*.so.1 と ABI 互換。全3ライブラリを同時に更新する。
+RUN curl --proto '=https' --tlsv1.2 -fL \
+      https://github.com/google/brotli/archive/refs/tags/v1.1.1.tar.gz \
+      -o /tmp/brotli.tar.gz \
+    && echo '1a84dfaa740994d19254bf78aa7d74a4a8040d1638f3d5f2cdecb188fd520da8  /tmp/brotli.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/brotli.tar.gz -C /tmp \
+    && cmake -S /tmp/brotli-1.1.1 -B /tmp/brotli-build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu \
+    && cmake --build /tmp/brotli-build --parallel 2 \
+    && ctest --test-dir /tmp/brotli-build --output-on-failure \
+    && cmake --install /tmp/brotli-build \
+    && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -type f \
+      \( -name 'libbrotlicommon.so.1*' -o -name 'libbrotlidec.so.1*' -o -name 'libbrotlienc.so.1*' \) \
+      ! -name '*.so.1.1.1' -delete \
+    && ldconfig \
+    && rm -rf /tmp/brotli.tar.gz /tmp/brotli-1.1.1 /tmp/brotli-build
+
+COPY check_brotli_security.py /tmp/check_brotli_security.py
+RUN python3 /tmp/check_brotli_security.py /usr/lib/x86_64-linux-gnu \
+    && rm /tmp/check_brotli_security.py
 
 # AppImage の WebKitGTK は音声再生を GStreamer に丸投げするため、プラグインを同梱しないと
 # Ubuntu 以外のホスト（例 CachyOS）でデコーダがゼロになり、<audio> が読み込めず固まる。
@@ -74,10 +99,13 @@ RUN set -eu; \
     test -f /usr/include/spirv/unified1/spirv.hpp; \
     echo "[OK] Vulkan ビルド依存を確認しました"
 
+COPY check-node-security.cjs /tmp/check-node-security.cjs
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       | tar -xJ -C /usr/local --strip-components=1 \
     && node --version \
-    && npm --version
+    && npm --version \
+    && node /tmp/check-node-security.cjs \
+    && rm /tmp/check-node-security.cjs
 
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable

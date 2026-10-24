@@ -9,7 +9,7 @@
 > 依存やバージョンを更新した場合は、該当行とチェックリストを再確認すること。
 > 本ファイルは法的助言ではありません。
 
-最終更新: 2026-09-29
+最終更新: 2026-10-25
 
 ---
 
@@ -25,6 +25,7 @@
 
 | コンポーネント | 用途 | ライセンス | 義務 / 注意 |
 |---|---|---|---|
+| **Google Brotli 1.1.1**（Linux AppImage の `libbrotlicommon` / `libbrotlidec` / `libbrotlienc`） | WebKitGTK / libsoup / フォント処理の依存ライブラリ | **MIT** | CVE-2026-111497 修正版を固定ソース・SHA-256 検証付きでビルド。`licenses/manual/Brotli-LICENSE.txt` に本文。Rust の `brotli` とは別実装 |
 | **whisper.cpp / ggml**（`resources/speech-engines/whisper/`。Full 版・Editor 版） | 文字起こし | **MIT** (ggml-org/whisper.cpp) | 固定 commit のソースビルド（Vulkan 版）。`LICENSE-whisper.cpp.txt` を同梱 |
 | **NeMo-Speech.cpp**（`resources/speech-engines/nemo/`。Full 版のみ） | 話者分離 | **Apache-2.0**（NVIDIA 著作分）＋ sentencepiece（Apache-2.0、静的リンク） | 固定 commit のソースビルド（Vulkan 版）。`LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` を同梱。sentencepiece は `licenses/manual/sentencepiece-LICENSE.txt` |
 | **Vulkan Loader**（`resources/speech-engines/vulkan-loader/vulkan-1.dll`（Windows）/ `libvulkan.so.1`（Linux）） | GPU ドライバー・ローダーが無い PC で ggml エンジンを CPU 実行で起動するためのローダー | **Apache-2.0**（Khronos Group / LunarG。Windows は LunarG Vulkan Runtime 再頒布物、Linux は Ubuntu 24.04 の `libvulkan1` パッケージの実体） | `LICENSE-Vulkan-Loader.txt`（Linux は `/usr/share/doc/libvulkan1/copyright`）と `BUILD_INFO.txt`（版・取得元）を同梱。Windows は System32 に `vulkan-1.dll` が無い場合だけ PATH 経由、Linux はホストに `libvulkan.so.1` が無い場合だけ `LD_LIBRARY_PATH` 経由で使う（エンジンの隣には置かない） |

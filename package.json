@@ -9,9 +9,19 @@
     "frontend:build:editor": "cmd /c npm --prefix frontend run build -- --configuration editorProduction",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --bundles nsis",
-    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json"
+    "tauri:build:editor": "tauri build --bundles nsis --config tauri.editor.windows.override.json",
+    "preinstall": "node scripts/check-node-security.cjs",
+    "prefrontend:dev": "node scripts/check-node-security.cjs",
+    "prefrontend:build": "node scripts/check-node-security.cjs",
+    "prefrontend:build:editor": "node scripts/check-node-security.cjs",
+    "pretauri:dev": "node scripts/check-node-security.cjs",
+    "pretauri:build": "node scripts/check-node-security.cjs",
+    "pretauri:build:editor": "node scripts/check-node-security.cjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
+  },
+  "engines": {
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   }
 }

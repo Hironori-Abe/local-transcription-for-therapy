@@ -55,6 +55,8 @@ bash scripts/build-appimage-docker.sh --dry-run
 
 ## AppImage の方針（要約）
 
+CVE-2026-111497 対策として、Docker ビルダーの Node.js は 22.23.4 に固定しています。Ubuntu 24.04 の Brotli の修正状況が未確定のため、コンテナ内の C Brotli 3 ライブラリを、SHA-256 検証した上流 1.1.1 からビルドして置き換えます。利用者の OS は変更しません。再パッケージ時は実際の AppDir のデコーダも検査し、修正前・不明な版や欠落を検出したらビルドを中止します。古い Docker キャッシュを更新する場合は `docker build --no-cache --file scripts/Dockerfile.appimage-ubuntu24 --tag lott-appimage-builder:ubuntu24 scripts` を実行してください。deb / 開発起動が使うホストのライブラリと Windows WebView2 は、この処理の対象外です。詳しくは [調査記録](security-brotli2shell.md) を参照してください。
+
 詳細な方針は [AGENTS.md](../AGENTS.md) の「Audio Decode / FFmpeg License Policy」以下と「Distribution Strategy」にあります。ビルド時の要点だけ挙げます。
 
 - **GStreamer は LGPL のみ同梱**（`bundleMediaFramework: true`。`gstreamer1.0-plugins-base` / `-good` / `-alsa` / `-pulseaudio`）。GPL の `plugins-ugly` / `gstreamer1.0-libav` / `faad` は入れません。Dockerfile と `setup-build-tools-linux.sh` の二重で、GPL プラグインの混入とプラグイン欠落を検出してビルドを落とします。

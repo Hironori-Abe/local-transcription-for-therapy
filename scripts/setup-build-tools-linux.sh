@@ -397,6 +397,9 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       # ローダーは speech-engines/vulkan-loader の予備だけにする（無いときだけアプリが使う）。
       find "$appdir/usr/lib" -maxdepth 1 \( -type f -o -type l \) -name 'libvulkan.so*' -print -delete
 
+      # 実際に梱包されるデコーダを確認（ビルドホストの版だけでは不十分）。
+      python3 scripts/check_brotli_security.py "$appdir"
+
       # --- ホストの /bin/sh を壊す readline が AppDir に無いことの検査 ---
       # AppRun は $APPDIR/usr/lib を LD_LIBRARY_PATH 先頭へ入れ、それが子・孫プロセスまで
       # 継承される。Ubuntu 24.04 の libreadline.so.8（8.2）には Arch 系ホストの bash 5.3 が

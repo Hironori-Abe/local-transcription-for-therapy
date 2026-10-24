@@ -286,18 +286,8 @@ install_system_packages() {
 
 check_node() {
   have npm || die "npm was not found. Install Node.js LTS, then rerun this script."
-
-  if have node; then
-    local node_version node_major
-    node_version="$(node -p "process.versions.node" 2>/dev/null || true)"
-    node_major="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
-    info "Node.js version: ${node_version:-unknown}"
-    if [[ "$node_major" =~ ^[0-9]+$ ]] && (( node_major < 20 )); then
-      warn "Node.js 20+ is recommended for Angular 21."
-    fi
-  else
-    warn "node was not found, but npm exists. Frontend install may fail."
-  fi
+  have node || die "node was not found. Install a supported Node.js release."
+  node scripts/check-node-security.cjs || die "Update Node.js before continuing setup."
 }
 
 install_npm_dependencies() {

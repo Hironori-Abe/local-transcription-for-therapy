@@ -450,7 +450,8 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       fi
 
       # --- GTK の表示バックエンドと IME 経路をセッションに合わせる ---
-      # linuxdeploy-plugin-gtk は Wayland セッションでも GDK_BACKEND=x11 を強制する。
+      # 旧 linuxdeploy-plugin-gtk が GDK_BACKEND=x11 を強制している場合だけ補正する。
+      # 強制行がコメントアウト済み・存在しない新しい hook には補正を要求しない。
       # Wayland 側の fcitx5 は GTK 組み込み im-wayland と text-input 経路を使えるため、
       # 生成済み hook の既定値だけを置き換える。AppDir cache に存在する
       # ユーザー指定値は hook 内で尊重し、存在しない値だけ対応する module へ救済する。
@@ -459,8 +460,10 @@ if compgen -G "$APPIMAGE_DIR/*.AppDir" >/dev/null 2>&1; then
       # GTK_IM_MODULE_FILE は AppDir 内 GTK と同じビルドで生成された cache を使い、
       # ホスト側の GTK immodule を混在させない（fcitx5-gtk の同梱・ABI依存は行わない）。
       gtk_hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+      gtk_hook_rewrite_required=0
       if [[ -f "$gtk_hook" ]] && ! grep -q 'LOTT_GTK_BACKEND_IME_POLICY' "$gtk_hook"; then
         if grep -q '^export GDK_BACKEND=x11' "$gtk_hook"; then
+          gtk_hook_rewrite_required=1
           sed -i \
             '/^export GDK_BACKEND=x11/c\
 # LOTT_GTK_BACKEND_IME_POLICY\
@@ -500,7 +503,7 @@ fi' "$gtk_hook"
           echo "[INFO] GTK hook に GDK_BACKEND=x11 の強制がないため IME rewrite をスキップします"
         fi
       fi
-      if [[ ! -f "$gtk_hook" ]] || ! grep -q 'LOTT_GTK_BACKEND_IME_POLICY' "$gtk_hook"; then
+      if [[ ! -f "$gtk_hook" ]] || { [[ "$gtk_hook_rewrite_required" -eq 1 ]] && ! grep -q 'LOTT_GTK_BACKEND_IME_POLICY' "$gtk_hook"; }; then
         echo "[ERROR] GTK の Wayland/X11・IME 対策を確認できません: $gtk_hook" >&2
         exit 1
       fi
